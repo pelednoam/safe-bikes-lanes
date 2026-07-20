@@ -29,6 +29,10 @@
   #classbar { display: flex; height: 12px; border-radius: 6px; overflow: hidden; margin: 8px 0; }
   .caution { color: #a33; margin: 2px 0; }
   .all-clear { color: #2a7; margin: 2px 0; }
+  #why { margin-top: 8px; }
+  #why summary { cursor: pointer; font-weight: 600; }
+  #why ul { margin: 6px 0 0; padding-left: 18px; }
+  #why li { margin: 4px 0; color: #444; }
   .legend { display: grid; grid-template-columns: 14px auto; gap: 3px 7px; margin-top: 8px;
             align-items: center; }
   .legend i { width: 14px; height: 5px; border-radius: 2px; display: inline-block; }
@@ -61,6 +65,10 @@
     <div class="stat"><span>vs. shortest route</span><b id="s-detour"></b></div>
     <div id="classbar"></div>
     <div id="cautions"></div>
+    <details id="why" open>
+      <summary>Why this route?</summary>
+      <ul id="why-list"></ul>
+    </details>
     <label class="toggle"><input type="checkbox" id="show-short"> show shortest route (dashed)</label>
   </div>
   <div id="error"></div>

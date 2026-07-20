@@ -18,6 +18,11 @@ const CAUTION_CLASSES = new Set([
 ]);
 const MAX_SNAP_METERS = 500;
 const KID_PACE_KMH = 10;
+const PROTECTED = new Set(["path", "separated"]);
+const HOTSPOT_CRASH_FACTOR = 1.25;
+function fmt(m) {
+    return m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(1)} km`;
+}
 // ---------------------------------------------------------------------------
 // binary min-heap of (priority, value)
 // ---------------------------------------------------------------------------
@@ -232,6 +237,116 @@ export class Router {
             },
         };
     }
+    /** Total meters ridden on high-stress classes (busy/moderate/sharrow). */
+    stressMeters(edgePath) {
+        let m = 0;
+        for (const ei of edgePath) {
+            const e = this.g.edges[ei];
+            if (!e)
+                continue;
+            const cls = this.g.classes[e[5]];
+            if (cls !== undefined && CAUTION_CLASSES.has(cls))
+                m += e[2];
+        }
+        return m;
+    }
+    /** Meters ridden along bike-crash hotspot segments. */
+    hotspotMeters(edgePath) {
+        let m = 0;
+        for (const ei of edgePath) {
+            const e = this.g.edges[ei];
+            if (e && e[8] >= HOTSPOT_CRASH_FACTOR)
+                m += e[2];
+        }
+        return m;
+    }
+    /** Consecutive protected (path/separated) stretches, labeled by their
+     * dominant street/path name, longest first. */
+    protectedRuns(edgePath) {
+        const runs = [];
+        let meters = 0;
+        let byName = new Map();
+        const flush = () => {
+            if (meters < 1)
+                return;
+            let label = "off-street path";
+            let best = 0;
+            for (const [n, m] of byName) {
+                if (n !== "" && m > best) {
+                    best = m;
+                    label = n;
+                }
+            }
+            runs.push({ name: label, meters });
+            meters = 0;
+            byName = new Map();
+        };
+        for (const ei of edgePath) {
+            const e = this.g.edges[ei];
+            if (!e)
+                continue;
+            const cls = this.g.classes[e[5]];
+            if (cls !== undefined && PROTECTED.has(cls)) {
+                meters += e[2];
+                const name = this.g.names[e[6]] ?? "";
+                byName.set(name, (byName.get(name) ?? 0) + e[2]);
+            }
+            else {
+                flush();
+            }
+        }
+        flush();
+        return runs.sort((a, b) => b.meters - a.meters);
+    }
+    explain(safestPath, shortestPath, safest, shortest, mode) {
+        const reasons = [];
+        const s = safest.summary;
+        const detour = s.detour_pct ?? 0;
+        const safeStress = this.stressMeters(safestPath);
+        const shortStress = this.stressMeters(shortestPath);
+        const costFactor = mode === "kids" ? 25 : 6;
+        const modeLabel = mode === "kids" ? "riding-with-kids" : "solo";
+        if (detour >= 3) {
+            reasons.push(`In ${modeLabel} weighting an unprotected busy street "costs" ${costFactor}× its ` +
+                `length, so this route accepts +${detour}% distance ` +
+                `(${fmt(s.meters)} vs ${fmt(s.shortest_meters ?? 0)} direct) to cut ` +
+                `high-stress riding from ${fmt(shortStress)} down to ${fmt(safeStress)}.`);
+        }
+        else {
+            reasons.push("The direct route is already the lowest-stress option here — no detour was needed.");
+        }
+        if (shortStress - safeStress > 100) {
+            const worst = [...shortest.summary.cautions].sort((a, b) => b.meters - a.meters)[0];
+            if (worst) {
+                reasons.push(`The direct route would spend ${fmt(shortStress)} on busy or moderate streets — ` +
+                    `worst stretch: ${fmt(worst.meters)} along ${worst.name}. This route ` +
+                    (safeStress < 30 ? "avoids all of it." : `keeps that to ${fmt(safeStress)}.`));
+            }
+        }
+        const runs = this.protectedRuns(safestPath).filter((r) => r.meters >= 300);
+        if (runs.length > 0) {
+            const named = runs
+                .slice(0, 3)
+                .map((r) => `${r.name} (${fmt(r.meters)})`)
+                .join(", ");
+            reasons.push(`Backbone: ${named} — off-street paths or physically separated lanes ` +
+                `(${s.pct_protected}% of the ride is protected).`);
+        }
+        if (s.pct_quiet >= 25) {
+            reasons.push(`Connections between protected stretches run on quiet residential streets ` +
+                `(${s.pct_quiet}% of the ride).`);
+        }
+        const hotspotDiff = this.hotspotMeters(shortestPath) - this.hotspotMeters(safestPath);
+        if (hotspotDiff > 150) {
+            reasons.push(`It also steers around ~${fmt(hotspotDiff)} of bike-crash hotspots on the direct ` +
+                `route (MassDOT crash records, 2021–2026).`);
+        }
+        for (const c of s.cautions) {
+            reasons.push(`Unavoidable compromise: ${fmt(c.meters)} of ${c.cls.replace("_", " ")} along ` +
+                `${c.name} — no lower-stress connection exists there.`);
+        }
+        return reasons;
+    }
     route(start, end, mode) {
         const a = this.nearestNode(start[0], start[1]);
         const b = this.nearestNode(end[0], end[1]);
@@ -249,6 +364,7 @@ export class Router {
             shortest.summary.meters > 0
                 ? Math.round(100 * (safest.summary.meters / shortest.summary.meters - 1))
                 : 0;
+        safest.summary.explanation = this.explain(safestPath, shortestPath, safest, shortest, mode);
         return { safest, shortest };
     }
 }

@@ -4,7 +4,7 @@ Compact format (index-based, flat coordinate arrays):
   nodes:   [[lon, lat], ...]                     graph nodes
   names:   ["", "Main Street", ...]              deduped street names
   classes: ["path", ...]                         protection classes
-  edges:   [[u, v, len_m, w_kids, w_solo, clsIdx, nameIdx, geomIdx], ...]
+  edges:   [[u, v, len_m, w_kids, w_solo, clsIdx, nameIdx, geomIdx, crashFactor], ...]
   geoms:   [[lon, lat, lon, lat, ...], ...]      flat coords, edge u->v order;
            geomIdx = -1 when the edge is a straight line between its nodes
 Also copies network.geojson alongside it for the map display layer.
@@ -74,6 +74,7 @@ def export() -> None:
                 cls_index[d["cls"]],
                 name_index[name],
                 geom_idx,
+                round(float(d.get("crash_factor", 1.0)), 2),
             ]
         )
 

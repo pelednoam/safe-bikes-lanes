@@ -6,12 +6,12 @@ import { Router } from "../src/router.js";
 /*
  * Toy network (lon/lat ~ meters-ish apart around Cambridge):
  *
- *   0 --busy(100m)-- 1
+ *   0 --busy(110m)-- 1
  *   0 --quiet(60m)-- 2 --quiet(60m)-- 1
  *
  * Direct busy edge is shorter, but in kids mode busy costs 25x,
  * so the quiet detour must win. Edge columns:
- * [u, v, len, wKids, wSolo, clsIdx, nameIdx, geomIdx]
+ * [u, v, len, wKids, wSolo, clsIdx, nameIdx, geomIdx, crashFactor]
  */
 const CLASSES = ["busy_street", "quiet_street"] as const;
 
@@ -21,10 +21,11 @@ function edge(
   len: number,
   cls: (typeof CLASSES)[number],
   name: number,
-): [number, number, number, number, number, number, number, number] {
+  crash = 1.0,
+): [number, number, number, number, number, number, number, number, number] {
   const kidsMult = cls === "busy_street" ? 25 : 1.4;
   const soloMult = cls === "busy_street" ? 6 : 1.1;
-  return [u, v, len, len * kidsMult, len * soloMult, CLASSES.indexOf(cls), name, -1];
+  return [u, v, len, len * kidsMult, len * soloMult, CLASSES.indexOf(cls), name, -1, crash];
 }
 
 function toyRouter(): Router {
@@ -34,8 +35,8 @@ function toyRouter(): Router {
     [-71.0995, 42.3805],
   ];
   const edges = [
-    edge(0, 1, 100, "busy_street", 1),
-    edge(1, 0, 100, "busy_street", 1),
+    edge(0, 1, 110, "busy_street", 1, 1.5),
+    edge(1, 0, 110, "busy_street", 1, 1.5),
     edge(0, 2, 60, "quiet_street", 2),
     edge(2, 0, 60, "quiet_street", 2),
     edge(2, 1, 60, "quiet_street", 2),
@@ -56,8 +57,8 @@ describe("Router", () => {
     const res = r.route([-71.1, 42.38], [-71.099, 42.38], "kids");
     expect(res.safest.summary.meters).toBe(120); // via quiet node 2
     expect(res.safest.summary.by_class_m.busy_street).toBeUndefined();
-    expect(res.shortest.summary.meters).toBe(100); // direct busy edge
-    expect(res.safest.summary.detour_pct).toBe(20);
+    expect(res.shortest.summary.meters).toBe(110); // direct busy edge
+    expect(res.safest.summary.detour_pct).toBe(9);
   });
 
   it("reports cautions when forced onto a busy street", () => {
@@ -86,5 +87,24 @@ describe("Router", () => {
     const res = r.route([-71.1, 42.38], [-71.099, 42.38], "kids");
     expect(res.safest.summary.pct_quiet).toBe(100);
     expect(res.safest.summary.pct_protected).toBe(0);
+  });
+
+  it("explains the detour: cost model, avoided street, quiet connections", () => {
+    const r = toyRouter();
+    const res = r.route([-71.1, 42.38], [-71.099, 42.38], "kids");
+    const why = res.safest.summary.explanation ?? [];
+    expect(why.length).toBeGreaterThanOrEqual(3);
+    expect(why[0]).toMatch(/25×/);
+    expect(why[0]).toMatch(/\+9% distance/);
+    expect(why.join(" ")).toMatch(/Busy Ave/);
+    expect(why.join(" ")).toMatch(/avoids all of it/);
+    expect(why.join(" ")).toMatch(/quiet residential streets \(100% of the ride\)/);
+  });
+
+  it("says no detour was needed when the direct route wins", () => {
+    const r = toyRouter();
+    // 0 -> 2 is a single quiet edge; direct route is already safest
+    const res = r.route([-71.1, 42.38], [-71.0995, 42.3805], "kids");
+    expect(res.safest.summary.explanation?.[0]).toMatch(/no detour was needed/);
   });
 });
