@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Family Bike Router</string>
+    <string name="title_activity_main">Family Bike Router</string>
+    <string name="package_name">com.pelednoam.safebikes</string>
+    <string name="custom_url_scheme">com.pelednoam.safebikes</string>
+</resources>
