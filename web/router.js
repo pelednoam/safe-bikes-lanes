@@ -20,6 +20,10 @@ const MAX_SNAP_METERS = 500;
 const KID_PACE_KMH = 10;
 const PROTECTED = new Set(["path", "separated"]);
 const HOTSPOT_CRASH_FACTOR = 1.25;
+// Flat preference: each meter of climb costs this many meters-equivalent,
+// doubled on grades steeper than 4% (hard with kids' bikes).
+const HILL_EQUIV_M = 12;
+const STEEP_GRADE = 0.04;
 function fmt(m) {
     return m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(1)} km`;
 }
@@ -89,10 +93,14 @@ export class Router {
     constructor(data) {
         this.g = data;
         this.adj = data.nodes.map(() => []);
+        this.hillPen = new Float64Array(data.edges.length);
         data.edges.forEach((e, i) => {
             const nodeEdges = this.adj[e[0]];
             if (nodeEdges)
                 nodeEdges.push(i);
+            const climb = e[9] ?? 0;
+            const grade = e[2] > 0 ? climb / e[2] : 0;
+            this.hillPen[i] = climb * HILL_EQUIV_M * (grade > STEEP_GRADE ? 2 : 1);
         });
     }
     static async load(url) {
@@ -121,7 +129,7 @@ export class Router {
         return best;
     }
     /** Dijkstra; returns the edge-index path, or null if unreachable. */
-    shortestPath(from, to, w) {
+    shortestPath(from, to, w, hills = false) {
         const n = this.g.nodes.length;
         const dist = new Float64Array(n).fill(Infinity);
         const prevEdge = new Int32Array(n).fill(-1);
@@ -149,7 +157,7 @@ export class Router {
                 const v = e[1];
                 if (done[v])
                     continue;
-                const nd = d + e[w];
+                const nd = d + e[w] + (hills ? this.hillPen[ei] : 0);
                 if (nd < dist[v]) {
                     dist[v] = nd;
                     prevEdge[v] = ei;
@@ -196,6 +204,7 @@ export class Router {
         const byClass = new Map();
         const cautions = [];
         let total = 0;
+        let climb = 0;
         for (const ei of edgePath) {
             const e = this.g.edges[ei];
             if (!e)
@@ -204,6 +213,7 @@ export class Router {
             const name = this.g.names[e[6]] ?? "";
             const length = e[2];
             total += length;
+            climb += e[9] ?? 0;
             byClass.set(cls, (byClass.get(cls) ?? 0) + length);
             if (CAUTION_CLASSES.has(cls)) {
                 const prev = cautions[cautions.length - 1];
@@ -226,6 +236,7 @@ export class Router {
             summary: {
                 meters: Math.round(total),
                 minutes: Math.round((total / 1000 / KID_PACE_KMH) * 60),
+                climb_m: Math.round(climb),
                 pct_protected: total > 0 ? Math.round((100 * sum(["path", "separated", "buffered"])) / total) : 0,
                 pct_quiet: total > 0 ? Math.round((100 * sum(["quiet_street", "service"])) / total) : 0,
                 by_class_m: Object.fromEntries([...byClass.entries()]
@@ -323,7 +334,7 @@ export class Router {
             (stress < 30 ? "no busy/moderate streets" : `${fmt(stress)} on busy/moderate streets`);
         return { grade, reason };
     }
-    explain(safestPath, shortestPath, safest, shortest, mode, isDirect = false) {
+    explain(safestPath, shortestPath, safest, shortest, mode, isDirect = false, preferFlat = false) {
         const s = safest.summary;
         if (isDirect) {
             const reasons = [
@@ -375,6 +386,18 @@ export class Router {
             reasons.push(`Connections between protected stretches run on quiet residential streets ` +
                 `(${s.pct_quiet}% of the ride).`);
         }
+        if (preferFlat) {
+            const climb = s.climb_m ?? 0;
+            const directClimb = shortest.summary.climb_m ?? 0;
+            if (directClimb - climb >= 5) {
+                reasons.push(`Flat preference: this route climbs ${climb} m total, saving ` +
+                    `${directClimb - climb} m of climbing vs the direct route.`);
+            }
+            else {
+                reasons.push(`Flat preference is on — this route climbs ${climb} m total ` +
+                    `(the direct route climbs ${directClimb} m; no flatter option exists).`);
+            }
+        }
         const hotspotDiff = this.hotspotMeters(shortestPath) - this.hotspotMeters(safestPath);
         if (hotspotDiff > 150) {
             reasons.push(`It also steers around ~${fmt(hotspotDiff)} of bike-crash hotspots on the direct ` +
@@ -410,7 +433,7 @@ export class Router {
      * for safety on the same kid-stress scale and individually explained.
      * Identical paths are deduped, so fewer options appear when the safest
      * route already is the direct one. */
-    routeOptions(start, end) {
+    routeOptions(start, end, preferFlat = false) {
         const a = this.nearestNode(start[0], start[1]);
         const b = this.nearestNode(end[0], end[1]);
         if (a === b)
@@ -422,7 +445,8 @@ export class Router {
         ];
         const paths = new Map();
         for (const c of candidates) {
-            const p = this.shortestPath(a, b, c.col);
+            // "direct" stays the pure shortest path — it is the reference route
+            const p = this.shortestPath(a, b, c.col, preferFlat && c.id !== "direct");
             if (p === null)
                 throw new Error("no path found");
             paths.set(c.id, p);
@@ -443,7 +467,7 @@ export class Router {
                 directPayload.summary.meters > 0
                     ? Math.round(100 * (payload.summary.meters / directPayload.summary.meters - 1))
                     : 0;
-            payload.summary.explanation = this.explain(path, directPath, payload, directPayload, c.mode, c.id === "direct");
+            payload.summary.explanation = this.explain(path, directPath, payload, directPayload, c.mode, c.id === "direct", preferFlat);
             const { grade, reason } = this.gradeRoute(path);
             options.push({ id: c.id, label: c.label, grade, gradeReason: reason, payload });
         }

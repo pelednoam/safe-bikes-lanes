@@ -20,6 +20,7 @@ import geopandas as gpd
 import networkx as nx
 import osmnx as ox
 import pandas as pd
+from elevation import ElevationSampler
 from shapely.geometry import LineString, Point
 
 METRIC_CRS: Final[str] = "EPSG:26986"  # MA mainland state plane (meters)
@@ -394,12 +395,22 @@ def build() -> None:
             return config.SIGNALIZED_BUSY_CROSSING_PENALTY_M
         return config.UNSIGNALIZED_BUSY_CROSSING_PENALTY_M
 
+    # node elevations -> per-edge climb (positive rise along travel direction)
+    print("sampling node elevations (AWS terrain tiles) ...")
+    sampler = ElevationSampler()
+    elev: dict[int, float] = {}
+    for n, nd in G.nodes(data=True):
+        e_m = sampler.elevation(float(nd["x"]), float(nd["y"]))
+        elev[n] = e_m
+        nd["elev"] = round(e_m, 1)
+
     # final weights (kids + solo), written back into the graph
     for (u, v, k), row in edges.iterrows():
         pen = 0.0
         if not (row["cls"] == "busy_street" or row["road_busy"]):
             pen = (node_penalty(u) + node_penalty(v)) / 2
         data = G.edges[u, v, k]
+        data["climb"] = round(max(0.0, elev[v] - elev[u]), 2)
         data["cls"] = row["cls"]
         data["stress_mult"] = float(row["stress_mult"])
         data["crash_factor"] = float(row["crash_factor"])

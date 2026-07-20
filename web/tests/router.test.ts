@@ -22,10 +22,13 @@ function edge(
   cls: (typeof CLASSES)[number],
   name: number,
   crash = 1.0,
-): [number, number, number, number, number, number, number, number, number] {
+  climb = 0,
+): [number, number, number, number, number, number, number, number, number, number] {
   const kidsMult = cls === "busy_street" ? 25 : 1.4;
   const soloMult = cls === "busy_street" ? 6 : 1.1;
-  return [u, v, len, len * kidsMult, len * soloMult, CLASSES.indexOf(cls), name, -1, crash];
+  return [
+    u, v, len, len * kidsMult, len * soloMult, CLASSES.indexOf(cls), name, -1, crash, climb,
+  ];
 }
 
 function toyRouter(): Router {
@@ -120,6 +123,37 @@ describe("Router", () => {
     expect(opts).toHaveLength(1);
     expect(opts[0]?.id).toBe("safest");
     expect(opts[0]?.grade).toBe("A");
+  });
+
+  it("prefer-flat detours around a steep climb (and reports it)", () => {
+    // 0 --quiet steep(100m, +20m)-- 1   vs   0 --quiet flat(240m)-- 2 -- 1
+    const r = new Router({
+      nodes: [
+        [-71.1, 42.38],
+        [-71.099, 42.38],
+        [-71.0995, 42.3805],
+      ],
+      names: ["", "Hill St", "Flat St"],
+      classes: [...CLASSES],
+      edges: [
+        edge(0, 1, 100, "quiet_street", 1, 1, 20),
+        edge(1, 0, 100, "quiet_street", 1),
+        edge(0, 2, 120, "quiet_street", 2),
+        edge(2, 0, 120, "quiet_street", 2),
+        edge(2, 1, 120, "quiet_street", 2),
+        edge(1, 2, 120, "quiet_street", 2),
+      ],
+      geoms: [],
+    });
+    const noPref = r.routeOptions([-71.1, 42.38], [-71.099, 42.38], false);
+    expect(noPref[0]?.payload.summary.meters).toBe(100); // climbs Hill St
+    expect(noPref[0]?.payload.summary.climb_m).toBe(20);
+    const flat = r.routeOptions([-71.1, 42.38], [-71.099, 42.38], true);
+    expect(flat[0]?.payload.summary.meters).toBe(240); // detours via Flat St
+    expect(flat[0]?.payload.summary.climb_m).toBe(0);
+    expect(flat[0]?.payload.summary.explanation?.join(" ")).toMatch(
+      /saving 20 m of climbing/,
+    );
   });
 
   it("says no detour was needed when the direct route wins", () => {
