@@ -1,0 +1,51 @@
+name: Build Android APK
+
+# Builds the Capacitor-wrapped Android app. Run manually (Actions tab ->
+# "Build Android APK" -> Run workflow) to get a downloadable APK artifact;
+# pushing a tag like app-v1 also attaches the APK to a GitHub release.
+on:
+  workflow_dispatch:
+  push:
+    tags: ["app-v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: Install
+        run: npm ci
+        working-directory: web
+      - name: Check + test
+        run: npm run check && npm test
+        working-directory: web
+      - name: Assemble web bundle + sync
+        run: npm run app:sync
+        working-directory: web
+      - name: Build debug APK
+        run: ./gradlew assembleDebug
+        working-directory: web/android
+      - name: Rename APK
+        run: cp web/android/app/build/outputs/apk/debug/app-debug.apk family-bike-router.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: family-bike-router-apk
+          path: family-bike-router.apk
+      - name: Attach to release (tags only)
+        if: startsWith(github.ref, 'refs/tags/app-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: family-bike-router.apk

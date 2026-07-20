@@ -92,6 +92,18 @@ Streets that changed faster than the data sources? Add a feature to
 just-opened protected lane, `"busy_street"` for a closed path) — it trumps
 every other source.
 
+## Android app (Capacitor)
+
+The same code ships as an Android APK via a thin Capacitor wrapper
+(`web/android/`): the web bundle plus data layers and a local MapLibre copy
+are packaged into the app (fully offline after install), the screen stays on
+while the app is open, and location permission is requested on first launch.
+
+Build: GitHub Actions → "Build Android APK" → download the artifact and
+install it on the phone (allow installs from unknown sources), or push a tag
+like `app-v1` to attach the APK to a release. Local builds work too with an
+Android SDK: `cd web && npm run app:sync && cd android && ./gradlew assembleDebug`.
+
 ## Dev checks
 
 ```bash

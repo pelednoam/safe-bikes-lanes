@@ -6,11 +6,18 @@
   "scripts": {
     "build": "tsc",
     "check": "tsc --noEmit -p tsconfig.check.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "build:app": "bash scripts/assemble.sh",
+    "app:sync": "npm run build:app && npx cap sync android"
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.4.2",
     "maplibre-gl": "^4.7.1",
     "typescript": "^5.6.0",
     "vitest": "^4.1.10"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.4.2",
+    "@capacitor/core": "^8.4.2"
   }
 }
