@@ -128,7 +128,7 @@ const map: MLMap = new maplibregl.Map({
   center: [-71.105, 42.383],
   zoom: 13,
 });
-map.addControl(new maplibregl.NavigationControl(), "top-right");
+map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
 map.addControl(new maplibregl.GeolocateControl({ trackUserLocation: true }), "top-right");
 map.addControl(new maplibregl.ScaleControl({}), "bottom-left");
 
@@ -667,7 +667,16 @@ function renderSketchy(): void {
 const FACILITY_CLASSES = ["path", "separated", "buffered", "lane"];
 
 map.on("load", () => {
-  // area overlays (hidden until toggled) sit under the street/route lines
+  // terrain DEM: the same AWS terrarium tiles the pipeline samples
+  map.addSource("dem", {
+    type: "raster-dem",
+    tiles: ["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"],
+    encoding: "terrarium",
+    tileSize: 256,
+    maxzoom: 13,
+  });
+  // area overlays (hidden until toggled) sit under the street/route lines;
+  // each has a flat (2D) and an extruded (3D) variant
   map.addSource("heatmap", { type: "geojson", data: "data/heatmap.geojson" });
   map.addLayer({
     id: "heatmap",
@@ -680,6 +689,18 @@ map.on("load", () => {
       "fill-outline-color": "rgba(0,0,0,0)",
     },
   });
+  map.addLayer({
+    id: "heatmap-3d",
+    type: "fill-extrusion",
+    source: "heatmap",
+    layout: { visibility: "none" },
+    paint: {
+      "fill-extrusion-color": ["get", "color"],
+      "fill-extrusion-opacity": 0.65,
+      // danger towers: cell height = average kid-stress × 25 m
+      "fill-extrusion-height": ["*", ["coalesce", ["get", "stress"], 1], 25],
+    },
+  });
   map.addSource("elevmap", { type: "geojson", data: "data/elevation.geojson" });
   map.addLayer({
     id: "elevmap",
@@ -690,6 +711,18 @@ map.on("load", () => {
       "fill-color": ["get", "color"],
       "fill-opacity": 0.45,
       "fill-outline-color": "rgba(0,0,0,0)",
+    },
+  });
+  map.addLayer({
+    id: "elevmap-3d",
+    type: "fill-extrusion",
+    source: "elevmap",
+    layout: { visibility: "none" },
+    paint: {
+      "fill-extrusion-color": ["get", "color"],
+      "fill-extrusion-opacity": 0.75,
+      // exaggerate 4x so the ~50 m hills read clearly
+      "fill-extrusion-height": ["*", ["coalesce", ["get", "elev"], 0], 4],
     },
   });
   map.addSource("network", { type: "geojson", data: "data/network.geojson" });
@@ -832,20 +865,11 @@ map.on("load", () => {
       hoverPopup?.remove();
       hoverPopup = null;
     });
-    // right-click: mark segment as personally sketchy
+    // right-click (desktop) marks a segment as personally sketchy;
+    // touch devices use long-press (wired below)
     map.on("contextmenu", layer, (e: MapLayerMouseEvent) => {
       e.preventDefault();
-      const btn = document.createElement("button");
-      btn.textContent = "⚠ mark this spot as sketchy";
-      const popup = new maplibregl.Popup().setLngLat(e.lngLat).setDOMContent(btn).addTo(map);
-      btn.addEventListener("click", () => {
-        sketchyMarks.push([e.lngLat.lng, e.lngLat.lat]);
-        saveSketchy(sketchyMarks);
-        router?.setSketchyMarks(sketchyMarks);
-        renderSketchy();
-        popup.remove();
-        void requestRoute();
-      });
+      openSketchyPopup([e.lngLat.lng, e.lngLat.lat]);
     });
   }
 
@@ -887,6 +911,53 @@ map.on("click", (e: MapMouseEvent) => {
   }
   if (!start) setPoint("start", e.lngLat);
   else if (!end) setPoint("end", e.lngLat);
+});
+
+// touch devices have no right-click: a long-press on a street opens the
+// same "mark sketchy" popup
+function openSketchyPopup(lngLat: [number, number]): void {
+  const btn = document.createElement("button");
+  btn.textContent = "⚠ mark this spot as sketchy";
+  const popup = new maplibregl.Popup().setLngLat(lngLat).setDOMContent(btn).addTo(map);
+  btn.addEventListener("click", () => {
+    sketchyMarks.push(lngLat);
+    saveSketchy(sketchyMarks);
+    router?.setSketchyMarks(sketchyMarks);
+    renderSketchy();
+    popup.remove();
+    void requestRoute();
+  });
+}
+
+let pressTimer: number | undefined;
+const canvas = map.getCanvas();
+canvas.addEventListener("touchstart", (e: TouchEvent) => {
+  if (e.touches.length !== 1) return;
+  const touch = e.touches[0];
+  if (!touch) return;
+  const rect = canvas.getBoundingClientRect();
+  const px: [number, number] = [touch.clientX - rect.left, touch.clientY - rect.top];
+  pressTimer = window.setTimeout(() => {
+    const hits = map.queryRenderedFeatures(px, {
+      layers: ["network", "network-unconfirmed", "route"].filter((l) => map.getLayer(l)),
+    });
+    if (hits.length > 0) {
+      const lngLat = map.unproject(px);
+      openSketchyPopup([lngLat.lng, lngLat.lat]);
+    }
+  }, 600);
+});
+for (const evt of ["touchend", "touchmove", "touchcancel"] as const) {
+  canvas.addEventListener(evt, () => {
+    window.clearTimeout(pressTimer);
+  });
+}
+
+// collapsible panel for small screens
+el<HTMLButtonElement>("panel-collapse").addEventListener("click", () => {
+  const panel = el<HTMLDivElement>("panel");
+  const collapsed = panel.classList.toggle("collapsed");
+  el<HTMLButtonElement>("panel-collapse").textContent = collapsed ? "▴" : "▾";
 });
 
 el<HTMLButtonElement>("reset").addEventListener("click", () => {
@@ -935,23 +1006,43 @@ el<HTMLInputElement>("prefer-flat").addEventListener("change", (e: Event) => {
   void computeShed();
 });
 
-// the two area overlays are mutually exclusive to stay readable
+// the two area overlays are mutually exclusive to stay readable; in 3D view
+// the extruded variants replace the flat fills and terrain turns on
+function syncOverlays(): void {
+  const threeD = el<HTMLInputElement>("show-3d").checked;
+  const heat = el<HTMLInputElement>("show-heat").checked;
+  const elev = el<HTMLInputElement>("show-elev").checked;
+  const vis = (on: boolean): "visible" | "none" => (on ? "visible" : "none");
+  map.setLayoutProperty("heatmap", "visibility", vis(heat && !threeD));
+  map.setLayoutProperty("heatmap-3d", "visibility", vis(heat && threeD));
+  map.setLayoutProperty("elevmap", "visibility", vis(elev && !threeD));
+  map.setLayoutProperty("elevmap-3d", "visibility", vis(elev && threeD));
+}
+
 el<HTMLInputElement>("show-heat").addEventListener("change", (e: Event) => {
-  const checked = (e.target as HTMLInputElement).checked;
-  if (checked) {
+  if ((e.target as HTMLInputElement).checked) {
     el<HTMLInputElement>("show-elev").checked = false;
-    map.setLayoutProperty("elevmap", "visibility", "none");
   }
-  map.setLayoutProperty("heatmap", "visibility", checked ? "visible" : "none");
+  syncOverlays();
 });
 
 el<HTMLInputElement>("show-elev").addEventListener("change", (e: Event) => {
-  const checked = (e.target as HTMLInputElement).checked;
-  if (checked) {
+  if ((e.target as HTMLInputElement).checked) {
     el<HTMLInputElement>("show-heat").checked = false;
-    map.setLayoutProperty("heatmap", "visibility", "none");
   }
-  map.setLayoutProperty("elevmap", "visibility", checked ? "visible" : "none");
+  syncOverlays();
+});
+
+el<HTMLInputElement>("show-3d").addEventListener("change", (e: Event) => {
+  const on = (e.target as HTMLInputElement).checked;
+  if (on) {
+    map.setTerrain({ source: "dem", exaggeration: 1.3 });
+    map.easeTo({ pitch: 60, duration: 800 });
+  } else {
+    map.setTerrain(null);
+    map.easeTo({ pitch: 0, bearing: 0, duration: 800 });
+  }
+  syncOverlays();
 });
 
 for (const radio of document.querySelectorAll<HTMLInputElement>("input[name=profile]")) {

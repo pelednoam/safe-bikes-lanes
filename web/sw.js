@@ -3,7 +3,7 @@
 // single tsconfig project; this file is small, boilerplate, and stable.
 "use strict";
 
-const CACHE = "family-bike-router-v1";
+const CACHE = "family-bike-router-v2";
 const ASSETS = [
   ".",
   "index.html",
@@ -17,6 +17,8 @@ const ASSETS = [
   "data/elevation.geojson",
   "data/pois.geojson",
   "data/gateways.geojson",
+  "icon-192.png",
+  "icon-512.png",
 ];
 
 self.addEventListener("install", (event) => {
