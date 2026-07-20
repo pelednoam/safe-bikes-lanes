@@ -2,6 +2,7 @@ import { bearingDeg, buildAlerts, buildManeuvers, buildTrack, distM, snapToTrack
 import { addHazard, buildReportText, downscalePhoto, getHazardPhoto, HAZARD_LABELS, listHazards, removeHazard, } from "./hazards.js";
 import { clearRides, deleteRide, loadRides, RideRecorder, rideTotals, saveRide, } from "./rides.js";
 import { buildCues, PROFILES, Router, toGPX } from "./router.js";
+import { drawRideCard, drawTotalsCard, rideShareText, totalsShareText } from "./sharecard.js";
 // ---------------------------------------------------------------------------
 // constants
 // ---------------------------------------------------------------------------
@@ -1343,6 +1344,33 @@ function showRideOnMap(ride) {
         ], { padding: 60, duration: 800 });
     }
 }
+/** Share text + a rendered PNG card via the native share sheet; falls back to
+ * downloading the image and copying the text. */
+function shareContent(text, imagePromise, filename) {
+    void imagePromise
+        .then((blob) => {
+        const file = new File([blob], filename, { type: "image/png" });
+        const payload = { text, files: [file] };
+        if (typeof navigator.canShare === "function" && navigator.canShare(payload)) {
+            return navigator.share(payload).catch(() => undefined);
+        }
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(a.href);
+        return navigator.clipboard.writeText(text).catch(() => undefined);
+    })
+        .catch(() => {
+        // canvas unavailable: share/copy the text alone
+        if (typeof navigator.share === "function") {
+            void navigator.share({ text }).catch(() => undefined);
+        }
+        else {
+            void navigator.clipboard.writeText(text).catch(() => undefined);
+        }
+    });
+}
 function renderRides() {
     const rides = loadRides();
     const totals = rideTotals(rides, new Date());
@@ -1352,6 +1380,7 @@ function renderRides() {
             : `<b>${totals.count}</b> rides · <b>${totals.km} km</b> total · ` +
                 `<b>${totals.movingHours} h</b> moving · longest <b>${totals.longestKm} km</b> · ` +
                 `this month <b>${totals.thisMonthKm} km</b> · avg <b>${totals.avgProtectedPct}%</b> protected`;
+    el("rides-share").style.display = rides.length === 0 ? "none" : "inline-block";
     const table = el("ride-list");
     table.innerHTML =
         rides.length === 0
@@ -1374,6 +1403,13 @@ function renderRides() {
             el("rides").close();
         });
         actions.appendChild(show);
+        const shareBtn = document.createElement("button");
+        shareBtn.textContent = "📤";
+        shareBtn.title = "share this ride (stats card + text)";
+        shareBtn.addEventListener("click", () => {
+            shareContent(rideShareText(ride), drawRideCard(ride), "bike-ride.png");
+        });
+        actions.appendChild(shareBtn);
         const rm = document.createElement("button");
         rm.textContent = "✕";
         rm.addEventListener("click", () => {
@@ -1389,6 +1425,10 @@ el("rides-btn").addEventListener("click", () => {
 });
 el("rides-close").addEventListener("click", () => {
     el("rides").close();
+});
+el("rides-share").addEventListener("click", () => {
+    const totals = rideTotals(loadRides(), new Date());
+    shareContent(totalsShareText(totals), drawTotalsCard(totals), "bike-stats.png");
 });
 el("rides-clear").addEventListener("click", () => {
     clearRides();
