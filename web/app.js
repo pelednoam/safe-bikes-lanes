@@ -1,4 +1,5 @@
 import { bearingDeg, buildAlerts, buildManeuvers, buildTrack, distM, snapToTrack, sunsetTime, trackBearing, } from "./nav.js";
+import { clearRides, deleteRide, loadRides, RideRecorder, rideTotals, saveRide, } from "./rides.js";
 import { buildCues, PROFILES, Router, toGPX } from "./router.js";
 // ---------------------------------------------------------------------------
 // constants
@@ -826,6 +827,14 @@ map.on("load", () => {
         layout: { "line-cap": "round", "line-join": "round" },
         paint: { "line-color": ["get", "color"], "line-width": 5 },
     });
+    map.addSource("history", { type: "geojson", data: emptyFC() });
+    map.addLayer({
+        id: "history",
+        type: "line",
+        source: "history",
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: { "line-color": "#8b5cf6", "line-width": 4, "line-opacity": 0.8 },
+    });
     map.addSource("gateways", { type: "geojson", data: "data/gateways.geojson" });
     map.addLayer({
         id: "gateways",
@@ -1090,8 +1099,9 @@ searchInput.addEventListener("input", () => {
 });
 document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
-        if (el("about").open)
-            return; // dialog handles it
+        if (el("about").open || el("rides").open) {
+            return; // dialogs handle it
+        }
         if (shedMode)
             exitShedMode();
         else
@@ -1138,6 +1148,80 @@ function fillAbout() {
     })
         .catch(() => undefined);
 }
+// ---------------------------------------------------------------------------
+// ride history dialog
+// ---------------------------------------------------------------------------
+function showRideOnMap(ride) {
+    getSource("history").setData({
+        type: "Feature",
+        geometry: { type: "LineString", coordinates: ride.polyline },
+        properties: {},
+    });
+    const lons = ride.polyline.map((p) => p[0]);
+    const lats = ride.polyline.map((p) => p[1]);
+    if (lons.length > 1) {
+        map.fitBounds([
+            [Math.min(...lons), Math.min(...lats)],
+            [Math.max(...lons), Math.max(...lats)],
+        ], { padding: 60, duration: 800 });
+    }
+}
+function renderRides() {
+    const rides = loadRides();
+    const totals = rideTotals(rides, new Date());
+    el("ride-totals").innerHTML =
+        rides.length === 0
+            ? "No rides yet — rides are saved automatically when you Navigate, or use ● Record."
+            : `<b>${totals.count}</b> rides · <b>${totals.km} km</b> total · ` +
+                `<b>${totals.movingHours} h</b> moving · longest <b>${totals.longestKm} km</b> · ` +
+                `this month <b>${totals.thisMonthKm} km</b> · avg <b>${totals.avgProtectedPct}%</b> protected`;
+    const table = el("ride-list");
+    table.innerHTML =
+        rides.length === 0
+            ? ""
+            : "<tr><th>date</th><th>km</th><th>moving</th><th>avg</th><th>protected</th><th></th></tr>";
+    for (const ride of rides) {
+        const tr = table.insertRow();
+        const d = new Date(ride.startedAt);
+        tr.insertCell().textContent = d.toLocaleDateString([], { month: "short", day: "numeric" });
+        tr.insertCell().textContent = (ride.meters / 1000).toFixed(1);
+        tr.insertCell().textContent = `${Math.round(ride.movingS / 60)} min`;
+        tr.insertCell().textContent =
+            ride.movingS > 0 ? `${((ride.meters / ride.movingS) * 3.6).toFixed(1)} km/h` : "–";
+        tr.insertCell().textContent = `${ride.pctProtected}% + ${ride.pctQuiet}% quiet`;
+        const actions = tr.insertCell();
+        const show = document.createElement("button");
+        show.textContent = "map";
+        show.addEventListener("click", () => {
+            showRideOnMap(ride);
+            el("rides").close();
+        });
+        actions.appendChild(show);
+        const rm = document.createElement("button");
+        rm.textContent = "✕";
+        rm.addEventListener("click", () => {
+            deleteRide(ride.id);
+            renderRides();
+        });
+        actions.appendChild(rm);
+    }
+}
+el("rides-btn").addEventListener("click", () => {
+    renderRides();
+    el("rides").showModal();
+});
+el("rides-close").addEventListener("click", () => {
+    el("rides").close();
+});
+el("rides-clear").addEventListener("click", () => {
+    clearRides();
+    getSource("history").setData(emptyFC());
+    renderRides();
+});
+el("rides").addEventListener("click", (e) => {
+    if (e.target === el("rides"))
+        el("rides").close();
+});
 el("about-btn").addEventListener("click", () => {
     fillAbout();
     el("about").showModal();
@@ -1188,6 +1272,19 @@ let navLastRerouteAt = 0;
 let navMyWay = localStorage.getItem("navMyWay") === "1";
 let navPrevPos = null;
 let navHeading = null;
+let recorder = null;
+let recordMode = false;
+let recordWatchId = null;
+/** Free-record auto-stop: end the ride after this long with no movement. */
+const RECORD_IDLE_STOP_MS = 10 * 60000;
+function finishAndSaveRide() {
+    const ride = recorder?.finish(profileId);
+    recorder = null;
+    if (!ride)
+        return;
+    saveRide(ride);
+    speak(`ride saved. ${(ride.meters / 1000).toFixed(1)} kilometers.`);
+}
 function vibrate(pattern) {
     if ("vibrate" in navigator)
         navigator.vibrate(pattern);
@@ -1242,6 +1339,7 @@ function navOnPosition(pos) {
     }
     if (!navPrevPos || distM(navPrevPos, [lon, lat]) > 3)
         navPrevPos = [lon, lat];
+    recorder?.addPoint(Date.now(), lon, lat, router.edgeClassAt(lon, lat));
     if (!navDot) {
         const dot = document.createElement("div");
         dot.className = "nav-dot";
@@ -1339,6 +1437,7 @@ function navOnPosition(pos) {
             speak(`you have arrived. ${(navTrack.totalM / 1000).toFixed(1)} kilometers — nicely done!`);
             el("nav-dist").textContent = "🏁";
             el("nav-street").textContent = "arrived!";
+            finishAndSaveRide();
         }
     }
     if (navFollowing) {
@@ -1362,6 +1461,7 @@ async function startNav() {
     el("nav-resume").style.display = "none";
     navActive = true;
     navFollowing = true;
+    recorder = new RideRecorder();
     document.body.classList.add("navigating");
     el("nav-banner").style.display = "block";
     el("nav-recenter").style.display = "none";
@@ -1377,6 +1477,7 @@ async function startNav() {
     speak("navigation started");
 }
 function exitNav() {
+    finishAndSaveRide();
     navActive = false;
     navOriginalDest = null;
     navLastPos = null;
@@ -1471,10 +1572,91 @@ el("nav-hazard").addEventListener("click", () => {
     vibrate([80]);
     speak("marked. future routes will avoid this spot.");
 });
+// ---------------------------------------------------------------------------
+// free ride recording (no planned route): ● Record in the tool row
+// ---------------------------------------------------------------------------
+function recordOnPosition(pos) {
+    if (!recordMode || !recorder)
+        return;
+    const lon = pos.coords.longitude;
+    const lat = pos.coords.latitude;
+    navLastPos = [lon, lat];
+    if (!navDot) {
+        const dot = document.createElement("div");
+        dot.className = "nav-dot";
+        navDot = new maplibregl.Marker({ element: dot }).setLngLat([lon, lat]).addTo(map);
+    }
+    else {
+        navDot.setLngLat([lon, lat]);
+    }
+    recorder.addPoint(Date.now(), lon, lat, router?.edgeClassAt(lon, lat) ?? null);
+    el("nav-dist").textContent = fmtDist(recorder.metersSoFar);
+    const mins = Math.round(recorder.durationSoFar / 60);
+    el("nav-remaining").textContent = `recording · ${mins} min`;
+    if (navFollowing) {
+        map.easeTo({ center: [lon, lat], zoom: 16, duration: 900 });
+    }
+    if (Date.now() - recorder.lastMovedAt > RECORD_IDLE_STOP_MS) {
+        speak("no movement for a while.");
+        stopRecording();
+    }
+}
+function startRecording() {
+    if (navActive || recordMode)
+        return;
+    recordMode = true;
+    recorder = new RideRecorder();
+    navFollowing = true;
+    document.body.classList.add("navigating");
+    el("nav-banner").style.display = "block";
+    el("nav-tools").style.display = "none";
+    el("nav-icon").textContent = "🔴";
+    el("nav-dist").textContent = "0 m";
+    el("nav-street").textContent = "recording ride…";
+    el("nav-remaining").textContent = "";
+    void navigator.wakeLock
+        ?.request("screen")
+        .then((wl) => {
+        wakeLock = wl;
+    })
+        .catch(() => undefined);
+    recordWatchId = navigator.geolocation.watchPosition(recordOnPosition, () => {
+        el("nav-street").textContent = "location unavailable — check permissions";
+    }, { enableHighAccuracy: true, maximumAge: 1000, timeout: 15000 });
+    speak("recording. ride on!");
+}
+function stopRecording() {
+    if (!recordMode)
+        return;
+    recordMode = false;
+    if (recordWatchId !== null)
+        navigator.geolocation.clearWatch(recordWatchId);
+    recordWatchId = null;
+    finishAndSaveRide();
+    void wakeLock?.release().catch(() => undefined);
+    wakeLock = null;
+    navDot?.remove();
+    navDot = null;
+    navLastPos = null;
+    document.body.classList.remove("navigating");
+    el("nav-banner").style.display = "none";
+    el("nav-tools").style.display = "block";
+}
+el("record-btn").addEventListener("click", () => {
+    if (recordMode)
+        stopRecording();
+    else
+        startRecording();
+});
 el("nav-btn").addEventListener("click", () => {
     void startNav();
 });
-el("nav-exit").addEventListener("click", exitNav);
+el("nav-exit").addEventListener("click", () => {
+    if (recordMode)
+        stopRecording();
+    else
+        exitNav();
+});
 el("nav-mute").addEventListener("click", () => {
     navMuted = !navMuted;
     el("nav-mute").textContent = navMuted ? "🔇" : "🔊";

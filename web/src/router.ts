@@ -749,6 +749,15 @@ export class Router {
     return options;
   }
 
+  /** Protection class of the street nearest a point (for classifying where a
+   * recorded ride actually went), or null when off the network. */
+  edgeClassAt(lon: number, lat: number, maxM = 30): ProtectionClass | null {
+    const ei = this.nearestEdge(lon, lat, maxM);
+    if (ei === null) return null;
+    const e = this.g.edges[ei];
+    return e ? this.g.classes[e[3]] ?? null : null;
+  }
+
   /** Penalize edges at the start point that head backward relative to the
    * rider's travel direction — used by "go with my street choice" rerouting
    * so guidance continues forward instead of demanding a U-turn. */
