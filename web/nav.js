@@ -168,6 +168,90 @@ export function snapToTrack(track, lon, lat, hintIdx = -1) {
     }
     return search(0, coords.length - 1);
 }
+const ALERT_CLASS_LABEL = {
+    sharrow: "a shared lane",
+    moderate_street: "a moderate street",
+    busy_street: "a busy street",
+};
+/** Voice-only warnings generated from the route ribbon: unsignalized busy
+ * crossings and caution-class stretches of 30 m or more. */
+export function buildAlerts(payload) {
+    const ribbon = payload.ribbon ?? [];
+    const alerts = [];
+    let cum = 0;
+    let runStart = -1;
+    let runLen = 0;
+    let runCls = "";
+    const flushRun = () => {
+        if (runStart >= 0 && runLen >= 30) {
+            const label = ALERT_CLASS_LABEL[runCls] ?? "a stressful street";
+            alerts.push({
+                atM: runStart,
+                voice: `entering ${label} for ${Math.round(runLen / 10) * 10} meters. ride carefully.`,
+            });
+        }
+        runStart = -1;
+        runLen = 0;
+        runCls = "";
+    };
+    for (const seg of ribbon) {
+        if (seg.crossing) {
+            alerts.push({ atM: cum, voice: "busy street crossing. gather up." });
+        }
+        if (ALERT_CLASS_LABEL[seg.cls] !== undefined) {
+            if (runStart < 0 || runCls !== seg.cls) {
+                flushRun();
+                runStart = cum;
+                runCls = seg.cls;
+            }
+            runLen += seg.m;
+        }
+        else {
+            flushRun();
+        }
+        cum += seg.m;
+    }
+    flushRun();
+    alerts.sort((a, b) => a.atM - b.atM);
+    // drop alerts within 30 m of the previous one — voice pile-ups are worse
+    // than a missed secondary warning
+    const merged = [];
+    for (const a of alerts) {
+        const prev = merged[merged.length - 1];
+        if (prev && a.atM - prev.atM < 30)
+            continue;
+        merged.push(a);
+    }
+    return merged;
+}
+// ---------------------------------------------------------------------------
+// sunset (NOAA solar position approximation, good to a few minutes)
+// ---------------------------------------------------------------------------
+export function sunsetTime(date, lat, lon) {
+    const start = Date.UTC(date.getUTCFullYear(), 0, 0);
+    const doy = Math.floor((date.getTime() - start) / 86400000);
+    const rad = Math.PI / 180;
+    const gamma = ((2 * Math.PI) / 365) * (doy - 1);
+    const eqtime = 229.18 *
+        (0.000075 +
+            0.001868 * Math.cos(gamma) -
+            0.032077 * Math.sin(gamma) -
+            0.014615 * Math.cos(2 * gamma) -
+            0.040849 * Math.sin(2 * gamma));
+    const decl = 0.006918 -
+        0.399912 * Math.cos(gamma) +
+        0.070257 * Math.sin(gamma) -
+        0.006758 * Math.cos(2 * gamma) +
+        0.000907 * Math.sin(2 * gamma) -
+        0.002697 * Math.cos(3 * gamma) +
+        0.00148 * Math.sin(3 * gamma);
+    const cosHa = Math.cos(90.833 * rad) / (Math.cos(lat * rad) * Math.cos(decl)) -
+        Math.tan(lat * rad) * Math.tan(decl);
+    const haDeg = Math.acos(Math.max(-1, Math.min(1, cosHa))) / rad;
+    const sunsetMinUtc = 720 - 4 * (lon - haDeg) - eqtime;
+    const day = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+    return new Date(day + sunsetMinUtc * 60000);
+}
 /** Bearing of the track at a segment index (for the follow camera). */
 export function trackBearing(track, idx) {
     const a = track.coords[Math.max(0, Math.min(idx, track.coords.length - 2))];

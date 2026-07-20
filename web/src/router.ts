@@ -746,6 +746,37 @@ export class Router {
     return options;
   }
 
+  /** Index of the target closest by network distance (profile-weighted) from
+   * a point, or null if none is reachable. Used for mid-ride "nearest kid
+   * stop" detours. */
+  nearestReachable(
+    from: [number, number],
+    targets: [number, number][],
+    profileId: ProfileId,
+    preferFlat: boolean,
+  ): number | null {
+    if (targets.length === 0) return null;
+    const fromNode = this.nearestNode(from[0], from[1]);
+    const w = this.weights(PROFILES[profileId], preferFlat);
+    const { dist } = this.dijkstra(fromNode, null, w);
+    let best: number | null = null;
+    let bestD = Infinity;
+    targets.forEach(([lon, lat], i) => {
+      let node: number;
+      try {
+        node = this.nearestNode(lon, lat);
+      } catch {
+        return;
+      }
+      const d = dist[node] as number;
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    });
+    return bestD === Infinity ? null : best;
+  }
+
   /** Plan a round trip of roughly targetM meters with a stop at a POI.
    * The return leg penalizes outbound edges so it comes back a different way. */
   loopRoute(

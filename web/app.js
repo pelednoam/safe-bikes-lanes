@@ -1,4 +1,4 @@
-import { buildManeuvers, buildTrack, snapToTrack, trackBearing } from "./nav.js";
+import { buildAlerts, buildManeuvers, buildTrack, snapToTrack, sunsetTime, trackBearing, } from "./nav.js";
 import { buildCues, PROFILES, Router, toGPX } from "./router.js";
 // ---------------------------------------------------------------------------
 // constants
@@ -405,6 +405,22 @@ function showSummary(option) {
         const li = document.createElement("li");
         li.textContent = reason;
         whyList.appendChild(li);
+    }
+    // daylight check: warn when the ride would end near or after sunset
+    const sunsetBox = el("sunset");
+    const arrival = new Date(Date.now() + s.minutes * 60000);
+    const sunset = sunsetTime(new Date(), 42.383, -71.105);
+    const marginMin = (sunset.getTime() - arrival.getTime()) / 60000;
+    if (marginMin < 30) {
+        const sunsetLocal = sunset.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+        sunsetBox.textContent =
+            marginMin < 0
+                ? `🌅 this ride ends after sunset (${sunsetLocal}) — lights on, and try dark mode`
+                : `🌅 sunset at ${sunsetLocal} — you'd arrive with ~${Math.round(marginMin)} min of light`;
+        sunsetBox.style.display = "block";
+    }
+    else {
+        sunsetBox.style.display = "none";
     }
 }
 // ---------------------------------------------------------------------------
@@ -1156,6 +1172,17 @@ let navOffCount = 0;
 let navDot = null;
 let navArrived = false;
 let wakeLock = null;
+let navAlerts = [];
+let navAlertNext = 0;
+let navLastPos = null;
+/** Set while detouring to a kid stop: where the ride was originally headed. */
+let navOriginalDest = null;
+let navNextKm = 1;
+let navHalfway = false;
+function vibrate(pattern) {
+    if ("vibrate" in navigator)
+        navigator.vibrate(pattern);
+}
 function speak(text) {
     if (navMuted || !("speechSynthesis" in window))
         return;
@@ -1170,10 +1197,14 @@ function rebuildNavFromSelected() {
         return false;
     navTrack = buildTrack(sel.payload);
     navManeuvers = buildManeuvers(sel.payload);
+    navAlerts = buildAlerts(sel.payload);
     navNext = 0;
+    navAlertNext = 0;
     navAnnounceStage = 0;
     navHint = -1;
     navArrived = false;
+    navNextKm = 1;
+    navHalfway = false;
     return true;
 }
 function navUpdateBanner(distToNext, remainingM) {
@@ -1191,6 +1222,7 @@ function navOnPosition(pos) {
         return;
     const lon = pos.coords.longitude;
     const lat = pos.coords.latitude;
+    navLastPos = [lon, lat];
     if (!navDot) {
         const dot = document.createElement("div");
         dot.className = "nav-dot";
@@ -1233,17 +1265,47 @@ function navOnPosition(pos) {
     navUpdateBanner(distToNext, remaining);
     if (next && navAnnounceStage < 2 && distToNext <= ANNOUNCE_NOW_M) {
         speak(next.voice);
+        vibrate([200]);
         navAnnounceStage = 2;
     }
     else if (next && navAnnounceStage < 1 && distToNext <= ANNOUNCE_FAR_M) {
         speak(`in ${Math.round(distToNext / 10) * 10} meters, ${next.voice}`);
+        vibrate([100]);
         navAnnounceStage = 1;
+    }
+    // hazard alerts (voice + distinct buzz), announced ~100 m out
+    while (navAlertNext < navAlerts.length && (navAlerts[navAlertNext]?.atM ?? 0) < snap.alongM - 10) {
+        navAlertNext++;
+    }
+    const alert = navAlerts[navAlertNext];
+    if (alert && alert.atM - snap.alongM <= 100) {
+        speak(alert.voice);
+        vibrate([100, 80, 100]);
+        navAlertNext++;
+    }
+    // kid morale: kilometer milestones and the halfway mark
+    if (snap.alongM >= navNextKm * 1000) {
+        speak(`${navNextKm} kilometer${navNextKm > 1 ? "s" : ""} done. nice riding!`);
+        navNextKm++;
+    }
+    if (!navHalfway && navTrack.totalM > 1500 && snap.alongM >= navTrack.totalM / 2) {
+        navHalfway = true;
+        speak("halfway there!");
     }
     if (remaining < 15 && !navArrived) {
         navArrived = true;
-        speak("you have arrived");
-        el("nav-dist").textContent = "🏁";
-        el("nav-street").textContent = "arrived!";
+        vibrate([200, 100, 200]);
+        if (navOriginalDest) {
+            speak("arrived at your stop. tap resume when you're ready to ride on.");
+            el("nav-dist").textContent = "🛑";
+            el("nav-street").textContent = "at the stop — resume when ready";
+            el("nav-resume").style.display = "inline-block";
+        }
+        else {
+            speak(`you have arrived. ${(navTrack.totalM / 1000).toFixed(1)} kilometers — nicely done!`);
+            el("nav-dist").textContent = "🏁";
+            el("nav-street").textContent = "arrived!";
+        }
     }
     if (navFollowing) {
         map.easeTo({
@@ -1262,6 +1324,8 @@ async function startNav() {
     if (!destLngLat)
         return;
     navDest = [destLngLat.lng, destLngLat.lat];
+    navOriginalDest = null;
+    el("nav-resume").style.display = "none";
     navActive = true;
     navFollowing = true;
     document.body.classList.add("navigating");
@@ -1280,6 +1344,8 @@ async function startNav() {
 }
 function exitNav() {
     navActive = false;
+    navOriginalDest = null;
+    navLastPos = null;
     if (navWatchId !== null)
         navigator.geolocation.clearWatch(navWatchId);
     navWatchId = null;
@@ -1294,6 +1360,74 @@ function exitNav() {
     const threeD = el("show-3d").checked;
     map.easeTo({ pitch: threeD ? 60 : 0, bearing: 0, duration: 800 });
 }
+/** Mid-ride detour: reroute to the nearest kid stop of a kind, remembering
+ * the original destination for the resume button. */
+function detourToNearest(kind) {
+    if (!navActive || !router || !navLastPos)
+        return;
+    const candidates = pois.filter((p) => p.properties.kind === kind);
+    const idx = router.nearestReachable(navLastPos, candidates.map((p) => p.geometry.coordinates), profileId, preferFlat);
+    const poi = idx !== null ? candidates[idx] : undefined;
+    if (!poi) {
+        speak(`no ${kind === "water" ? "water fountain" : kind} found nearby`);
+        return;
+    }
+    try {
+        options = router.routeOptions(navLastPos, poi.geometry.coordinates, profileId, preferFlat);
+        const first = options[0];
+        if (!first)
+            return;
+        selectOption(first.id);
+        if (navOriginalDest === null)
+            navOriginalDest = navDest;
+        navDest = poi.geometry.coordinates;
+        rebuildNavFromSelected();
+        const label = poi.properties.name || POI_META[kind]?.label || kind;
+        speak(`detour: ${label} is ${fmtDist(first.payload.summary.meters)} away. follow the route.`);
+    }
+    catch (err) {
+        speak("could not plan a detour from here");
+        void err;
+    }
+}
+el("nav-water").addEventListener("click", () => {
+    detourToNearest("water");
+});
+el("nav-restroom").addEventListener("click", () => {
+    detourToNearest("restroom");
+});
+el("nav-playground").addEventListener("click", () => {
+    detourToNearest("playground");
+});
+el("nav-resume").addEventListener("click", () => {
+    if (!router || !navLastPos || !navOriginalDest)
+        return;
+    try {
+        options = router.routeOptions(navLastPos, navOriginalDest, profileId, preferFlat);
+        const first = options[0];
+        if (!first)
+            return;
+        selectOption(first.id);
+        navDest = navOriginalDest;
+        navOriginalDest = null;
+        rebuildNavFromSelected();
+        el("nav-resume").style.display = "none";
+        speak("back on the way. let's go!");
+    }
+    catch {
+        speak("could not plan the way back from here");
+    }
+});
+el("nav-hazard").addEventListener("click", () => {
+    if (!navLastPos)
+        return;
+    sketchyMarks.push(navLastPos);
+    saveSketchy(sketchyMarks);
+    router?.setSketchyMarks(sketchyMarks);
+    renderSketchy();
+    vibrate([80]);
+    speak("marked. future routes will avoid this spot.");
+});
 el("nav-btn").addEventListener("click", () => {
     void startNav();
 });
@@ -1313,6 +1447,87 @@ map.on("dragstart", () => {
         navFollowing = false;
         el("nav-recenter").style.display = "inline-block";
     }
+});
+// ---------------------------------------------------------------------------
+// offline: pre-cache basemap tiles along the selected route (zooms 13-16,
+// ~1-tile corridor) into the service worker's tile cache
+// ---------------------------------------------------------------------------
+const TILE_CACHE = "bike-tiles-v1";
+function tileXY(lon, lat, z) {
+    const n = 2 ** z;
+    const x = Math.floor(((lon + 180) / 360) * n);
+    const latR = (lat * Math.PI) / 180;
+    const y = Math.floor(((1 - Math.asinh(Math.tan(latR)) / Math.PI) / 2) * n);
+    return [x, y];
+}
+function routeTileUrls(track) {
+    const dark = document.body.classList.contains("dark");
+    const template = dark
+        ? "https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"
+        : "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
+    const urls = new Set();
+    for (const z of [13, 14, 15, 16]) {
+        // sample the track densely enough that no tile is skipped at this zoom
+        const stepM = z >= 16 ? 150 : 400;
+        let nextAt = 0;
+        track.coords.forEach((c, i) => {
+            if ((track.cumM[i] ?? 0) < nextAt && i !== track.coords.length - 1)
+                return;
+            nextAt = (track.cumM[i] ?? 0) + stepM;
+            const [x, y] = tileXY(c[0], c[1], z);
+            const spread = z >= 15 ? 1 : 0; // 3x3 corridor at high zooms
+            for (let dx = -spread; dx <= spread; dx++) {
+                for (let dy = -spread; dy <= spread; dy++) {
+                    urls.add(template
+                        .replace("{z}", String(z))
+                        .replace("{x}", String(x + dx))
+                        .replace("{y}", String(y + dy)));
+                }
+            }
+        });
+    }
+    return [...urls];
+}
+el("offline-btn").addEventListener("click", () => {
+    const sel = options.find((o) => o.id === selectedId);
+    if (!sel)
+        return;
+    const btn = el("offline-btn");
+    const urls = routeTileUrls(buildTrack(sel.payload));
+    btn.disabled = true;
+    let done = 0;
+    void caches
+        .open(TILE_CACHE)
+        .then(async (cache) => {
+        const pool = 6;
+        const queue = [...urls];
+        const worker = async () => {
+            for (;;) {
+                const url = queue.shift();
+                if (url === undefined)
+                    return;
+                try {
+                    if ((await cache.match(url)) === undefined) {
+                        const resp = await fetch(url, { mode: "no-cors" });
+                        await cache.put(url, resp);
+                    }
+                }
+                catch {
+                    // offline mid-download or a missing tile: skip
+                }
+                done++;
+                btn.textContent = `⬇ ${done}/${urls.length}…`;
+            }
+        };
+        await Promise.all(Array.from({ length: pool }, worker));
+        btn.textContent = "✓ offline ready";
+    })
+        .finally(() => {
+        btn.disabled = false;
+        window.setTimeout(() => {
+            btn.textContent = "⬇ Offline map";
+        }, 4000);
+    });
 });
 // ---------------------------------------------------------------------------
 // dark mode (night rides): dark basemap + dark UI, persisted; defaults to the

@@ -1,8 +1,15 @@
 // Tests for turn-by-turn navigation math on synthetic routes.
 import { describe, expect, it } from "vitest";
 
-import { buildManeuvers, buildTrack, snapToTrack, turnAngle } from "../src/nav.js";
-import type { LineFeature, ProtectionClass, RoutePayload } from "../src/types.js";
+import {
+  buildAlerts,
+  buildManeuvers,
+  buildTrack,
+  snapToTrack,
+  sunsetTime,
+  turnAngle,
+} from "../src/nav.js";
+import type { LineFeature, ProtectionClass, RibbonSeg, RoutePayload } from "../src/types.js";
 
 const LAT = 42.38;
 const LON = -71.1;
@@ -83,6 +90,63 @@ describe("buildManeuvers", () => {
     const maneuvers = buildManeuvers(payload);
     expect(maneuvers[0]?.voice).toBe("continue onto Gamma");
     expect(maneuvers[0]?.icon).toBe("⬆");
+  });
+});
+
+describe("buildAlerts", () => {
+  function ribbonPayload(ribbon: RibbonSeg[]): RoutePayload {
+    return { ...lRoute(), ribbon };
+  }
+  const seg = (m: number, cls: ProtectionClass, crossing = false): RibbonSeg => ({
+    m,
+    cls,
+    e0: 10,
+    e1: 10,
+    crossing,
+  });
+
+  it("alerts on busy crossings and long caution stretches", () => {
+    const alerts = buildAlerts(
+      ribbonPayload([
+        seg(200, "quiet_street"),
+        seg(30, "quiet_street", true), // unsignalized busy crossing
+        seg(100, "moderate_street"),
+        seg(500, "path"),
+      ]),
+    );
+    expect(alerts).toHaveLength(2);
+    expect(alerts[0]?.voice).toMatch(/crossing/);
+    expect(alerts[0]?.atM).toBe(200);
+    expect(alerts[1]?.voice).toMatch(/moderate street for 100 meters/);
+  });
+
+  it("ignores short caution blips and merges near-duplicates", () => {
+    const alerts = buildAlerts(
+      ribbonPayload([seg(100, "quiet_street"), seg(20, "sharrow"), seg(300, "path")]),
+    );
+    expect(alerts).toHaveLength(0);
+  });
+});
+
+describe("sunsetTime", () => {
+  it("computes a plausible winter sunset for Cambridge", () => {
+    // Dec 21: Boston sunset ≈ 16:15 EST = 21:15 UTC
+    const sunset = sunsetTime(new Date(Date.UTC(2026, 11, 21, 12)), 42.38, -71.1);
+    const minUtc = sunset.getUTCHours() * 60 + sunset.getUTCMinutes();
+    expect(minUtc).toBeGreaterThan(20 * 60 + 55);
+    expect(minUtc).toBeLessThan(21 * 60 + 35);
+  });
+
+  it("summer sunset is much later than winter", () => {
+    // compare minutes-after-midnight-UTC of the input day (summer sunset in
+    // Boston crosses midnight UTC)
+    const summer = sunsetTime(new Date(Date.UTC(2026, 5, 21, 12)), 42.38, -71.1);
+    const winter = sunsetTime(new Date(Date.UTC(2026, 11, 21, 12)), 42.38, -71.1);
+    const sinceDayStart = (d: Date, y: number, m: number, day: number): number =>
+      (d.getTime() - Date.UTC(y, m, day)) / 60_000;
+    expect(sinceDayStart(summer, 2026, 5, 21)).toBeGreaterThan(
+      sinceDayStart(winter, 2026, 11, 21) + 120,
+    );
   });
 });
 
