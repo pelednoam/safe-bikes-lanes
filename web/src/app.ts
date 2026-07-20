@@ -1254,6 +1254,10 @@ el<HTMLDialogElement>("about").addEventListener("click", (e: MouseEvent) => {
 
 const OFF_ROUTE_M = 40;
 const OFF_ROUTE_STRIKES = 3;
+/** Ignore fixes with worse GPS accuracy than this for off-route decisions. */
+const MAX_GPS_ACCURACY_M = 50;
+/** Minimum time between automatic reroutes. */
+const REROUTE_COOLDOWN_MS = 10_000;
 const ANNOUNCE_FAR_M = 90;
 const ANNOUNCE_NOW_M = 25;
 
@@ -1279,6 +1283,7 @@ let navLastPos: [number, number] | null = null;
 let navOriginalDest: [number, number] | null = null;
 let navNextKm = 1;
 let navHalfway = false;
+let navLastRerouteAt = 0;
 
 function vibrate(pattern: number[]): void {
   if ("vibrate" in navigator) navigator.vibrate(pattern);
@@ -1333,12 +1338,22 @@ function navOnPosition(pos: GeolocationPosition): void {
   }
   const snap = snapToTrack(navTrack, lon, lat, navHint);
 
-  // off-route: three bad fixes in a row trigger a reroute to the destination
+  // off-route: a few good fixes in a row trigger a reroute to the destination
+  // (like Google Maps — ride wherever you like, the route follows you)
   if (snap.offM > OFF_ROUTE_M) {
+    // a poor GPS fix shouldn't count as a deviation
+    if (pos.coords.accuracy > MAX_GPS_ACCURACY_M) return;
     navOffCount++;
-    if (navOffCount >= OFF_ROUTE_STRIKES && navDest) {
+    // instant feedback while we make sure it's a real deviation
+    el<HTMLElement>("nav-icon").textContent = "↩";
+    el<HTMLElement>("nav-dist").textContent = "off route";
+    el<HTMLElement>("nav-street").textContent = "adjusting…";
+    const now = Date.now();
+    if (navOffCount >= OFF_ROUTE_STRIKES && navDest && now - navLastRerouteAt > REROUTE_COOLDOWN_MS) {
       navOffCount = 0;
-      speak("off route. rerouting.");
+      navLastRerouteAt = now;
+      speak("rerouting.");
+      vibrate([80, 60, 80]);
       try {
         options = router.routeOptions([lon, lat], navDest, profileId, preferFlat);
         const first = options[0];
