@@ -18,6 +18,7 @@ average kid-stress: green/yellow/red), and elevation.geojson (hypsometric
 grid).
 """
 
+import datetime
 import itertools
 import json
 import math
@@ -257,6 +258,29 @@ def export() -> None:
     export_gateways(graph)
     export_heatmap(graph)
     export_elevation_heatmap()
+    export_meta()
+
+
+def export_meta() -> None:
+    """Data-freshness manifest for the app's About dialog: when each source
+    was last retrieved (from the fetch sidecars) and when the graph was built."""
+    sources: list[dict[str, Any]] = []
+    for meta_path in sorted(config.RAW_DIR.glob("*.meta.json")):
+        info = json.loads(meta_path.read_text())
+        sources.append(
+            {
+                "name": meta_path.name.replace(".geojson.meta.json", ""),
+                "retrieved": info.get("retrieved", "")[:10],
+                "features": info.get("features", 0),
+            }
+        )
+    out = {
+        "built": datetime.datetime.now(datetime.UTC).isoformat()[:10],
+        "sources": sources,
+    }
+    path = WEB_DATA / "meta.json"
+    path.write_text(json.dumps(out, indent=1))
+    print(f"wrote {path} ({len(sources)} sources)")
 
 
 if __name__ == "__main__":

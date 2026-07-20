@@ -1,4 +1,4 @@
-import { buildCues, Router, toGPX } from "./router.js";
+import { buildCues, PROFILES, Router, toGPX } from "./router.js";
 // ---------------------------------------------------------------------------
 // constants
 // ---------------------------------------------------------------------------
@@ -998,6 +998,8 @@ searchInput.addEventListener("input", () => {
 });
 document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
+        if (el("about").open)
+            return; // dialog handles it
         if (shedMode)
             exitShedMode();
         else
@@ -1016,6 +1018,45 @@ for (const [cls, label] of Object.entries(CLASS_LABELS)) {
     span.textContent = label;
     legend.appendChild(span);
 }
+function fillAbout() {
+    const multTable = el("mult-table");
+    if (multTable.rows.length > 0)
+        return; // already filled
+    const yk = PROFILES.young_kids;
+    const rows = Object.entries(yk.mult)
+        .sort((a, b) => a[1] - b[1])
+        .map(([cls, m]) => `<tr><td><i style="display:inline-block;width:12px;height:5px;border-radius:2px;` +
+        `background:${CLASS_COLORS[cls]}"></i> ${CLASS_LABELS[cls]}</td>` +
+        `<td>×${m}</td></tr>`);
+    rows.push(`<tr><td>painted lane on a busy road</td><td>×${yk.busyLane}</td></tr>`, `<tr><td>buffered lane on a busy road</td><td>×${yk.busyBuffered}</td></tr>`);
+    multTable.innerHTML = `<tr><th>street type</th><th>cost</th></tr>${rows.join("")}`;
+    void fetch("data/meta.json")
+        .then((r) => (r.ok ? r.json() : null))
+        .then((meta) => {
+        if (!meta)
+            return;
+        el("built-date").textContent = meta.built;
+        const table = el("freshness-table");
+        for (const s of meta.sources) {
+            const tr = table.insertRow();
+            tr.insertCell().textContent = s.name.replace(/_/g, " ");
+            tr.insertCell().textContent = s.retrieved;
+            tr.insertCell().textContent = String(s.features);
+        }
+    })
+        .catch(() => undefined);
+}
+el("about-btn").addEventListener("click", () => {
+    fillAbout();
+    el("about").showModal();
+});
+el("about-close").addEventListener("click", () => {
+    el("about").close();
+});
+el("about").addEventListener("click", (e) => {
+    if (e.target === el("about"))
+        el("about").close();
+});
 // offline support (PWA)
 if ("serviceWorker" in navigator) {
     void navigator.serviceWorker.register("sw.js");
