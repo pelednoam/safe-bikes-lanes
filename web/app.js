@@ -91,7 +91,11 @@ const map = new maplibregl.Map({
     zoom: 13,
 });
 map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
-map.addControl(new maplibregl.GeolocateControl({ trackUserLocation: true }), "top-right");
+map.addControl(new maplibregl.GeolocateControl({
+    trackUserLocation: true,
+    positionOptions: { enableHighAccuracy: true },
+    fitBoundsOptions: { maxZoom: 16.5 },
+}), "top-right");
 map.addControl(new maplibregl.ScaleControl({}), "bottom-left");
 // ---------------------------------------------------------------------------
 // state
