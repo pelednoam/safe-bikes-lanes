@@ -3,6 +3,7 @@
 // All weighting happens here, from raw per-edge components — so rider
 // profiles, flat preference, and personal "sketchy" marks apply instantly.
 
+import { bearingDeg } from "./nav.js";
 import type {
   Caution,
   CueEntry,
@@ -671,6 +672,7 @@ export class Router {
     end: [number, number],
     profileId: ProfileId = "young_kids",
     preferFlat = false,
+    bias?: Map<number, number>,
   ): RouteOption[] {
     const a = this.nearestNode(start[0], start[1]);
     const b = this.nearestNode(end[0], end[1]);
@@ -711,7 +713,8 @@ export class Router {
 
     const paths = new Map<RouteOption["id"], number[]>();
     for (const c of candidates) {
-      const p = this.shortestPath(a, b, c.w);
+      // the heading bias shapes real guidance, not the direct reference
+      const p = this.shortestPath(a, b, c.w, c.isDirect ? undefined : bias);
       if (p === null) throw new Error("no path found");
       paths.set(c.id, p);
     }
@@ -744,6 +747,25 @@ export class Router {
       options.push({ id: c.id, label: c.label, grade, gradeReason: reason, payload });
     }
     return options;
+  }
+
+  /** Penalize edges at the start point that head backward relative to the
+   * rider's travel direction — used by "go with my street choice" rerouting
+   * so guidance continues forward instead of demanding a U-turn. */
+  headingBias(from: [number, number], headingDeg: number, penalty = 8): Map<number, number> {
+    const node = this.nearestNode(from[0], from[1]);
+    const bias = new Map<number, number>();
+    for (const ei of this.adj[node] ?? []) {
+      const coords = this.edgeCoords(ei);
+      const a = coords[0];
+      const b = coords[1];
+      if (!a || !b) continue;
+      const brg = (bearingDeg(a, b) + 360) % 360;
+      let diff = Math.abs(brg - ((headingDeg + 360) % 360)) % 360;
+      if (diff > 180) diff = 360 - diff;
+      if (diff > 110) bias.set(ei, penalty);
+    }
+    return bias;
   }
 
   /** Index of the target closest by network distance (profile-weighted) from

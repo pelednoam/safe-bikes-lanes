@@ -12,9 +12,11 @@ import type {
 
 import type { Maneuver, RideAlert, Track } from "./nav.js";
 import {
+  bearingDeg,
   buildAlerts,
   buildManeuvers,
   buildTrack,
+  distM,
   snapToTrack,
   sunsetTime,
   trackBearing,
@@ -1284,6 +1286,10 @@ let navOriginalDest: [number, number] | null = null;
 let navNextKm = 1;
 let navHalfway = false;
 let navLastRerouteAt = 0;
+/** "go with my street choice": reroutes respect the rider's direction. */
+let navMyWay = localStorage.getItem("navMyWay") === "1";
+let navPrevPos: [number, number] | null = null;
+let navHeading: number | null = null;
 
 function vibrate(pattern: number[]): void {
   if ("vibrate" in navigator) navigator.vibrate(pattern);
@@ -1329,6 +1335,14 @@ function navOnPosition(pos: GeolocationPosition): void {
   const lon = pos.coords.longitude;
   const lat = pos.coords.latitude;
   navLastPos = [lon, lat];
+  // travel direction: GPS heading when moving, else derived from movement
+  const gpsHeading = pos.coords.heading;
+  if (gpsHeading !== null && !Number.isNaN(gpsHeading) && (pos.coords.speed ?? 0) > 0.7) {
+    navHeading = gpsHeading;
+  } else if (navPrevPos && distM(navPrevPos, [lon, lat]) > 5) {
+    navHeading = (bearingDeg(navPrevPos, [lon, lat]) + 360) % 360;
+  }
+  if (!navPrevPos || distM(navPrevPos, [lon, lat]) > 3) navPrevPos = [lon, lat];
   if (!navDot) {
     const dot = document.createElement("div");
     dot.className = "nav-dot";
@@ -1352,10 +1366,15 @@ function navOnPosition(pos: GeolocationPosition): void {
     if (navOffCount >= OFF_ROUTE_STRIKES && navDest && now - navLastRerouteAt > REROUTE_COOLDOWN_MS) {
       navOffCount = 0;
       navLastRerouteAt = now;
-      speak("rerouting.");
+      const useMyWay = navMyWay && navHeading !== null;
+      speak(useMyWay ? "okay, going your way." : "rerouting.");
       vibrate([80, 60, 80]);
       try {
-        options = router.routeOptions([lon, lat], navDest, profileId, preferFlat);
+        const bias =
+          useMyWay && navHeading !== null
+            ? router.headingBias([lon, lat], navHeading)
+            : undefined;
+        options = router.routeOptions([lon, lat], navDest, profileId, preferFlat, bias);
         const first = options[0];
         if (first) {
           selectOption(first.id);
@@ -1542,6 +1561,18 @@ el<HTMLButtonElement>("nav-resume").addEventListener("click", () => {
   } catch {
     speak("could not plan the way back from here");
   }
+});
+
+el<HTMLButtonElement>("nav-myway").classList.toggle("active", navMyWay);
+el<HTMLButtonElement>("nav-myway").addEventListener("click", () => {
+  navMyWay = !navMyWay;
+  localStorage.setItem("navMyWay", navMyWay ? "1" : "0");
+  el<HTMLButtonElement>("nav-myway").classList.toggle("active", navMyWay);
+  speak(
+    navMyWay
+      ? "going your way: reroutes will follow your direction."
+      : "back to safest: reroutes return to the safest path.",
+  );
 });
 
 el<HTMLButtonElement>("nav-hazard").addEventListener("click", () => {
