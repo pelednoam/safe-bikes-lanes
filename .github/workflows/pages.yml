@@ -36,8 +36,8 @@ jobs:
       - name: Assemble site
         run: |
           mkdir _site
-          cp web/index.html web/app.js web/router.js web/types.js _site/
-          cp web/sw.js web/manifest.json web/icon-192.png web/icon-512.png _site/
+          cp web/index.html web/*.js _site/
+          cp web/manifest.json web/icon-192.png web/icon-512.png _site/
           cp -r web/data _site/data
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
