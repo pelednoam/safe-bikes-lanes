@@ -102,19 +102,19 @@
   label.toggle { display: block; margin-top: 6px; user-select: none; cursor: pointer; }
   #error { color: #b00; display: none; margin-top: 6px; }
   #loading { display: none; color: var(--muted); margin-top: 6px; }
-  #about, #rides { max-width: 540px; width: calc(100% - 40px); max-height: 85vh;
+  #about, #rides, #hazard { max-width: 540px; width: calc(100% - 40px); max-height: 85vh;
            background: var(--bg); color: var(--fg);
            border: none; border-radius: 12px; padding: 18px 22px; font-size: 13px;
            box-shadow: 0 6px 30px rgba(0,0,0,.35); }
-  #about::backdrop, #rides::backdrop { background: rgba(0,0,0,.45); }
-  #about h2, #rides h2 { font-size: 15px; margin: 14px 0 6px; }
-  #about h2:first-of-type, #rides h2:first-of-type { margin-top: 0; padding-right: 30px; }
+  #about::backdrop, #rides::backdrop, #hazard::backdrop { background: rgba(0,0,0,.45); }
+  #about h2, #rides h2, #hazard h2 { font-size: 15px; margin: 14px 0 6px; }
+  #about h2:first-of-type, #rides h2:first-of-type, #hazard h2:first-of-type { margin-top: 0; padding-right: 30px; }
   #about table, #rides table { border-collapse: collapse; width: 100%; margin: 6px 0; }
   #about td, #about th, #rides td, #rides th {
     border-bottom: 1px solid var(--border); padding: 3px 6px;
     text-align: left; font-variant-numeric: tabular-nums; }
   #rides td button { margin: 0 2px 0 0; padding: 1px 7px; font-size: 11px; }
-  #about-close, #rides-close { position: absolute; top: 10px; right: 12px; margin: 0; }
+  #about-close, #rides-close, #hazard-close { position: absolute; top: 10px; right: 12px; margin: 0; }
   #about ol { padding-left: 18px; } #about li { margin: 4px 0; }
   #nav-banner {
     display: none; position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
@@ -154,6 +154,7 @@
     <button id="nav-restroom" title="detour to nearest restroom">🚻</button>
     <button id="nav-playground" title="detour to nearest playground">🛝</button>
     <button id="nav-hazard" title="mark this spot as sketchy">⚠</button>
+    <button id="nav-report" title="report a hazard here (with photo)">📷</button>
     <button id="nav-myway" title="Go with my street choice: when you deviate, reroutes continue in your direction instead of pulling you back">🧭 my way</button>
     <button id="nav-resume" style="display:none">▶ resume ride</button>
   </div>
@@ -253,6 +254,33 @@
   ● Record, and stored only on this device. Auto-saves on arrival or when you end
   navigation; free recordings stop themselves after 10 minutes without movement.</p>
   <button id="rides-clear" title="Delete all ride history">🗑 clear history</button>
+</dialog>
+<dialog id="hazard">
+  <button id="hazard-close" title="close">✕</button>
+  <h2>Report a hazard</h2>
+  <div id="hazard-loc" class="hint"></div>
+  <label>What's wrong?<br>
+    <select id="hazard-category">
+      <option value="surface">broken surface / glass</option>
+      <option value="blocked">blocked lane or path</option>
+      <option value="construction">construction</option>
+      <option value="traffic">dangerous traffic spot</option>
+      <option value="other">other hazard</option>
+    </select></label>
+  <label style="display:block;margin-top:8px">Note (optional)<br>
+    <input id="hazard-note" type="text" maxlength="200" style="width:100%;box-sizing:border-box"
+           placeholder="e.g. glass across the whole lane"></label>
+  <label style="display:block;margin-top:8px">📷 Photo (optional)<br>
+    <input id="hazard-photo" type="file" accept="image/*" capture="environment"></label>
+  <img id="hazard-preview" alt="" style="display:none;max-width:100%;border-radius:8px;margin-top:8px">
+  <div style="margin-top:10px">
+    <button id="hazard-save">✓ Save</button>
+    <button id="hazard-share" title="Share photo + description + location (e.g. to the city, email, chat)">📤 Share / send</button>
+  </div>
+  <p class="hint" style="color:var(--muted)">Saved reports stay on this device, appear as ⚠
+  on the map, and your routes avoid them. Use Share to send the report onward — e.g.
+  <a href="https://www.cambridgema.gov/services/commonwealthconnect" target="_blank" rel="noopener">Cambridge 311</a> or
+  <a href="https://311.somervillema.gov/" target="_blank" rel="noopener">Somerville 311</a>.</p>
 </dialog>
 <dialog id="about">
   <button id="about-close" title="close">✕</button>
