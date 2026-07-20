@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Family Bike Router — Cambridge + Somerville</title>
+<link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
+<style>
+  :root { font-family: system-ui, sans-serif; }
+  html, body { margin: 0; height: 100%; }
+  #map { position: absolute; inset: 0; }
+  #panel {
+    position: absolute; top: 10px; left: 10px; z-index: 5; width: 310px;
+    background: #fff; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,.25);
+    padding: 12px 14px; font-size: 13px; max-height: calc(100% - 40px); overflow-y: auto;
+  }
+  #panel h1 { font-size: 15px; margin: 0 0 4px; }
+  #panel .hint { color: #666; margin: 4px 0 8px; }
+  #search { width: 100%; box-sizing: border-box; padding: 5px 8px; border: 1px solid #bbb;
+            border-radius: 6px; }
+  .search-row { display: flex; gap: 4px; align-items: center; margin: 3px 0; }
+  .search-row span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .search-row button { margin: 0; padding: 2px 7px; font-size: 11px; }
+  #modes { margin: 8px 0; }
+  #modes label { margin-right: 12px; cursor: pointer; }
+  #summary { display: none; border-top: 1px solid #eee; margin-top: 8px; padding-top: 8px; }
+  .stat { display: flex; justify-content: space-between; margin: 2px 0; }
+  .stat b { font-variant-numeric: tabular-nums; }
+  #classbar { display: flex; height: 12px; border-radius: 6px; overflow: hidden; margin: 8px 0; }
+  .caution { color: #a33; margin: 2px 0; }
+  .all-clear { color: #2a7; margin: 2px 0; }
+  .legend { display: grid; grid-template-columns: 14px auto; gap: 3px 7px; margin-top: 8px;
+            align-items: center; }
+  .legend i { width: 14px; height: 5px; border-radius: 2px; display: inline-block; }
+  button { margin-top: 8px; margin-right: 6px; padding: 5px 10px; border: 1px solid #bbb;
+           background: #f6f6f6; border-radius: 6px; cursor: pointer; }
+  button:hover { background: #eee; }
+  label.toggle { display: block; margin-top: 8px; user-select: none; cursor: pointer; }
+  #error { color: #b00; display: none; margin-top: 6px; }
+  #loading { display: none; color: #666; margin-top: 6px; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="panel">
+  <h1>Family Bike Router</h1>
+  <div class="hint">Cambridge + Somerville, safety first.<br>
+    Click the map (or search) to set <b>start</b> and <b>end</b>; drag markers to adjust.</div>
+  <input id="search" type="search" placeholder="search address or place…" autocomplete="off">
+  <div id="search-results"></div>
+  <div id="modes">
+    <label><input type="radio" name="mode" value="kids" checked> with kids</label>
+    <label><input type="radio" name="mode" value="solo"> solo</label>
+  </div>
+  <div id="loading">routing…</div>
+  <div id="summary">
+    <div class="stat"><span>Safest route</span><b id="s-dist"></b></div>
+    <div class="stat"><span>Riding time (kid pace)</span><b id="s-time"></b></div>
+    <div class="stat"><span>Protected / off-street</span><b id="s-prot"></b></div>
+    <div class="stat"><span>Quiet streets</span><b id="s-quiet"></b></div>
+    <div class="stat"><span>vs. shortest route</span><b id="s-detour"></b></div>
+    <div id="classbar"></div>
+    <div id="cautions"></div>
+    <label class="toggle"><input type="checkbox" id="show-short"> show shortest route (dashed)</label>
+  </div>
+  <div id="error"></div>
+  <button id="reset">Reset</button><button id="swap">⇄ Swap A/B</button>
+  <label class="toggle"><input type="checkbox" id="show-net" checked> show safety network</label>
+  <div class="legend" id="legend"></div>
+</div>
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="app.js" type="module"></script>
+</body>
+</html>

@@ -1,0 +1,30 @@
+[project]
+name = "family-bike-router"
+version = "0.1.0"
+description = "Safety-first bike route planner for Cambridge + Somerville, MA"
+requires-python = ">=3.12"
+dependencies = [
+    "osmnx",
+    "geopandas",
+    "networkx",
+    "shapely",
+    "fastapi",
+    "uvicorn[standard]",
+]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["pipeline", "server", "tests"]
+strict = true
+ignore_missing_imports = true
+# geo libraries (osmnx/geopandas/shapely/networkx) are largely untyped; their
+# values arrive as Any, so these two strict flags produce only noise here.
+disallow_any_expr = false
+warn_return_any = false
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "ANN", "RUF"]
+ignore = ["ANN401"]
