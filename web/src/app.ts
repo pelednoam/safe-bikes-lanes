@@ -38,6 +38,16 @@ import {
   listHazards,
   removeHazard,
 } from "./hazards.js";
+import type { RecentRoute, SavedPlace } from "./places.js";
+import {
+  clearRecent,
+  deletePlace,
+  emojiFor,
+  listPlaces,
+  listRecent,
+  pushRecent,
+  savePlace,
+} from "./places.js";
 import type { RideSummary } from "./rides.js";
 import {
   clearRides,
@@ -286,6 +296,7 @@ async function requestRoute(): Promise<void> {
     const wanted = pendingSelect;
     pendingSelect = null;
     selectOption(wanted !== null && options.some((o) => o.id === wanted) ? wanted : fallback.id);
+    recordRecentRoute([s.lng, s.lat], [d.lng, d.lat]);
   } catch (err) {
     options = [];
     selectedId = null;
@@ -662,6 +673,118 @@ el<HTMLButtonElement>("share").addEventListener("click", () => {
 });
 
 // ---------------------------------------------------------------------------
+// saved places (Home/Work/…) and recent route history
+// ---------------------------------------------------------------------------
+
+/** Label a just-planned route from its street names for the recent list. */
+function recordRecentRoute(s: [number, number], e: [number, number]): void {
+  const sel = options.find((o) => o.id === selectedId) ?? options[0];
+  if (!sel) return;
+  const names = sel.payload.geojson.features
+    .map((f) => f.properties.name)
+    .filter((n): n is string => n !== null && n !== "");
+  const from = names[0] ?? "start";
+  const to = names[names.length - 1] ?? "end";
+  pushRecent({
+    s,
+    e,
+    label: `${from} → ${to}`,
+    km: Math.round(sel.payload.summary.meters / 100) / 10,
+    grade: sel.grade,
+    t: Date.now(),
+  });
+  renderPlacesAndRecent();
+}
+
+function planBetween(s: [number, number], e: [number, number]): void {
+  if (start) start.setLngLat(s);
+  else start = makeMarker(s, "#2b83ba", "start");
+  if (end) end.setLngLat(e);
+  else end = makeMarker(e, "#d7191c", "end");
+  void requestRoute();
+}
+
+function promptSavePlace(lon: number, lat: number): void {
+  const name = window.prompt("Name this place (e.g. Home, Work, School):");
+  if (name === null || name.trim() === "") return;
+  savePlace({ name: name.trim(), lon, lat });
+  renderPlacesAndRecent();
+}
+
+function placeRow(place: SavedPlace): HTMLDivElement {
+  const row = document.createElement("div");
+  row.className = "search-row";
+  const label = document.createElement("span");
+  label.textContent = `${emojiFor(place.name)} ${place.name}`;
+  row.appendChild(label);
+  for (const kind of ["start", "end"] as const) {
+    const btn = document.createElement("button");
+    btn.textContent = kind;
+    btn.addEventListener("click", () => {
+      setPoint(kind, [place.lon, place.lat]);
+      map.flyTo({ center: [place.lon, place.lat], zoom: 15 });
+    });
+    row.appendChild(btn);
+  }
+  const rm = document.createElement("button");
+  rm.textContent = "✕";
+  rm.title = "delete place";
+  rm.addEventListener("click", () => {
+    deletePlace(place.name);
+    renderPlacesAndRecent();
+  });
+  row.appendChild(rm);
+  return row;
+}
+
+function recentRow(route: RecentRoute): HTMLDivElement {
+  const row = document.createElement("div");
+  row.className = "search-row";
+  const label = document.createElement("span");
+  label.textContent = `🕘 ${route.label} · ${route.km} km`;
+  label.title = "plan this route again";
+  label.style.cursor = "pointer";
+  label.addEventListener("click", () => {
+    planBetween(route.s, route.e);
+  });
+  row.appendChild(label);
+  const swapBtn = document.createElement("button");
+  swapBtn.textContent = "⇄";
+  swapBtn.title = "plan the reverse direction";
+  swapBtn.addEventListener("click", () => {
+    planBetween(route.e, route.s);
+  });
+  row.appendChild(swapBtn);
+  return row;
+}
+
+function renderPlacesAndRecent(): void {
+  const placesBox = el<HTMLDivElement>("places-list");
+  placesBox.innerHTML = "";
+  const places = listPlaces();
+  for (const place of places) placesBox.appendChild(placeRow(place));
+  const recentBox = el<HTMLDivElement>("recent-list");
+  recentBox.innerHTML = "";
+  const recent = listRecent();
+  if (recent.length > 0) {
+    const head = document.createElement("div");
+    head.className = "options-head";
+    head.textContent = "recent routes";
+    const clear = document.createElement("button");
+    clear.textContent = "✕";
+    clear.title = "clear recent routes";
+    clear.style.cssText = "margin:0 0 0 6px;padding:0 6px;font-size:11px";
+    clear.addEventListener("click", () => {
+      clearRecent();
+      renderPlacesAndRecent();
+    });
+    head.appendChild(clear);
+    recentBox.appendChild(head);
+    for (const route of recent.slice(0, 5)) recentBox.appendChild(recentRow(route));
+  }
+}
+
+// ---------------------------------------------------------------------------
 // address search (Nominatim, bounded to our area)
 // ---------------------------------------------------------------------------
 
@@ -700,6 +823,14 @@ function renderSearchResults(results: NominatimResult[]): void {
       });
       row.appendChild(btn);
     }
+    const star = document.createElement("button");
+    star.textContent = "☆";
+    star.title = "save as a place (Home, Work, …)";
+    star.addEventListener("click", () => {
+      promptSavePlace(lngLat[0], lngLat[1]);
+      box.innerHTML = "";
+    });
+    row.appendChild(star);
     box.appendChild(row);
   }
 }
@@ -1128,6 +1259,9 @@ function openSketchyPopup(lngLat: [number, number]): void {
   const report = document.createElement("button");
   report.textContent = "📷 report hazard…";
   box.appendChild(report);
+  const star = document.createElement("button");
+  star.textContent = "☆ save place…";
+  box.appendChild(star);
   const popup = new maplibregl.Popup().setLngLat(lngLat).setDOMContent(box).addTo(map);
   btn.addEventListener("click", () => {
     sketchyMarks.push(lngLat);
@@ -1140,6 +1274,10 @@ function openSketchyPopup(lngLat: [number, number]): void {
   report.addEventListener("click", () => {
     popup.remove();
     openHazardDialog(lngLat[0], lngLat[1]);
+  });
+  star.addEventListener("click", () => {
+    popup.remove();
+    promptSavePlace(lngLat[0], lngLat[1]);
   });
 }
 
@@ -2215,6 +2353,8 @@ el<HTMLInputElement>("dark-mode").addEventListener("change", (e: Event) => {
   localStorage.setItem(DARK_KEY, dark ? "1" : "0");
   applyDark(dark);
 });
+
+renderPlacesAndRecent();
 
 // offline support (PWA)
 if ("serviceWorker" in navigator) {
