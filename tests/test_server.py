@@ -16,9 +16,8 @@ HARVARD = "-71.118848,42.373576"
 
 @pytest.fixture(scope="module")
 def client() -> Any:
-    from fastapi.testclient import TestClient
-
     import app as server_app
+    from fastapi.testclient import TestClient
 
     return TestClient(server_app.app)
 

@@ -5,6 +5,9 @@ with kids: the router strongly prefers off-street paths, physically separated
 bike lanes, and quiet residential streets, and will happily take a much longer
 route to avoid busy streets without protection.
 
+**Live app: https://pelednoam.github.io/safe-bikes-lanes/** — fully static,
+routing runs in your browser (GitHub Pages, deployed by CI on every push).
+
 ## How it works
 
 1. **Data pipeline** (`pipeline/`) fuses, onto an OpenStreetMap bike network:
@@ -18,11 +21,15 @@ route to avoid busy streets without protection.
    quiet street, busy street, …) and a cost multiplier — e.g. an unprotected
    busy street costs 25× its length in "kids" mode. Unsignalized crossings of
    busy streets cost extra.
-3. A **FastAPI** server (`server/`) runs Dijkstra over the weighted graph and
-   returns the safest route + a stress breakdown vs. the shortest route.
-4. A **TypeScript + MapLibre** frontend (`web/`) shows the network colored by
-   safety class; click or search to set start/end, drag markers to explore,
-   toggle "with kids" vs "solo" weighting.
+3. The graph is exported to a compact `web/data/graph.json`
+   (`pipeline/export_web.py`); a **TypeScript Dijkstra router** (`web/src/router.ts`)
+   computes safest + shortest routes entirely in the browser (~40 ms), so the
+   whole app hosts as a static site.
+4. The **MapLibre** frontend (`web/`) shows the network colored by safety
+   class; click or search to set start/end, drag markers to explore, toggle
+   "with kids" vs "solo" weighting. Hover any street to inspect it.
+5. A **FastAPI** server (`server/`) offers the same routing as an HTTP API for
+   local development and the Python end-to-end tests.
 
 ## Setup
 
@@ -36,15 +43,22 @@ cd pipeline && ../.venv/bin/python fetch.py
 # 2. build the routing graph (downloads OSM via Overpass on first run)
 ../.venv/bin/python build_graph.py && cd ..
 
-# 3. run the server
+# 3. export the browser routing graph
+cd pipeline && ../.venv/bin/python export_web.py && cd ..
+
+# 4a. serve the static app locally
+python3 -m http.server -d web 8000     # or just push — CI deploys to Pages
+
+# 4b. (optional) run the FastAPI dev server instead
 .venv/bin/uvicorn app:app --app-dir server --port 8000
-# open http://localhost:8000
 ```
 
-Frontend development (compiled `web/app.js` is committed):
+Frontend development (compiled JS is committed):
 
 ```bash
-cd web && npm install && npm run build   # or: npm run check
+cd web && npm install && npm run build   # tsc
+npm run check                            # strict type-check incl. tests
+npm test                                 # vitest router tests
 ```
 
 ## Tuning
