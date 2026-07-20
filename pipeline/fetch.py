@@ -81,6 +81,56 @@ def arcgis_query(layer_url: str, where: str = "1=1", bbox: bool = True) -> GeoJS
     return {"type": "FeatureCollection", "features": features}
 
 
+def fetch_pois() -> GeoJSON:
+    """Kid-friendly POIs (playgrounds, ice cream, libraries, water, restrooms)
+    via Overpass."""
+    bbox = f"{config.BBOX_SOUTH},{config.BBOX_WEST},{config.BBOX_NORTH},{config.BBOX_EAST}"
+    query = f"""[out:json][timeout:90];
+(
+  nwr["leisure"="playground"]({bbox});
+  nwr["amenity"="ice_cream"]({bbox});
+  node["cuisine"="ice_cream"]({bbox});
+  nwr["amenity"="library"]({bbox});
+  node["amenity"="drinking_water"]({bbox});
+  nwr["amenity"="toilets"]({bbox});
+);
+out center tags;"""
+    req = urllib.request.Request(
+        "https://overpass-api.de/api/interpreter",
+        data=urllib.parse.urlencode({"data": query}).encode(),
+        headers=UA,
+    )
+    with urllib.request.urlopen(req, timeout=180) as r:
+        raw = json.load(r)
+    features: list[dict[str, Any]] = []
+    for el in raw.get("elements", []):
+        tags: dict[str, str] = el.get("tags", {})
+        lon = el.get("lon") or el.get("center", {}).get("lon")
+        lat = el.get("lat") or el.get("center", {}).get("lat")
+        if lon is None or lat is None:
+            continue
+        if tags.get("leisure") == "playground":
+            kind = "playground"
+        elif tags.get("amenity") == "ice_cream" or tags.get("cuisine") == "ice_cream":
+            kind = "ice_cream"
+        elif tags.get("amenity") == "library":
+            kind = "library"
+        elif tags.get("amenity") == "drinking_water":
+            kind = "water"
+        elif tags.get("amenity") == "toilets":
+            kind = "restroom"
+        else:
+            continue
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [round(lon, 6), round(lat, 6)]},
+                "properties": {"kind": kind, "name": tags.get("name", "")},
+            }
+        )
+    return {"type": "FeatureCollection", "features": features}
+
+
 def fetch_all(refresh: bool = False) -> None:
     jobs: dict[str, Callable[[], GeoJSON]] = {
         "cambridge_bike_facilities.geojson": lambda: json.loads(
@@ -95,6 +145,7 @@ def fetch_all(refresh: bool = False) -> None:
             f"{config.SOMERVILLE_MOBILITY3}/{config.SOMERVILLE_HIGH_CRASH_LAYERS['corridors']}"
         ),
     }
+    jobs["pois.geojson"] = fetch_pois
     for year in config.IMPACT_CRASH_YEARS:
         service_year = config.IMPACT_CRASH_SERVICE_YEAR.get(year, str(year))
         jobs[f"crashes_{year}.geojson"] = (

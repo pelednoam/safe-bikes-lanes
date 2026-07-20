@@ -1,4 +1,4 @@
-import { Router } from "./router.js";
+import { buildCues, Router, toGPX } from "./router.js";
 // ---------------------------------------------------------------------------
 // constants
 // ---------------------------------------------------------------------------
@@ -24,7 +24,6 @@ const CLASS_COLORS = {
     moderate_street: "#f46d43",
     busy_street: "#d73027",
 };
-const BBOX = { west: -71.18, south: 42.34, east: -71.05, north: 42.43 };
 const GRADE_COLORS = {
     A: "#1a9850",
     B: "#66bd63",
@@ -32,8 +31,17 @@ const GRADE_COLORS = {
     D: "#f46d43",
     F: "#d73027",
 };
+const POI_META = {
+    playground: { emoji: "🛝", label: "playground", color: "#e67e22" },
+    ice_cream: { emoji: "🍦", label: "ice cream", color: "#e84393" },
+    library: { emoji: "📚", label: "library", color: "#8e44ad" },
+    water: { emoji: "🚰", label: "water fountain", color: "#2980b9" },
+    restroom: { emoji: "🚻", label: "restroom", color: "#7f8c8d" },
+};
+const BBOX = { west: -71.18, south: 42.34, east: -71.05, north: 42.43 };
+const SKETCHY_KEY = "sketchyMarks";
 // ---------------------------------------------------------------------------
-// DOM helpers
+// helpers
 // ---------------------------------------------------------------------------
 function el(id) {
     const node = document.getElementById(id);
@@ -46,6 +54,20 @@ function fmtDist(m) {
 }
 function emptyFC() {
     return { type: "FeatureCollection", features: [] };
+}
+function loadSketchy() {
+    try {
+        const raw = localStorage.getItem(SKETCHY_KEY);
+        if (raw === null)
+            return [];
+        return JSON.parse(raw);
+    }
+    catch {
+        return [];
+    }
+}
+function saveSketchy(marks) {
+    localStorage.setItem(SKETCHY_KEY, JSON.stringify(marks));
 }
 // ---------------------------------------------------------------------------
 // map setup
@@ -76,14 +98,22 @@ map.addControl(new maplibregl.ScaleControl({}), "bottom-left");
 let router = null;
 let start = null;
 let end = null;
-let mode = "kids";
+let poiMarker = null;
+let shedMarker = null;
+let profileId = "young_kids";
+let preferFlat = false;
 let hoverPopup = null;
 let options = [];
 let selectedId = null;
-let preferFlat = false;
+let shedMode = false;
+let shedCenter = null;
+let sketchyMarks = loadSketchy();
+let pois = [];
 const routerReady = Router.load("data/graph.json")
     .then((r) => {
     router = r;
+    router.setSketchyMarks(sketchyMarks);
+    renderSketchy();
     el("loading").style.display = "none";
 })
     .catch((err) => {
@@ -93,6 +123,12 @@ const routerReady = Router.load("data/graph.json")
 });
 el("loading").textContent = "loading routing graph…";
 el("loading").style.display = "block";
+void fetch("data/pois.geojson")
+    .then((r) => (r.ok ? r.json() : { features: [] }))
+    .then((fc) => {
+    pois = fc.features;
+})
+    .catch(() => undefined);
 function getSource(id) {
     const src = map.getSource(id);
     if (src === undefined)
@@ -124,7 +160,7 @@ function setPoint(kind, lngLat) {
     void requestRoute();
 }
 // ---------------------------------------------------------------------------
-// routing (in-browser)
+// routing
 // ---------------------------------------------------------------------------
 async function requestRoute() {
     if (!start || !end)
@@ -137,23 +173,63 @@ async function requestRoute() {
     const loading = el("loading");
     loading.textContent = "routing…";
     loading.style.display = "block";
-    // let the loading indicator paint before the (brief) synchronous search
     await new Promise((resolve) => setTimeout(resolve, 0));
     try {
         const s = start.getLngLat();
         const d = end.getLngLat();
-        options = router.routeOptions([s.lng, s.lat], [d.lng, d.lat], preferFlat);
-        const preferred = mode === "kids" ? "safest" : "balanced";
+        poiMarker?.remove();
+        poiMarker = null;
+        options = router.routeOptions([s.lng, s.lat], [d.lng, d.lat], profileId, preferFlat);
         const fallback = options[0];
         if (!fallback)
             throw new Error("no route found");
-        selectOption(options.some((o) => o.id === preferred) ? preferred : fallback.id);
+        selectOption(fallback.id);
         updateHash();
     }
     catch (err) {
         options = [];
         selectedId = null;
         renderOptions();
+        errBox.textContent = err instanceof Error ? err.message : String(err);
+        errBox.style.display = "block";
+    }
+    finally {
+        loading.style.display = "none";
+    }
+}
+async function requestLoop() {
+    await routerReady;
+    if (!router)
+        return;
+    const errBox = el("error");
+    errBox.style.display = "none";
+    if (!start) {
+        errBox.textContent = "click the map to set a start point first";
+        errBox.style.display = "block";
+        return;
+    }
+    const km = Number(el("loop-dist").value);
+    const kind = el("loop-stop").value;
+    const candidates = kind === "any" ? pois : pois.filter((p) => p.properties.kind === kind);
+    const loading = el("loading");
+    loading.textContent = "planning loop…";
+    loading.style.display = "block";
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    try {
+        const s = start.getLngLat();
+        const { option, poi } = router.loopRoute([s.lng, s.lat], km * 1000, candidates, profileId, preferFlat);
+        end?.remove();
+        end = null;
+        options = [option];
+        selectOption("loop");
+        poiMarker?.remove();
+        poiMarker = new maplibregl.Marker({ color: "#e67e22" })
+            .setLngLat(poi.geometry.coordinates)
+            .addTo(map);
+        const meta = POI_META[poi.properties.kind];
+        poiMarker.getElement().title = `${meta?.emoji ?? ""} ${poi.properties.name || meta?.label || "stop"}`;
+    }
+    catch (err) {
         errBox.textContent = err instanceof Error ? err.message : String(err);
         errBox.style.display = "block";
     }
@@ -175,7 +251,7 @@ function selectOption(id) {
         features: altFeatures,
     });
     renderOptions();
-    showSummary(chosen.payload.summary);
+    showSummary(chosen);
 }
 function renderOptions() {
     const box = el("options");
@@ -209,19 +285,73 @@ function renderOptions() {
         card.addEventListener("click", () => {
             selectOption(o.id);
         });
+        // hovering a card previews that route on the map
+        card.addEventListener("mouseenter", () => {
+            getSource("route").setData(o.payload.geojson);
+        });
+        card.addEventListener("mouseleave", () => {
+            const sel = options.find((x) => x.id === selectedId);
+            if (sel)
+                getSource("route").setData(sel.payload.geojson);
+        });
         box.appendChild(card);
     }
 }
-function showSummary(s) {
+// ---------------------------------------------------------------------------
+// summary + ribbon + cautions
+// ---------------------------------------------------------------------------
+function renderRibbon(option) {
+    const holder = el("ribbon");
+    const ribbon = option.payload.ribbon ?? [];
+    if (ribbon.length === 0) {
+        holder.innerHTML = "";
+        return;
+    }
+    const W = 280;
+    const total = ribbon.reduce((a, r) => a + r.m, 0);
+    if (total <= 0) {
+        holder.innerHTML = "";
+        return;
+    }
+    const elevs = ribbon.flatMap((r) => [r.e0, r.e1]);
+    const eMin = Math.min(...elevs);
+    const eMax = Math.max(...elevs, eMin + 5);
+    const ey = (v) => 62 - ((v - eMin) / (eMax - eMin)) * 24;
+    let x = 0;
+    const rects = [];
+    const crossings = [];
+    const linePts = [];
+    for (const seg of ribbon) {
+        const wpx = (seg.m / total) * W;
+        rects.push(`<rect x="${x.toFixed(2)}" y="0" width="${Math.max(wpx, 0.4).toFixed(2)}" height="12"` +
+            ` fill="${CLASS_COLORS[seg.cls]}"><title>${CLASS_LABELS[seg.cls]}: ${fmtDist(seg.m)}</title></rect>`);
+        if (seg.crossing) {
+            crossings.push(`<text x="${x.toFixed(2)}" y="22" font-size="9" fill="#a33">▲<title>busy crossing</title></text>`);
+        }
+        linePts.push(`${x.toFixed(2)},${ey(seg.e0).toFixed(1)}`);
+        x += wpx;
+        linePts.push(`${x.toFixed(2)},${ey(seg.e1).toFixed(1)}`);
+    }
+    holder.innerHTML =
+        `<svg width="${W}" height="70" xmlns="http://www.w3.org/2000/svg">` +
+            rects.join("") +
+            crossings.join("") +
+            `<polyline points="${linePts.join(" ")}" fill="none" stroke="#666" stroke-width="1.4"/>` +
+            `<text x="0" y="40" font-size="8" fill="#999">${Math.round(eMax)} m</text>` +
+            `<text x="0" y="68" font-size="8" fill="#999">${Math.round(eMin)} m</text>` +
+            `</svg>`;
+}
+function showSummary(option) {
+    const s = option.payload.summary;
     el("summary").style.display = "block";
     el("s-dist").textContent = fmtDist(s.meters);
     el("s-time").textContent = `~${s.minutes} min`;
     el("s-prot").textContent = `${s.pct_protected}%`;
     el("s-quiet").textContent = `${s.pct_quiet}%`;
     el("s-detour").textContent =
-        (s.detour_pct ?? 0) <= 0
+        s.shortest_meters === undefined || (s.detour_pct ?? 0) <= 0
             ? "same"
-            : `+${s.detour_pct}% (${fmtDist(s.shortest_meters ?? 0)})`;
+            : `+${s.detour_pct}% (${fmtDist(s.shortest_meters)})`;
     const bar = el("classbar");
     bar.innerHTML = "";
     for (const [cls, m] of Object.entries(s.by_class_m)) {
@@ -230,6 +360,7 @@ function showSummary(s) {
         seg.title = `${CLASS_LABELS[cls] ?? cls}: ${fmtDist(m)}`;
         bar.appendChild(seg);
     }
+    renderRibbon(option);
     const cautions = el("cautions");
     cautions.innerHTML = "";
     if (s.cautions.length === 0) {
@@ -241,7 +372,15 @@ function showSummary(s) {
     for (const c of s.cautions) {
         const div = document.createElement("div");
         div.className = "caution";
-        div.textContent = `⚠ ${c.name}: ${fmtDist(c.meters)} of ${CLASS_LABELS[c.cls] ?? c.cls}`;
+        div.textContent = `⚠ ${c.name}: ${fmtDist(c.meters)} of ${CLASS_LABELS[c.cls] ?? c.cls} `;
+        if (c.lon !== undefined && c.lat !== undefined) {
+            const a = document.createElement("a");
+            a.href = `https://maps.google.com/maps?q=&layer=c&cbll=${c.lat},${c.lon}`;
+            a.target = "_blank";
+            a.rel = "noopener";
+            a.textContent = "street view";
+            div.appendChild(a);
+        }
         cautions.appendChild(div);
     }
     const why = el("why");
@@ -256,7 +395,50 @@ function showSummary(s) {
     }
 }
 // ---------------------------------------------------------------------------
-// URL hash permalinks: #s=lon,lat&e=lon,lat&m=kids
+// GPX + cue sheet
+// ---------------------------------------------------------------------------
+el("gpx").addEventListener("click", () => {
+    const sel = options.find((o) => o.id === selectedId);
+    if (!sel)
+        return;
+    const gpx = toGPX(sel.payload, `Family bike route (${sel.label})`);
+    const blob = new Blob([gpx], { type: "application/gpx+xml" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "family-bike-route.gpx";
+    a.click();
+    URL.revokeObjectURL(a.href);
+});
+el("print-cues").addEventListener("click", () => {
+    const sel = options.find((o) => o.id === selectedId);
+    if (!sel)
+        return;
+    const cues = buildCues(sel.payload);
+    const s = sel.payload.summary;
+    const rows = cues
+        .map((c) => `<tr><td>${c.km.toFixed(1)} km</td><td>${c.text}</td></tr>`)
+        .join("");
+    const cautionRows = s.cautions
+        .map((c) => `<li>⚠ ${c.name}: ${fmtDist(c.meters)} of ${CLASS_LABELS[c.cls] ?? c.cls}</li>`)
+        .join("");
+    const win = window.open("", "_blank");
+    if (!win)
+        return;
+    win.document.write(`<html><head><title>Cue sheet</title><style>
+      body{font-family:sans-serif;font-size:13px;max-width:520px;margin:20px auto}
+      table{border-collapse:collapse;width:100%}td{border-bottom:1px solid #ddd;padding:3px 6px}
+      td:first-child{white-space:nowrap;font-variant-numeric:tabular-nums}
+    </style></head><body>
+    <h2>Family bike route — ${sel.label}</h2>
+    <p>${fmtDist(s.meters)} · ~${s.minutes} min · ${s.pct_protected}% protected · climb ${s.climb_m ?? 0} m</p>
+    ${cautionRows ? `<ul>${cautionRows}</ul>` : ""}
+    <table>${rows}</table>
+    </body></html>`);
+    win.document.close();
+    win.print();
+});
+// ---------------------------------------------------------------------------
+// URL hash permalinks: #s=lon,lat&e=lon,lat&m=profile&f=1
 // ---------------------------------------------------------------------------
 function updateHash() {
     if (!start || !end)
@@ -264,7 +446,7 @@ function updateHash() {
     const s = start.getLngLat();
     const d = end.getLngLat();
     const h = `s=${s.lng.toFixed(6)},${s.lat.toFixed(6)}` +
-        `&e=${d.lng.toFixed(6)},${d.lat.toFixed(6)}&m=${mode}` +
+        `&e=${d.lng.toFixed(6)},${d.lat.toFixed(6)}&m=${profileId}` +
         (preferFlat ? "&f=1" : "");
     history.replaceState(null, "", `#${h}`);
 }
@@ -282,9 +464,11 @@ function parseHash() {
         return [lng, lat];
     };
     const m = params.get("m");
-    if (m === "kids" || m === "solo") {
-        mode = m;
-        const radio = document.querySelector(`input[name=mode][value=${m}]`);
+    const legacy = { kids: "young_kids", solo: "solo" };
+    const mapped = m !== null ? (legacy[m] ?? m) : null;
+    if (mapped === "young_kids" || mapped === "older_kids" || mapped === "solo") {
+        profileId = mapped;
+        const radio = document.querySelector(`input[name=profile][value=${mapped}]`);
         if (radio)
             radio.checked = true;
     }
@@ -340,8 +524,89 @@ function renderSearchResults(results) {
     }
 }
 // ---------------------------------------------------------------------------
+// safe-shed (reachability)
+// ---------------------------------------------------------------------------
+async function computeShed() {
+    if (!shedCenter)
+        return;
+    await routerReady;
+    if (!router)
+        return;
+    const budgetKm = Number(el("shed-budget").value);
+    el("shed-budget-label").textContent = `${budgetKm} km`;
+    const res = router.safeShed(shedCenter, budgetKm * 1000, profileId, preferFlat);
+    getSource("shed").setData(res.geojson);
+    el("shed-info").textContent =
+        `${res.reachableKm} km of streets reachable (${res.pctReachable}% of the network) ` +
+            `within a perceived ${budgetKm} km`;
+    if (shedMarker)
+        shedMarker.setLngLat(shedCenter);
+    else {
+        shedMarker = new maplibregl.Marker({ color: "#7c3aed" }).setLngLat(shedCenter).addTo(map);
+        shedMarker.getElement().title = "reachability center";
+    }
+}
+function exitShedMode() {
+    shedMode = false;
+    shedCenter = null;
+    shedMarker?.remove();
+    shedMarker = null;
+    getSource("shed").setData(emptyFC());
+    el("shed-panel").style.display = "none";
+    el("shed-btn").textContent = "🗺 Reach map";
+    el("shed-info").textContent = "";
+}
+el("shed-btn").addEventListener("click", () => {
+    if (shedMode) {
+        exitShedMode();
+        return;
+    }
+    shedMode = true;
+    el("shed-btn").textContent = "✕ Exit reach map";
+    el("shed-panel").style.display = "block";
+    el("shed-info").textContent =
+        "click the map (e.g. home) to see everything reachable at your comfort level";
+});
+el("shed-budget").addEventListener("input", () => {
+    void computeShed();
+});
+// ---------------------------------------------------------------------------
+// sketchy marks (personal feedback)
+// ---------------------------------------------------------------------------
+function renderSketchy() {
+    const box = el("sketchy-section");
+    const list = el("sketchy-list");
+    list.innerHTML = "";
+    box.style.display = sketchyMarks.length > 0 ? "block" : "none";
+    sketchyMarks.forEach((mark, i) => {
+        const row = document.createElement("div");
+        row.className = "sketchy-row";
+        const span = document.createElement("span");
+        span.textContent = `⚠ marked spot ${i + 1}`;
+        span.style.cursor = "pointer";
+        span.title = "fly to";
+        span.addEventListener("click", () => {
+            map.flyTo({ center: mark, zoom: 16 });
+        });
+        row.appendChild(span);
+        const rm = document.createElement("button");
+        rm.textContent = "✕";
+        rm.title = "remove";
+        rm.addEventListener("click", () => {
+            sketchyMarks = sketchyMarks.filter((_, j) => j !== i);
+            saveSketchy(sketchyMarks);
+            router?.setSketchyMarks(sketchyMarks);
+            renderSketchy();
+            void requestRoute();
+        });
+        row.appendChild(rm);
+        list.appendChild(row);
+    });
+}
+// ---------------------------------------------------------------------------
 // layers + interaction wiring
 // ---------------------------------------------------------------------------
+const FACILITY_CLASSES = ["path", "separated", "buffered", "lane"];
 map.on("load", () => {
     // area overlays (hidden until toggled) sit under the street/route lines
     map.addSource("heatmap", { type: "geojson", data: "data/heatmap.geojson" });
@@ -350,7 +615,11 @@ map.on("load", () => {
         type: "fill",
         source: "heatmap",
         layout: { visibility: "none" },
-        paint: { "fill-color": ["get", "color"], "fill-opacity": 0.35, "fill-outline-color": "rgba(0,0,0,0)" },
+        paint: {
+            "fill-color": ["get", "color"],
+            "fill-opacity": 0.35,
+            "fill-outline-color": "rgba(0,0,0,0)",
+        },
     });
     map.addSource("elevmap", { type: "geojson", data: "data/elevation.geojson" });
     map.addLayer({
@@ -358,18 +627,52 @@ map.on("load", () => {
         type: "fill",
         source: "elevmap",
         layout: { visibility: "none" },
-        paint: { "fill-color": ["get", "color"], "fill-opacity": 0.45, "fill-outline-color": "rgba(0,0,0,0)" },
+        paint: {
+            "fill-color": ["get", "color"],
+            "fill-opacity": 0.45,
+            "fill-outline-color": "rgba(0,0,0,0)",
+        },
     });
     map.addSource("network", { type: "geojson", data: "data/network.geojson" });
+    // facilities confirmed by an official source (or non-facility classes): solid
     map.addLayer({
         id: "network",
         type: "line",
         source: "network",
+        filter: [
+            "any",
+            ["!", ["in", ["get", "cls"], ["literal", FACILITY_CLASSES]]],
+            ["!=", ["get", "source"], "osm"],
+        ],
         paint: {
             "line-color": ["get", "color"],
             "line-width": ["interpolate", ["linear"], ["zoom"], 12, 1.2, 16, 3.5],
             "line-opacity": 0.75,
         },
+    });
+    // facilities known only from OSM (not yet in official layers): dashed
+    map.addLayer({
+        id: "network-unconfirmed",
+        type: "line",
+        source: "network",
+        filter: [
+            "all",
+            ["in", ["get", "cls"], ["literal", FACILITY_CLASSES]],
+            ["==", ["get", "source"], "osm"],
+        ],
+        paint: {
+            "line-color": ["get", "color"],
+            "line-width": ["interpolate", ["linear"], ["zoom"], 12, 1.2, 16, 3.5],
+            "line-opacity": 0.75,
+            "line-dasharray": [2, 1.4],
+        },
+    });
+    map.addSource("shed", { type: "geojson", data: emptyFC() });
+    map.addLayer({
+        id: "shed",
+        type: "line",
+        source: "shed",
+        paint: { "line-color": "#2563eb", "line-width": 2.5, "line-opacity": 0.8 },
     });
     map.addSource("alts", { type: "geojson", data: emptyFC() });
     map.addLayer({
@@ -398,8 +701,43 @@ map.on("load", () => {
         layout: { "line-cap": "round", "line-join": "round" },
         paint: { "line-color": ["get", "color"], "line-width": 5 },
     });
+    map.addSource("gateways", { type: "geojson", data: "data/gateways.geojson" });
+    map.addLayer({
+        id: "gateways",
+        type: "circle",
+        source: "gateways",
+        layout: { visibility: "none" },
+        paint: {
+            "circle-radius": 5,
+            "circle-color": "#ffffff",
+            "circle-stroke-color": "#1a9850",
+            "circle-stroke-width": 2.5,
+        },
+    });
+    map.addSource("pois", { type: "geojson", data: "data/pois.geojson" });
+    map.addLayer({
+        id: "pois",
+        type: "circle",
+        source: "pois",
+        layout: { visibility: "none" },
+        paint: {
+            "circle-radius": 5,
+            "circle-color": [
+                "match",
+                ["get", "kind"],
+                "playground", POI_META["playground"]?.color ?? "#e67e22",
+                "ice_cream", POI_META["ice_cream"]?.color ?? "#e84393",
+                "library", POI_META["library"]?.color ?? "#8e44ad",
+                "water", POI_META["water"]?.color ?? "#2980b9",
+                "restroom", POI_META["restroom"]?.color ?? "#7f8c8d",
+                "#666",
+            ],
+            "circle-stroke-color": "#fff",
+            "circle-stroke-width": 1.5,
+        },
+    });
     // hover inspection on the network and the planned route
-    for (const layer of ["network", "route"]) {
+    for (const layer of ["network", "network-unconfirmed", "route"]) {
         map.on("mousemove", layer, (e) => {
             map.getCanvas().style.cursor = "crosshair";
             const f = e.features?.[0];
@@ -411,10 +749,14 @@ map.on("load", () => {
             const crashes = props.crashes !== undefined && props.crashes > 0
                 ? `<br>bike crashes nearby (2021-26): ${props.crashes}`
                 : "";
+            const unconfirmed = props.source === "osm" && cls !== undefined && FACILITY_CLASSES.includes(cls)
+                ? "<br><i>facility per OSM only (not in official layers yet)</i>"
+                : "";
             hoverPopup?.remove();
             hoverPopup = new maplibregl.Popup({ closeButton: false, closeOnClick: false })
                 .setLngLat(e.lngLat)
-                .setHTML(`<b>${props.name ?? "unnamed"}</b><br>${label}${crashes}`)
+                .setHTML(`<b>${props.name ?? "unnamed"}</b><br>${label}${crashes}${unconfirmed}` +
+                `<br><small>right-click to mark as sketchy</small>`)
                 .addTo(map);
         });
         map.on("mouseleave", layer, () => {
@@ -422,8 +764,33 @@ map.on("load", () => {
             hoverPopup?.remove();
             hoverPopup = null;
         });
+        // right-click: mark segment as personally sketchy
+        map.on("contextmenu", layer, (e) => {
+            e.preventDefault();
+            const btn = document.createElement("button");
+            btn.textContent = "⚠ mark this spot as sketchy";
+            const popup = new maplibregl.Popup().setLngLat(e.lngLat).setDOMContent(btn).addTo(map);
+            btn.addEventListener("click", () => {
+                sketchyMarks.push([e.lngLat.lng, e.lngLat.lat]);
+                saveSketchy(sketchyMarks);
+                router?.setSketchyMarks(sketchyMarks);
+                renderSketchy();
+                popup.remove();
+                void requestRoute();
+            });
+        });
     }
-    // hover readouts for the area overlays (only while visible)
+    map.on("click", "pois", (e) => {
+        const f = e.features?.[0];
+        if (!f)
+            return;
+        const props = f.properties;
+        const meta = props.kind !== undefined ? POI_META[props.kind] : undefined;
+        new maplibregl.Popup()
+            .setLngLat(e.lngLat)
+            .setHTML(`${meta?.emoji ?? ""} <b>${props.name || meta?.label || "?"}</b>`)
+            .addTo(map);
+    });
     map.on("mousemove", "elevmap", (e) => {
         const f = e.features?.[0];
         if (!f)
@@ -444,6 +811,11 @@ map.on("load", () => {
     parseHash();
 });
 map.on("click", (e) => {
+    if (shedMode) {
+        shedCenter = [e.lngLat.lng, e.lngLat.lat];
+        void computeShed();
+        return;
+    }
     if (!start)
         setPoint("start", e.lngLat);
     else if (!end)
@@ -452,7 +824,8 @@ map.on("click", (e) => {
 el("reset").addEventListener("click", () => {
     start?.remove();
     end?.remove();
-    start = end = null;
+    poiMarker?.remove();
+    start = end = poiMarker = null;
     options = [];
     selectedId = null;
     renderOptions();
@@ -470,13 +843,25 @@ el("swap").addEventListener("click", () => {
     end.setLngLat(s);
     void requestRoute();
 });
-el("show-net").addEventListener("change", (e) => {
-    const checked = e.target.checked;
-    map.setLayoutProperty("network", "visibility", checked ? "visible" : "none");
+el("loop-btn").addEventListener("click", () => {
+    void requestLoop();
 });
+for (const [checkboxId, layers] of [
+    ["show-net", ["network", "network-unconfirmed"]],
+    ["show-pois", ["pois"]],
+    ["show-gates", ["gateways"]],
+]) {
+    el(checkboxId).addEventListener("change", (e) => {
+        const checked = e.target.checked;
+        for (const layer of layers) {
+            map.setLayoutProperty(layer, "visibility", checked ? "visible" : "none");
+        }
+    });
+}
 el("prefer-flat").addEventListener("change", (e) => {
     preferFlat = e.target.checked;
     void requestRoute();
+    void computeShed();
 });
 // the two area overlays are mutually exclusive to stay readable
 el("show-heat").addEventListener("change", (e) => {
@@ -495,11 +880,13 @@ el("show-elev").addEventListener("change", (e) => {
     }
     map.setLayoutProperty("elevmap", "visibility", checked ? "visible" : "none");
 });
-for (const radio of document.querySelectorAll("input[name=mode]")) {
+for (const radio of document.querySelectorAll("input[name=profile]")) {
     radio.addEventListener("change", () => {
-        if (radio.checked && (radio.value === "kids" || radio.value === "solo")) {
-            mode = radio.value;
+        const v = radio.value;
+        if (radio.checked && (v === "young_kids" || v === "older_kids" || v === "solo")) {
+            profileId = v;
             void requestRoute();
+            void computeShed();
         }
     });
 }
@@ -521,8 +908,12 @@ searchInput.addEventListener("input", () => {
     }, 400);
 });
 document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape")
-        el("reset").click();
+    if (e.key === "Escape") {
+        if (shedMode)
+            exitShedMode();
+        else
+            el("reset").click();
+    }
 });
 // legend
 const legend = el("legend");
@@ -535,4 +926,8 @@ for (const [cls, label] of Object.entries(CLASS_LABELS)) {
     const span = document.createElement("span");
     span.textContent = label;
     legend.appendChild(span);
+}
+// offline support (PWA)
+if ("serviceWorker" in navigator) {
+    void navigator.serviceWorker.register("sw.js");
 }

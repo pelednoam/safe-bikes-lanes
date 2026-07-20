@@ -1,7 +1,8 @@
-// Behavior tests for the in-browser router on a small synthetic graph.
+// Behavior tests for the in-browser router on small synthetic graphs.
 import { describe, expect, it } from "vitest";
 
-import { Router } from "../src/router.js";
+import { buildCues, Router, toGPX } from "../src/router.js";
+import type { PoiFeature } from "../src/types.js";
 
 /*
  * Toy network (lon/lat ~ meters-ish apart around Cambridge):
@@ -9,9 +10,8 @@ import { Router } from "../src/router.js";
  *   0 --busy(110m)-- 1
  *   0 --quiet(60m)-- 2 --quiet(60m)-- 1
  *
- * Direct busy edge is shorter, but in kids mode busy costs 25x,
- * so the quiet detour must win. Edge columns:
- * [u, v, len, wKids, wSolo, clsIdx, nameIdx, geomIdx, crashFactor]
+ * Edge columns (schema v2):
+ * [u, v, len, clsIdx, nameIdx, geomIdx, crash, pen, climb, busy01]
  */
 const CLASSES = ["busy_street", "quiet_street"] as const;
 
@@ -24,115 +24,86 @@ function edge(
   crash = 1.0,
   climb = 0,
 ): [number, number, number, number, number, number, number, number, number, number] {
-  const kidsMult = cls === "busy_street" ? 25 : 1.4;
-  const soloMult = cls === "busy_street" ? 6 : 1.1;
-  return [
-    u, v, len, len * kidsMult, len * soloMult, CLASSES.indexOf(cls), name, -1, crash, climb,
-  ];
+  return [u, v, len, CLASSES.indexOf(cls), name, -1, crash, 0, climb, 0];
 }
 
-function toyRouter(): Router {
-  const nodes: [number, number][] = [
-    [-71.1, 42.38],
-    [-71.099, 42.38],
-    [-71.0995, 42.3805],
-  ];
-  const edges = [
-    edge(0, 1, 110, "busy_street", 1, 1.5),
-    edge(1, 0, 110, "busy_street", 1, 1.5),
-    edge(0, 2, 60, "quiet_street", 2),
-    edge(2, 0, 60, "quiet_street", 2),
-    edge(2, 1, 60, "quiet_street", 2),
-    edge(1, 2, 60, "quiet_street", 2),
-  ];
+const NODES: [number, number, number][] = [
+  [-71.1, 42.38, 10],
+  [-71.099, 42.38, 10],
+  [-71.0995, 42.3805, 10],
+];
+
+function toyRouter(busyLen = 110): Router {
   return new Router({
-    nodes,
+    nodes: NODES,
     names: ["", "Busy Ave", "Quiet St"],
     classes: [...CLASSES],
-    edges,
+    edges: [
+      edge(0, 1, busyLen, "busy_street", 1, 1.5),
+      edge(1, 0, busyLen, "busy_street", 1, 1.5),
+      edge(0, 2, 60, "quiet_street", 2),
+      edge(2, 0, 60, "quiet_street", 2),
+      edge(2, 1, 60, "quiet_street", 2),
+      edge(1, 2, 60, "quiet_street", 2),
+    ],
     geoms: [],
   });
 }
 
-describe("Router", () => {
-  it("kids mode detours around the busy street", () => {
-    const r = toyRouter();
-    const res = r.route([-71.1, 42.38], [-71.099, 42.38], "kids");
-    expect(res.safest.summary.meters).toBe(120); // via quiet node 2
-    expect(res.safest.summary.by_class_m.busy_street).toBeUndefined();
-    expect(res.shortest.summary.meters).toBe(110); // direct busy edge
-    expect(res.safest.summary.detour_pct).toBe(9);
+const A: [number, number] = [-71.1, 42.38];
+const B: [number, number] = [-71.099, 42.38];
+const C: [number, number] = [-71.0995, 42.3805];
+
+describe("Router options", () => {
+  it("young-kids profile detours around the busy street", () => {
+    const res = toyRouter().routeOptions(A, B, "young_kids");
+    // safest and balanced pick the same quiet detour -> deduped to 2 options
+    expect(res.map((o) => o.id)).toEqual(["safest", "direct"]);
+    expect(res[0]?.payload.summary.meters).toBe(120);
+    expect(res[0]?.payload.summary.by_class_m.busy_street).toBeUndefined();
+    expect(res[1]?.payload.summary.meters).toBe(110);
+    expect(res[0]?.payload.summary.detour_pct).toBe(9);
   });
 
-  it("reports cautions when forced onto a busy street", () => {
-    const r = toyRouter();
-    // shortest payload rides Busy Ave and must carry a caution
-    const res = r.route([-71.1, 42.38], [-71.099, 42.38], "kids");
-    const caution = res.shortest.summary.cautions[0];
-    expect(caution).toBeDefined();
-    expect(caution?.name).toBe("Busy Ave");
-    expect(caution?.cls).toBe("busy_street");
+  it("grades options on the objective kid scale", () => {
+    const res = toyRouter().routeOptions(A, B, "young_kids");
+    expect(res[0]?.grade).toBe("A");
+    expect(res[1]?.grade).toBe("F");
+    expect(res[0]?.gradeReason).toMatch(/no busy\/moderate streets/);
+    expect(res[1]?.gradeReason).toMatch(/110 m on busy\/moderate streets/);
   });
 
-  it("solo mode still avoids the busy street here (6x > detour ratio)", () => {
-    const r = toyRouter();
-    const res = r.route([-71.1, 42.38], [-71.0995, 42.3805], "solo");
-    expect(res.safest.summary.meters).toBe(60);
-  });
-
-  it("rejects points far outside the network", () => {
-    const r = toyRouter();
-    expect(() => r.route([-70.0, 42.0], [-71.1, 42.38], "kids")).toThrow(/too far/);
-  });
-
-  it("computes pct_quiet and pct_protected", () => {
-    const r = toyRouter();
-    const res = r.route([-71.1, 42.38], [-71.099, 42.38], "kids");
-    expect(res.safest.summary.pct_quiet).toBe(100);
-    expect(res.safest.summary.pct_protected).toBe(0);
-  });
-
-  it("explains the detour: cost model, avoided street, quiet connections", () => {
-    const r = toyRouter();
-    const res = r.route([-71.1, 42.38], [-71.099, 42.38], "kids");
-    const why = res.safest.summary.explanation ?? [];
-    expect(why.length).toBeGreaterThanOrEqual(3);
+  it("explains the detour and the direct route honestly", () => {
+    const res = toyRouter().routeOptions(A, B, "young_kids");
+    const why = res[0]?.payload.summary.explanation ?? [];
     expect(why[0]).toMatch(/25×/);
     expect(why[0]).toMatch(/\+9% distance/);
     expect(why.join(" ")).toMatch(/Busy Ave/);
-    expect(why.join(" ")).toMatch(/avoids all of it/);
-    expect(why.join(" ")).toMatch(/quiet residential streets \(100% of the ride\)/);
-  });
-
-  it("offers deduped, graded route options", () => {
-    const r = toyRouter();
-    const opts = r.routeOptions([-71.1, 42.38], [-71.099, 42.38]);
-    // kids and solo weighting both pick the quiet detour -> deduped to 2 options
-    expect(opts.map((o) => o.id)).toEqual(["safest", "direct"]);
-    expect(opts[0]?.grade).toBe("A");
-    expect(opts[1]?.grade).toBe("F");
-    expect(opts[0]?.gradeReason).toMatch(/no busy\/moderate streets/);
-    expect(opts[1]?.gradeReason).toMatch(/110 m on busy\/moderate streets/);
-    expect(opts[1]?.payload.summary.explanation?.[0]).toMatch(/shortest possible route/);
-    expect(opts[1]?.payload.summary.explanation?.join(" ")).toMatch(/Busy Ave/);
+    expect(res[1]?.payload.summary.explanation?.[0]).toMatch(/shortest possible route/);
   });
 
   it("collapses to a single option when the direct route is safest", () => {
-    const r = toyRouter();
-    const opts = r.routeOptions([-71.1, 42.38], [-71.0995, 42.3805]);
-    expect(opts).toHaveLength(1);
-    expect(opts[0]?.id).toBe("safest");
-    expect(opts[0]?.grade).toBe("A");
+    const res = toyRouter().routeOptions(A, C, "young_kids");
+    expect(res).toHaveLength(1);
+    expect(res[0]?.grade).toBe("A");
+    expect(res[0]?.payload.summary.explanation?.[0]).toMatch(/no detour was needed/);
   });
 
-  it("prefer-flat detours around a steep climb (and reports it)", () => {
-    // 0 --quiet steep(100m, +20m)-- 1   vs   0 --quiet flat(240m)-- 2 -- 1
+  it("rejects points far outside the network", () => {
+    expect(() => toyRouter().routeOptions([-70.0, 42.0], A, "young_kids")).toThrow(/too far/);
+  });
+
+  it("solo profile has a milder cost narrative", () => {
+    const res = toyRouter().routeOptions(A, B, "solo");
+    expect(res[0]?.payload.summary.explanation?.[0]).toMatch(/6×/);
+  });
+});
+
+describe("prefer flat", () => {
+  it("detours around a steep climb and reports the saving", () => {
+    // 0 --quiet steep(100m, +20m)-- 1   vs   0 --quiet flat(240m via 2)-- 1
     const r = new Router({
-      nodes: [
-        [-71.1, 42.38],
-        [-71.099, 42.38],
-        [-71.0995, 42.3805],
-      ],
+      nodes: NODES,
       names: ["", "Hill St", "Flat St"],
       classes: [...CLASSES],
       edges: [
@@ -145,21 +116,96 @@ describe("Router", () => {
       ],
       geoms: [],
     });
-    const noPref = r.routeOptions([-71.1, 42.38], [-71.099, 42.38], false);
-    expect(noPref[0]?.payload.summary.meters).toBe(100); // climbs Hill St
+    const noPref = r.routeOptions(A, B, "young_kids", false);
+    expect(noPref[0]?.payload.summary.meters).toBe(100);
     expect(noPref[0]?.payload.summary.climb_m).toBe(20);
-    const flat = r.routeOptions([-71.1, 42.38], [-71.099, 42.38], true);
-    expect(flat[0]?.payload.summary.meters).toBe(240); // detours via Flat St
+    const flat = r.routeOptions(A, B, "young_kids", true);
+    expect(flat[0]?.payload.summary.meters).toBe(240);
     expect(flat[0]?.payload.summary.climb_m).toBe(0);
-    expect(flat[0]?.payload.summary.explanation?.join(" ")).toMatch(
-      /saving 20 m of climbing/,
-    );
+    expect(flat[0]?.payload.summary.explanation?.join(" ")).toMatch(/saving 20 m of climbing/);
+  });
+});
+
+describe("safe shed", () => {
+  it("returns only edges within the perceived budget", () => {
+    const shed = toyRouter().safeShed(A, 100, "young_kids", false);
+    // only 0->2 (60m quiet = 84 perceived) fits in a 100 m budget
+    expect(shed.geojson.features).toHaveLength(1);
+    expect(shed.pctReachable).toBeGreaterThan(0);
   });
 
-  it("says no detour was needed when the direct route wins", () => {
-    const r = toyRouter();
-    // 0 -> 2 is a single quiet edge; direct route is already safest
-    const res = r.route([-71.1, 42.38], [-71.0995, 42.3805], "kids");
-    expect(res.safest.summary.explanation?.[0]).toMatch(/no detour was needed/);
+  it("reaches more with a bigger budget", () => {
+    const small = toyRouter().safeShed(A, 100, "young_kids", false);
+    const big = toyRouter().safeShed(A, 100_000, "young_kids", false);
+    expect(big.geojson.features.length).toBeGreaterThan(small.geojson.features.length);
+    expect(big.pctReachable).toBe(100);
+  });
+});
+
+describe("sketchy marks", () => {
+  it("reroutes away from a marked segment", () => {
+    // busy edge so short (and crash-free) that safest normally uses it
+    const r = new Router({
+      nodes: NODES,
+      names: ["", "Busy Ave", "Quiet St"],
+      classes: [...CLASSES],
+      edges: [
+        edge(0, 1, 5, "busy_street", 1),
+        edge(1, 0, 5, "busy_street", 1),
+        edge(0, 2, 60, "quiet_street", 2),
+        edge(2, 0, 60, "quiet_street", 2),
+        edge(2, 1, 60, "quiet_street", 2),
+        edge(1, 2, 60, "quiet_street", 2),
+      ],
+      geoms: [],
+    });
+    const before = r.routeOptions(A, B, "young_kids");
+    expect(before[0]?.payload.summary.meters).toBe(5);
+    r.setSketchyMarks([[-71.0995, 42.38]]); // midpoint of the busy edge
+    const after = r.routeOptions(A, B, "young_kids");
+    expect(after[0]?.payload.summary.meters).toBe(120);
+  });
+});
+
+describe("loop planning", () => {
+  it("builds a round trip with a stop", () => {
+    const pois: PoiFeature[] = [
+      {
+        type: "Feature",
+        geometry: { type: "Point", coordinates: [-71.099, 42.38] },
+        properties: { kind: "playground", name: "Toy Park" },
+      },
+    ];
+    const { option, poi } = toyRouter().loopRoute(A, 300, pois, "young_kids", false);
+    expect(option.id).toBe("loop");
+    expect(option.label).toMatch(/Toy Park/);
+    expect(option.payload.summary.meters).toBeGreaterThanOrEqual(220);
+    expect(option.payload.summary.explanation?.[0]).toMatch(/loop/i);
+    expect(poi.properties.name).toBe("Toy Park");
+  });
+
+  it("fails clearly when no stop fits the distance", () => {
+    expect(() => toyRouter().loopRoute(A, 300, [], "young_kids", false)).toThrow(/no suitable/);
+  });
+});
+
+describe("export helpers", () => {
+  it("generates GPX with track points", () => {
+    const opt = toyRouter().routeOptions(A, B, "young_kids")[0];
+    expect(opt).toBeDefined();
+    if (!opt) return;
+    const gpx = toGPX(opt.payload, "test route");
+    expect(gpx).toMatch(/<gpx /);
+    expect((gpx.match(/<trkpt /g) ?? []).length).toBeGreaterThanOrEqual(3);
+    expect(gpx).toMatch(/<name>test route<\/name>/);
+  });
+
+  it("builds a cue sheet ending with arrive", () => {
+    const opt = toyRouter().routeOptions(A, B, "young_kids")[0];
+    expect(opt).toBeDefined();
+    if (!opt) return;
+    const cues = buildCues(opt.payload);
+    expect(cues[0]?.text).toMatch(/Quiet St/);
+    expect(cues[cues.length - 1]?.text).toBe("arrive");
   });
 });

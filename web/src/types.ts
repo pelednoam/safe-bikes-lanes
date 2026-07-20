@@ -1,5 +1,5 @@
-// Shared payload types (shape mirrors the FastAPI server in server/app.py,
-// which remains available for local development).
+// Shared payload types. The FastAPI server in server/app.py mirrors the
+// summary shape for local development.
 
 export type ProtectionClass =
   | "path"
@@ -12,12 +12,40 @@ export type ProtectionClass =
   | "moderate_street"
   | "busy_street";
 
-export type RideMode = "kids" | "solo";
+/** Rider profiles: all weighting is client-side, computed from raw edge data. */
+export type ProfileId = "young_kids" | "older_kids" | "solo";
+
+export interface RiderProfile {
+  id: ProfileId;
+  label: string;
+  /** Average riding pace used for time estimates. */
+  paceKmh: number;
+  mult: Record<ProtectionClass, number>;
+  /** Overrides when a painted/buffered lane runs on a busy road. */
+  busyLane: number;
+  busyBuffered: number;
+  /** Scale on busy-crossing penalties. */
+  penScale: number;
+}
 
 export interface Caution {
   name: string;
   cls: ProtectionClass;
   meters: number;
+  /** Location of the start of the stretch (for map/Street View preview). */
+  lon?: number;
+  lat?: number;
+}
+
+/** One segment of the linear route ribbon. */
+export interface RibbonSeg {
+  m: number;
+  cls: ProtectionClass;
+  /** Elevation at segment start/end, meters. */
+  e0: number;
+  e1: number;
+  /** True where the segment starts at a penalized busy crossing. */
+  crossing: boolean;
 }
 
 export interface RouteSummary {
@@ -55,6 +83,7 @@ export interface FeatureCollection {
 export interface RoutePayload {
   geojson: FeatureCollection;
   summary: RouteSummary;
+  ribbon?: RibbonSeg[];
 }
 
 export interface RouteResponse {
@@ -66,10 +95,29 @@ export interface RouteResponse {
 export type SafetyGrade = "A" | "B" | "C" | "D" | "F";
 
 export interface RouteOption {
-  id: "safest" | "balanced" | "direct";
+  id: "safest" | "balanced" | "direct" | "loop";
   label: string;
   grade: SafetyGrade;
   /** One-line justification of the grade. */
   gradeReason: string;
   payload: RoutePayload;
+}
+
+/** Result of a safe-shed (reachability) query. */
+export interface ShedResult {
+  geojson: FeatureCollection;
+  /** Fraction (0-100) of the network length reachable within the budget. */
+  pctReachable: number;
+  reachableKm: number;
+}
+
+export interface PoiFeature {
+  type: "Feature";
+  geometry: { type: "Point"; coordinates: [number, number] };
+  properties: { kind: string; name: string };
+}
+
+export interface CueEntry {
+  km: number;
+  text: string;
 }
