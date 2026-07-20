@@ -40,6 +40,7 @@ const POI_META = {
 };
 const BBOX = { west: -71.18, south: 42.34, east: -71.05, north: 42.43 };
 const SKETCHY_KEY = "sketchyMarks";
+const DARK_KEY = "darkMode";
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
@@ -665,6 +666,19 @@ function renderSketchy() {
 // ---------------------------------------------------------------------------
 const FACILITY_CLASSES = ["path", "separated", "buffered", "lane"];
 map.on("load", () => {
+    // dark basemap (CARTO dark matter), toggled with the UI theme
+    map.addSource("carto-dark", {
+        type: "raster",
+        tiles: ["https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"],
+        tileSize: 256,
+        attribution: "© OpenStreetMap contributors © CARTO",
+    });
+    map.addLayer({
+        id: "osm-dark",
+        type: "raster",
+        source: "carto-dark",
+        layout: { visibility: "none" },
+    });
     // terrain DEM: the same AWS terrarium tiles the pipeline samples
     map.addSource("dem", {
         type: "raster-dem",
@@ -1113,6 +1127,34 @@ el("about-close").addEventListener("click", () => {
 el("about").addEventListener("click", (e) => {
     if (e.target === el("about"))
         el("about").close();
+});
+// ---------------------------------------------------------------------------
+// dark mode (night rides): dark basemap + dark UI, persisted; defaults to the
+// system color scheme
+// ---------------------------------------------------------------------------
+function applyDark(dark) {
+    document.body.classList.toggle("dark", dark);
+    el("dark-mode").checked = dark;
+    const setVis = () => {
+        map.setLayoutProperty("osm-dark", "visibility", dark ? "visible" : "none");
+        map.setLayoutProperty("osm", "visibility", dark ? "none" : "visible");
+        map.setPaintProperty("route-casing", "line-color", dark ? "#9db8ff" : "#1440a0");
+        map.setPaintProperty("alts", "line-color", dark ? "#aaa" : "#777");
+    };
+    if (map.loaded())
+        setVis();
+    else
+        map.once("load", setVis);
+}
+const storedDark = localStorage.getItem(DARK_KEY);
+const initialDark = storedDark !== null
+    ? storedDark === "1"
+    : window.matchMedia("(prefers-color-scheme: dark)").matches;
+applyDark(initialDark);
+el("dark-mode").addEventListener("change", (e) => {
+    const dark = e.target.checked;
+    localStorage.setItem(DARK_KEY, dark ? "1" : "0");
+    applyDark(dark);
 });
 // offline support (PWA)
 if ("serviceWorker" in navigator) {
