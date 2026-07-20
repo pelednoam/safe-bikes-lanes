@@ -207,6 +207,16 @@ function showSummary(s: RouteSummary): void {
     div.textContent = `⚠ ${c.name}: ${fmtDist(c.meters)} of ${CLASS_LABELS[c.cls] ?? c.cls}`;
     cautions.appendChild(div);
   }
+  const why = el<HTMLDetailsElement>("why");
+  const whyList = el<HTMLUListElement>("why-list");
+  whyList.innerHTML = "";
+  const explanation = s.explanation ?? [];
+  why.style.display = explanation.length > 0 ? "block" : "none";
+  for (const reason of explanation) {
+    const li = document.createElement("li");
+    li.textContent = reason;
+    whyList.appendChild(li);
+  }
 }
 
 // ---------------------------------------------------------------------------

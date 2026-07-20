@@ -178,6 +178,16 @@ function showSummary(s) {
         div.textContent = `⚠ ${c.name}: ${fmtDist(c.meters)} of ${CLASS_LABELS[c.cls] ?? c.cls}`;
         cautions.appendChild(div);
     }
+    const why = el("why");
+    const whyList = el("why-list");
+    whyList.innerHTML = "";
+    const explanation = s.explanation ?? [];
+    why.style.display = explanation.length > 0 ? "block" : "none";
+    for (const reason of explanation) {
+        const li = document.createElement("li");
+        li.textContent = reason;
+        whyList.appendChild(li);
+    }
 }
 // ---------------------------------------------------------------------------
 // URL hash permalinks: #s=lon,lat&e=lon,lat&m=kids

@@ -29,6 +29,8 @@ export interface RouteSummary {
   cautions: Caution[];
   shortest_meters?: number;
   detour_pct?: number;
+  /** Human-readable reasons why this route was chosen (browser router only). */
+  explanation?: string[];
 }
 
 export interface RouteFeatureProps {
