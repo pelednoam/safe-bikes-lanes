@@ -1,0 +1,45 @@
+name: Refresh data sources
+
+# Monthly: re-pull all sources (city GIS, MassDOT, crashes, OSM, POIs,
+# terrain), rebuild the graph, re-export web data, and push if anything
+# changed — the push triggers the Pages deploy. The commit body carries the
+# diff stat so new-lane changes are visible in history.
+on:
+  schedule:
+    - cron: "0 6 2 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install osmnx geopandas networkx shapely pillow
+      - name: Refresh all sources
+        working-directory: pipeline
+        run: python fetch.py --refresh
+      - name: Rebuild graph
+        working-directory: pipeline
+        run: python build_graph.py
+      - name: Export web data
+        working-directory: pipeline
+        run: python export_web.py
+      - name: Commit if changed
+        run: |
+          git config user.name "data-refresh-bot"
+          git config user.email "noreply@github.com"
+          git add web/data
+          if git diff --cached --quiet; then
+            echo "no data changes"
+          else
+            git commit -m "Automated data refresh $(date -u +%F)" -m "$(git diff --cached --stat | tail -12)"
+            git push
+          fi

@@ -1,5 +1,51 @@
 // In-browser safest-route computation over the exported graph
-// (web/data/graph.json, written by pipeline/export_web.py).
+// (web/data/graph.json v2, written by pipeline/export_web.py).
+// All weighting happens here, from raw per-edge components — so rider
+// profiles, flat preference, and personal "sketchy" marks apply instantly.
+export const PROFILES = {
+    young_kids: {
+        id: "young_kids",
+        label: "young kids",
+        paceKmh: 8,
+        mult: {
+            path: 1.0, separated: 1.0, buffered: 2.0, lane: 3.0, quiet_street: 1.4,
+            service: 2.0, sharrow: 6.0, moderate_street: 8.0, busy_street: 25.0,
+        },
+        busyLane: 10.0,
+        busyBuffered: 6.0,
+        penScale: 1.0,
+    },
+    older_kids: {
+        id: "older_kids",
+        label: "older kids",
+        paceKmh: 11,
+        mult: {
+            path: 1.0, separated: 1.0, buffered: 1.5, lane: 2.0, quiet_street: 1.2,
+            service: 1.6, sharrow: 3.5, moderate_street: 4.0, busy_street: 12.0,
+        },
+        busyLane: 5.0,
+        busyBuffered: 3.0,
+        penScale: 0.6,
+    },
+    solo: {
+        id: "solo",
+        label: "solo",
+        paceKmh: 16,
+        mult: {
+            path: 1.0, separated: 1.0, buffered: 1.1, lane: 1.3, quiet_street: 1.1,
+            service: 1.3, sharrow: 2.0, moderate_street: 2.5, busy_street: 6.0,
+        },
+        busyLane: 2.5,
+        busyBuffered: 1.8,
+        penScale: 0.3,
+    },
+};
+/** Next-milder profile, used for the "Balanced" alternative. */
+const MILDER = {
+    young_kids: "older_kids",
+    older_kids: "solo",
+    solo: null,
+};
 const CLASS_COLORS = {
     path: "#1a9850",
     separated: "#66bd63",
@@ -16,14 +62,18 @@ const CAUTION_CLASSES = new Set([
     "moderate_street",
     "busy_street",
 ]);
-const MAX_SNAP_METERS = 500;
-const KID_PACE_KMH = 10;
 const PROTECTED = new Set(["path", "separated"]);
+const MAX_SNAP_METERS = 500;
 const HOTSPOT_CRASH_FACTOR = 1.25;
 // Flat preference: each meter of climb costs this many meters-equivalent,
 // doubled on grades steeper than 4% (hard with kids' bikes).
 const HILL_EQUIV_M = 12;
 const STEEP_GRADE = 0.04;
+/** Weight multiplier for edges the user marked as sketchy. */
+const SKETCHY_MULT = 5.0;
+const SKETCHY_SNAP_M = 30;
+/** Outbound-edge penalty when planning the return leg of a loop. */
+const LOOP_REUSE_MULT = 4.0;
 function fmt(m) {
     return m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(1)} km`;
 }
@@ -91,17 +141,35 @@ class MinHeap {
 // ---------------------------------------------------------------------------
 export class Router {
     constructor(data) {
+        /** "u,v" -> edge indices, for reverse-edge lookups */
+        this.uvIndex = new Map();
+        this.sketchy = new Set();
         this.g = data;
         this.adj = data.nodes.map(() => []);
         this.hillPen = new Float64Array(data.edges.length);
+        this.midX = new Float64Array(data.edges.length);
+        this.midY = new Float64Array(data.edges.length);
+        let total = 0;
         data.edges.forEach((e, i) => {
-            const nodeEdges = this.adj[e[0]];
-            if (nodeEdges)
-                nodeEdges.push(i);
-            const climb = e[9] ?? 0;
+            this.adj[e[0]]?.push(i);
+            const climb = e[8];
             const grade = e[2] > 0 ? climb / e[2] : 0;
             this.hillPen[i] = climb * HILL_EQUIV_M * (grade > STEEP_GRADE ? 2 : 1);
+            const key = `${e[0]},${e[1]}`;
+            const list = this.uvIndex.get(key);
+            if (list)
+                list.push(i);
+            else
+                this.uvIndex.set(key, [i]);
+            const a = data.nodes[e[0]];
+            const b = data.nodes[e[1]];
+            if (a && b) {
+                this.midX[i] = (a[0] + b[0]) / 2;
+                this.midY[i] = (a[1] + b[1]) / 2;
+            }
+            total += e[2];
         });
+        this.totalLen = total;
     }
     static async load(url) {
         const resp = await fetch(url);
@@ -109,6 +177,31 @@ export class Router {
             throw new Error(`failed to load graph (${resp.status})`);
         return new Router((await resp.json()));
     }
+    // -- weights ---------------------------------------------------------------
+    /** Per-edge weight for a profile (null = pure distance). */
+    weights(profile, preferFlat) {
+        const w = new Float64Array(this.g.edges.length);
+        this.g.edges.forEach((e, i) => {
+            if (profile === null) {
+                w[i] = e[2];
+                return;
+            }
+            const cls = this.g.classes[e[3]] ?? "quiet_street";
+            let mult = profile.mult[cls];
+            if (e[9] === 1 && cls === "lane")
+                mult = profile.busyLane;
+            if (e[9] === 1 && cls === "buffered")
+                mult = profile.busyBuffered;
+            let wi = e[2] * mult * e[6] + e[7] * profile.penScale;
+            if (preferFlat)
+                wi += this.hillPen[i];
+            if (this.sketchy.has(i))
+                wi *= SKETCHY_MULT;
+            w[i] = wi;
+        });
+        return w;
+    }
+    // -- snapping --------------------------------------------------------------
     nearestNode(lon, lat) {
         const scaleX = Math.cos((lat * Math.PI) / 180) * 111320;
         const scaleY = 110540;
@@ -128,8 +221,39 @@ export class Router {
         }
         return best;
     }
-    /** Dijkstra; returns the edge-index path, or null if unreachable. */
-    shortestPath(from, to, w, hills = false) {
+    nearestEdge(lon, lat, maxM) {
+        const scaleX = Math.cos((lat * Math.PI) / 180) * 111320;
+        const scaleY = 110540;
+        let best = -1;
+        let bestD2 = Infinity;
+        for (let i = 0; i < this.midX.length; i++) {
+            const dx = (this.midX[i] - lon) * scaleX;
+            const dy = (this.midY[i] - lat) * scaleY;
+            const d2 = dx * dx + dy * dy;
+            if (d2 < bestD2) {
+                bestD2 = d2;
+                best = i;
+            }
+        }
+        return best >= 0 && bestD2 <= maxM ** 2 ? best : null;
+    }
+    /** Personal feedback: penalize edges near the given points (both directions). */
+    setSketchyMarks(points) {
+        this.sketchy = new Set();
+        for (const [lon, lat] of points) {
+            const ei = this.nearestEdge(lon, lat, SKETCHY_SNAP_M);
+            if (ei === null)
+                continue;
+            this.sketchy.add(ei);
+            const e = this.g.edges[ei];
+            if (!e)
+                continue;
+            for (const rev of this.uvIndex.get(`${e[1]},${e[0]}`) ?? [])
+                this.sketchy.add(rev);
+        }
+    }
+    // -- shortest path & flood fill -------------------------------------------
+    dijkstra(from, to, w, extra, budget = Infinity) {
         const n = this.g.nodes.length;
         const dist = new Float64Array(n).fill(Infinity);
         const prevEdge = new Int32Array(n).fill(-1);
@@ -145,7 +269,7 @@ export class Router {
             if (done[u])
                 continue;
             done[u] = 1;
-            if (u === to)
+            if (u === to || d > budget)
                 break;
             const edges = this.adj[u];
             if (!edges)
@@ -157,7 +281,7 @@ export class Router {
                 const v = e[1];
                 if (done[v])
                     continue;
-                const nd = d + e[w] + (hills ? this.hillPen[ei] : 0);
+                const nd = d + w[ei] * (extra?.get(ei) ?? 1);
                 if (nd < dist[v]) {
                     dist[v] = nd;
                     prevEdge[v] = ei;
@@ -165,8 +289,9 @@ export class Router {
                 }
             }
         }
-        if (dist[to] === Infinity)
-            return null;
+        return { dist, prevEdge };
+    }
+    tracePath(prevEdge, from, to) {
         const path = [];
         let cur = to;
         while (cur !== from) {
@@ -182,12 +307,43 @@ export class Router {
         path.reverse();
         return path;
     }
+    shortestPath(from, to, w, extra) {
+        const { dist, prevEdge } = this.dijkstra(from, to, w, extra);
+        if (dist[to] === Infinity)
+            return null;
+        return this.tracePath(prevEdge, from, to);
+    }
+    /** Everything reachable from a point within a perceived-distance budget. */
+    safeShed(center, budgetM, profileId, preferFlat) {
+        const from = this.nearestNode(center[0], center[1]);
+        const w = this.weights(PROFILES[profileId], preferFlat);
+        const { dist } = this.dijkstra(from, null, w, undefined, budgetM);
+        const features = [];
+        let reachLen = 0;
+        this.g.edges.forEach((e, i) => {
+            const du = dist[e[0]];
+            if (du + w[i] > budgetM)
+                return;
+            reachLen += e[2];
+            const cls = this.g.classes[e[3]] ?? "quiet_street";
+            features.push({
+                type: "Feature",
+                geometry: { type: "LineString", coordinates: this.edgeCoords(i) },
+                properties: { cls, color: CLASS_COLORS[cls], name: null },
+            });
+        });
+        return {
+            geojson: { type: "FeatureCollection", features },
+            pctReachable: Math.round((100 * reachLen) / this.totalLen),
+            reachableKm: Math.round(reachLen / 100) / 10,
+        };
+    }
+    // -- payload ---------------------------------------------------------------
     edgeCoords(ei) {
         const e = this.g.edges[ei];
         if (!e)
             return [];
-        const geomIdx = e[7];
-        const geom = geomIdx >= 0 ? this.g.geoms[geomIdx] : undefined;
+        const geom = e[5] >= 0 ? this.g.geoms[e[5]] : undefined;
         if (geom !== undefined) {
             const coords = [];
             for (let i = 0; i + 1 < geom.length; i += 2) {
@@ -197,45 +353,57 @@ export class Router {
         }
         const a = this.g.nodes[e[0]];
         const b = this.g.nodes[e[1]];
-        return a && b ? [a, b] : [];
+        return a && b ? [[a[0], a[1]], [b[0], b[1]]] : [];
     }
-    payload(edgePath) {
+    payload(edgePath, profile) {
         const features = [];
         const byClass = new Map();
         const cautions = [];
+        const ribbon = [];
         let total = 0;
         let climb = 0;
         for (const ei of edgePath) {
             const e = this.g.edges[ei];
             if (!e)
                 continue;
-            const cls = this.g.classes[e[5]] ?? "quiet_street";
-            const name = this.g.names[e[6]] ?? "";
+            const cls = this.g.classes[e[3]] ?? "quiet_street";
+            const name = this.g.names[e[4]] ?? "";
             const length = e[2];
             total += length;
-            climb += e[9] ?? 0;
+            climb += e[8];
             byClass.set(cls, (byClass.get(cls) ?? 0) + length);
+            const coords = this.edgeCoords(ei);
+            const first = coords[0];
             if (CAUTION_CLASSES.has(cls)) {
                 const prev = cautions[cautions.length - 1];
                 const label = name || "unnamed";
                 if (prev && prev.name === label && prev.cls === cls)
                     prev.meters += length;
-                else
-                    cautions.push({ name: label, cls, meters: length });
+                else {
+                    cautions.push({
+                        name: label,
+                        cls,
+                        meters: length,
+                        ...(first ? { lon: first[0], lat: first[1] } : {}),
+                    });
+                }
             }
+            const e0 = this.g.nodes[e[0]]?.[2] ?? 0;
+            const e1 = this.g.nodes[e[1]]?.[2] ?? 0;
+            ribbon.push({ m: length, cls, e0, e1, crossing: e[7] > 100 });
             features.push({
                 type: "Feature",
-                geometry: { type: "LineString", coordinates: this.edgeCoords(ei) },
+                geometry: { type: "LineString", coordinates: coords },
                 properties: { cls, color: CLASS_COLORS[cls], name: name || null },
             });
         }
         const sum = (classes) => classes.reduce((acc, c) => acc + (byClass.get(c) ?? 0), 0);
-        const geojson = { type: "FeatureCollection", features };
         return {
-            geojson,
+            geojson: { type: "FeatureCollection", features },
+            ribbon,
             summary: {
                 meters: Math.round(total),
-                minutes: Math.round((total / 1000 / KID_PACE_KMH) * 60),
+                minutes: Math.round((total / 1000 / profile.paceKmh) * 60),
                 climb_m: Math.round(climb),
                 pct_protected: total > 0 ? Math.round((100 * sum(["path", "separated", "buffered"])) / total) : 0,
                 pct_quiet: total > 0 ? Math.round((100 * sum(["quiet_street", "service"])) / total) : 0,
@@ -248,31 +416,28 @@ export class Router {
             },
         };
     }
-    /** Total meters ridden on high-stress classes (busy/moderate/sharrow). */
+    // -- analysis helpers ------------------------------------------------------
     stressMeters(edgePath) {
         let m = 0;
         for (const ei of edgePath) {
             const e = this.g.edges[ei];
             if (!e)
                 continue;
-            const cls = this.g.classes[e[5]];
+            const cls = this.g.classes[e[3]];
             if (cls !== undefined && CAUTION_CLASSES.has(cls))
                 m += e[2];
         }
         return m;
     }
-    /** Meters ridden along bike-crash hotspot segments. */
     hotspotMeters(edgePath) {
         let m = 0;
         for (const ei of edgePath) {
             const e = this.g.edges[ei];
-            if (e && e[8] >= HOTSPOT_CRASH_FACTOR)
+            if (e && e[6] >= HOTSPOT_CRASH_FACTOR)
                 m += e[2];
         }
         return m;
     }
-    /** Consecutive protected (path/separated) stretches, labeled by their
-     * dominant street/path name, longest first. */
     protectedRuns(edgePath) {
         const runs = [];
         let meters = 0;
@@ -296,10 +461,10 @@ export class Router {
             const e = this.g.edges[ei];
             if (!e)
                 continue;
-            const cls = this.g.classes[e[5]];
+            const cls = this.g.classes[e[3]];
             if (cls !== undefined && PROTECTED.has(cls)) {
                 meters += e[2];
-                const name = this.g.names[e[6]] ?? "";
+                const name = this.g.names[e[4]] ?? "";
                 byName.set(name, (byName.get(name) ?? 0) + e[2]);
             }
             else {
@@ -309,24 +474,28 @@ export class Router {
         flush();
         return runs.sort((a, b) => b.meters - a.meters);
     }
-    /** Grade a route by its average kid-level stress cost per meter (crash
-     * factors and crossing penalties included), regardless of riding mode —
-     * safety is rated on the same scale for every option. */
+    /** Objective safety grade on the young-kids stress scale. */
     gradeRoute(edgePath) {
+        const yk = PROFILES.young_kids;
         let len = 0;
-        let kidsCost = 0;
+        let cost = 0;
         let protectedM = 0;
         for (const ei of edgePath) {
             const e = this.g.edges[ei];
             if (!e)
                 continue;
+            const cls = this.g.classes[e[3]] ?? "quiet_street";
+            let mult = yk.mult[cls];
+            if (e[9] === 1 && cls === "lane")
+                mult = yk.busyLane;
+            if (e[9] === 1 && cls === "buffered")
+                mult = yk.busyBuffered;
             len += e[2];
-            kidsCost += e[3];
-            const cls = this.g.classes[e[5]];
-            if (cls !== undefined && (PROTECTED.has(cls) || cls === "buffered"))
+            cost += e[2] * mult * e[6] + e[7];
+            if (PROTECTED.has(cls) || cls === "buffered")
                 protectedM += e[2];
         }
-        const avg = len > 0 ? kidsCost / len : 1;
+        const avg = len > 0 ? cost / len : 1;
         const stress = this.stressMeters(edgePath);
         const grade = avg <= 1.6 ? "A" : avg <= 2.4 ? "B" : avg <= 4 ? "C" : avg <= 8 ? "D" : "F";
         const pctProt = len > 0 ? Math.round((100 * protectedM) / len) : 0;
@@ -334,13 +503,13 @@ export class Router {
             (stress < 30 ? "no busy/moderate streets" : `${fmt(stress)} on busy/moderate streets`);
         return { grade, reason };
     }
-    explain(safestPath, shortestPath, safest, shortest, mode, isDirect = false, preferFlat = false) {
-        const s = safest.summary;
+    explain(path, directPath, payload, direct, profile, isDirect, preferFlat) {
+        const s = payload.summary;
         if (isDirect) {
             const reasons = [
                 "This is the shortest possible route — it minimizes distance, not stress.",
             ];
-            const hotspot = this.hotspotMeters(safestPath);
+            const hotspot = this.hotspotMeters(path);
             if (hotspot > 150) {
                 reasons.push(`It passes ~${fmt(hotspot)} of bike-crash hotspots ` +
                     `(MassDOT crash records, 2021–2026).`);
@@ -352,13 +521,12 @@ export class Router {
         }
         const reasons = [];
         const detour = s.detour_pct ?? 0;
-        const safeStress = this.stressMeters(safestPath);
-        const shortStress = this.stressMeters(shortestPath);
-        const costFactor = mode === "kids" ? 25 : 6;
-        const modeLabel = mode === "kids" ? "riding-with-kids" : "solo";
+        const safeStress = this.stressMeters(path);
+        const shortStress = this.stressMeters(directPath);
+        const costFactor = profile.mult.busy_street;
         if (detour >= 3) {
-            reasons.push(`In ${modeLabel} weighting an unprotected busy street "costs" ${costFactor}× its ` +
-                `length, so this route accepts +${detour}% distance ` +
+            reasons.push(`In ${profile.label} weighting an unprotected busy street "costs" ${costFactor}× ` +
+                `its length, so this route accepts +${detour}% distance ` +
                 `(${fmt(s.meters)} vs ${fmt(s.shortest_meters ?? 0)} direct) to cut ` +
                 `high-stress riding from ${fmt(shortStress)} down to ${fmt(safeStress)}.`);
         }
@@ -366,14 +534,14 @@ export class Router {
             reasons.push("The direct route is already the lowest-stress option here — no detour was needed.");
         }
         if (shortStress - safeStress > 100) {
-            const worst = [...shortest.summary.cautions].sort((a, b) => b.meters - a.meters)[0];
+            const worst = [...direct.summary.cautions].sort((a, b) => b.meters - a.meters)[0];
             if (worst) {
                 reasons.push(`The direct route would spend ${fmt(shortStress)} on busy or moderate streets — ` +
                     `worst stretch: ${fmt(worst.meters)} along ${worst.name}. This route ` +
                     (safeStress < 30 ? "avoids all of it." : `keeps that to ${fmt(safeStress)}.`));
             }
         }
-        const runs = this.protectedRuns(safestPath).filter((r) => r.meters >= 300);
+        const runs = this.protectedRuns(path).filter((r) => r.meters >= 300);
         if (runs.length > 0) {
             const named = runs
                 .slice(0, 3)
@@ -388,7 +556,7 @@ export class Router {
         }
         if (preferFlat) {
             const climb = s.climb_m ?? 0;
-            const directClimb = shortest.summary.climb_m ?? 0;
+            const directClimb = direct.summary.climb_m ?? 0;
             if (directClimb - climb >= 5) {
                 reasons.push(`Flat preference: this route climbs ${climb} m total, saving ` +
                     `${directClimb - climb} m of climbing vs the direct route.`);
@@ -398,7 +566,7 @@ export class Router {
                     `(the direct route climbs ${directClimb} m; no flatter option exists).`);
             }
         }
-        const hotspotDiff = this.hotspotMeters(shortestPath) - this.hotspotMeters(safestPath);
+        const hotspotDiff = this.hotspotMeters(directPath) - this.hotspotMeters(path);
         if (hotspotDiff > 150) {
             reasons.push(`It also steers around ~${fmt(hotspotDiff)} of bike-crash hotspots on the direct ` +
                 `route (MassDOT crash records, 2021–2026).`);
@@ -409,50 +577,50 @@ export class Router {
         }
         return reasons;
     }
-    route(start, end, mode) {
+    // -- public queries --------------------------------------------------------
+    /** Up to three distinct options (safest / balanced / direct), graded and
+     * explained. Fewer appear when the paths coincide. */
+    routeOptions(start, end, profileId = "young_kids", preferFlat = false) {
         const a = this.nearestNode(start[0], start[1]);
         const b = this.nearestNode(end[0], end[1]);
         if (a === b)
             throw new Error("start and end snap to the same intersection");
-        const wCol = mode === "kids" ? 3 : 4;
-        const safestPath = this.shortestPath(a, b, wCol);
-        const shortestPath = this.shortestPath(a, b, 2);
-        if (safestPath === null || shortestPath === null)
-            throw new Error("no path found");
-        const safest = this.payload(safestPath);
-        const shortest = this.payload(shortestPath);
-        safest.summary.shortest_meters = shortest.summary.meters;
-        safest.summary.detour_pct =
-            shortest.summary.meters > 0
-                ? Math.round(100 * (safest.summary.meters / shortest.summary.meters - 1))
-                : 0;
-        safest.summary.explanation = this.explain(safestPath, shortestPath, safest, shortest, mode);
-        return { safest, shortest };
-    }
-    /** Up to three distinct options (safest / balanced / direct), each graded
-     * for safety on the same kid-stress scale and individually explained.
-     * Identical paths are deduped, so fewer options appear when the safest
-     * route already is the direct one. */
-    routeOptions(start, end, preferFlat = false) {
-        const a = this.nearestNode(start[0], start[1]);
-        const b = this.nearestNode(end[0], end[1]);
-        if (a === b)
-            throw new Error("start and end snap to the same intersection");
+        const profile = PROFILES[profileId];
+        const milderId = MILDER[profileId];
         const candidates = [
-            { id: "safest", label: "Safest", col: 3, mode: "kids" },
-            { id: "balanced", label: "Balanced", col: 4, mode: "solo" },
-            { id: "direct", label: "Direct", col: 2, mode: "solo" },
+            {
+                id: "safest",
+                label: "Safest",
+                profile,
+                w: this.weights(profile, preferFlat),
+                isDirect: false,
+            },
         ];
+        if (milderId !== null) {
+            candidates.push({
+                id: "balanced",
+                label: "Balanced",
+                profile: PROFILES[milderId],
+                w: this.weights(PROFILES[milderId], preferFlat),
+                isDirect: false,
+            });
+        }
+        candidates.push({
+            id: "direct",
+            label: "Direct",
+            profile,
+            w: this.weights(null, false),
+            isDirect: true,
+        });
         const paths = new Map();
         for (const c of candidates) {
-            // "direct" stays the pure shortest path — it is the reference route
-            const p = this.shortestPath(a, b, c.col, preferFlat && c.id !== "direct");
+            const p = this.shortestPath(a, b, c.w);
             if (p === null)
                 throw new Error("no path found");
             paths.set(c.id, p);
         }
         const directPath = paths.get("direct");
-        const directPayload = this.payload(directPath);
+        const directPayload = this.payload(directPath, profile);
         const options = [];
         const seen = new Set();
         for (const c of candidates) {
@@ -461,16 +629,147 @@ export class Router {
             if (seen.has(key))
                 continue;
             seen.add(key);
-            const payload = c.id === "direct" ? directPayload : this.payload(path);
+            const payload = c.id === "direct" ? directPayload : this.payload(path, c.profile);
             payload.summary.shortest_meters = directPayload.summary.meters;
             payload.summary.detour_pct =
                 directPayload.summary.meters > 0
                     ? Math.round(100 * (payload.summary.meters / directPayload.summary.meters - 1))
                     : 0;
-            payload.summary.explanation = this.explain(path, directPath, payload, directPayload, c.mode, c.id === "direct", preferFlat);
+            payload.summary.explanation = this.explain(path, directPath, payload, directPayload, c.profile, c.isDirect, preferFlat);
             const { grade, reason } = this.gradeRoute(path);
             options.push({ id: c.id, label: c.label, grade, gradeReason: reason, payload });
         }
         return options;
     }
+    /** Plan a round trip of roughly targetM meters with a stop at a POI.
+     * The return leg penalizes outbound edges so it comes back a different way. */
+    loopRoute(start, targetM, pois, profileId, preferFlat) {
+        const from = this.nearestNode(start[0], start[1]);
+        const profile = PROFILES[profileId];
+        const w = this.weights(profile, preferFlat);
+        const scaleX = Math.cos((start[1] * Math.PI) / 180) * 111320;
+        const ideal = targetM * 0.35;
+        const candidates = pois
+            .map((p) => {
+            const [lon, lat] = p.geometry.coordinates;
+            const beeline = Math.hypot((lon - start[0]) * scaleX, (lat - start[1]) * 110540);
+            return { p, beeline };
+        })
+            .filter((c) => c.beeline > targetM * 0.08 && c.beeline < targetM * 0.55)
+            .sort((x, y) => Math.abs(x.beeline - ideal) - Math.abs(y.beeline - ideal))
+            .slice(0, 12);
+        if (candidates.length === 0) {
+            throw new Error("no suitable stop found for that loop length — try another distance");
+        }
+        let best = null;
+        for (const c of candidates) {
+            const [lon, lat] = c.p.geometry.coordinates;
+            let poiNode;
+            try {
+                poiNode = this.nearestNode(lon, lat);
+            }
+            catch {
+                continue;
+            }
+            if (poiNode === from)
+                continue;
+            const out = this.shortestPath(from, poiNode, w);
+            if (out === null)
+                continue;
+            const reuse = new Map();
+            for (const ei of out) {
+                reuse.set(ei, LOOP_REUSE_MULT);
+                const e = this.g.edges[ei];
+                if (!e)
+                    continue;
+                for (const rev of this.uvIndex.get(`${e[1]},${e[0]}`) ?? []) {
+                    reuse.set(rev, LOOP_REUSE_MULT);
+                }
+            }
+            const back = this.shortestPath(poiNode, from, w, reuse);
+            if (back === null)
+                continue;
+            const path = [...out, ...back];
+            const total = path.reduce((acc, ei) => acc + (this.g.edges[ei]?.[2] ?? 0), 0);
+            if (best === null || Math.abs(total - targetM) < Math.abs(best.total - targetM)) {
+                best = { path, poi: c.p, total };
+            }
+        }
+        if (best === null)
+            throw new Error("could not build a loop — try another distance");
+        const payload = this.payload(best.path, profile);
+        const { grade, reason } = this.gradeRoute(best.path);
+        const poiName = best.poi.properties.name || best.poi.properties.kind.replace("_", " ");
+        const runs = this.protectedRuns(best.path).filter((r) => r.meters >= 300);
+        const explanation = [
+            `A ${fmt(best.total)} loop with a stop at ${poiName} roughly halfway, ` +
+                `returning a different way than it goes out.`,
+        ];
+        if (runs.length > 0) {
+            explanation.push(`Backbone: ${runs
+                .slice(0, 3)
+                .map((r) => `${r.name} (${fmt(r.meters)})`)
+                .join(", ")}.`);
+        }
+        for (const c of payload.summary.cautions) {
+            explanation.push(`Caution: ${fmt(c.meters)} of ${c.cls.replace("_", " ")} along ${c.name}.`);
+        }
+        payload.summary.explanation = explanation;
+        return {
+            option: {
+                id: "loop",
+                label: `Loop via ${poiName}`,
+                grade,
+                gradeReason: reason,
+                payload,
+            },
+            poi: best.poi,
+        };
+    }
+}
+// ---------------------------------------------------------------------------
+// export helpers (GPX + cue sheet)
+// ---------------------------------------------------------------------------
+export function toGPX(payload, name) {
+    const pts = [];
+    let last = null;
+    for (const f of payload.geojson.features) {
+        for (const [lon, lat] of f.geometry.coordinates) {
+            if (last && last[0] === lon && last[1] === lat)
+                continue;
+            last = [lon, lat];
+            pts.push(`      <trkpt lat="${lat}" lon="${lon}"/>`);
+        }
+    }
+    return [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<gpx version="1.1" creator="family-bike-router" xmlns="http://www.topografix.com/GPX/1/1">',
+        "  <trk>",
+        `    <name>${name.replace(/[<>&]/g, "")}</name>`,
+        "    <trkseg>",
+        ...pts,
+        "    </trkseg>",
+        "  </trk>",
+        "</gpx>",
+    ].join("\n");
+}
+export function buildCues(payload) {
+    const cues = [];
+    let dist = 0;
+    let lastName = null;
+    const feats = payload.geojson.features;
+    const ribbon = payload.ribbon ?? [];
+    feats.forEach((f, i) => {
+        const name = f.properties.name ?? "(unnamed path)";
+        if (name !== lastName) {
+            cues.push({
+                km: Math.round(dist / 100) / 10,
+                text: `${name} — ${f.properties.cls.replace("_", " ")}`,
+            });
+            lastName = name;
+        }
+        dist += ribbon[i]?.m ?? 0;
+    });
+    cues.push({ km: Math.round(dist / 100) / 10, text: "arrive" });
+    return cues;
 }

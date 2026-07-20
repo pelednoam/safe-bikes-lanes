@@ -1,0 +1,13 @@
+{
+  "name": "Family Bike Router — Cambridge + Somerville",
+  "short_name": "Bike Router",
+  "description": "Safety-first bike route planner for riding with kids",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#1a9850",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

@@ -3,16 +3,22 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#1a9850">
 <title>Family Bike Router — Cambridge + Somerville</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
 <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
 <style>
   :root { font-family: system-ui, sans-serif; }
   html, body { margin: 0; height: 100%; }
   #map { position: absolute; inset: 0; }
   #panel {
-    position: absolute; top: 10px; left: 10px; z-index: 5; width: 310px;
+    position: absolute; top: 10px; left: 10px; z-index: 5; width: 316px;
     background: #fff; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,.25);
     padding: 12px 14px; font-size: 13px; max-height: calc(100% - 40px); overflow-y: auto;
+  }
+  @media (max-width: 480px) {
+    #panel { width: calc(100% - 20px); max-height: 55%; font-size: 12px; }
   }
   #panel h1 { font-size: 15px; margin: 0 0 4px; }
   #panel .hint { color: #666; margin: 4px 0 8px; }
@@ -22,13 +28,12 @@
   .search-row span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .search-row button { margin: 0; padding: 2px 7px; font-size: 11px; }
   #modes { margin: 8px 0; }
-  #modes label { margin-right: 12px; cursor: pointer; }
-  #summary { display: none; border-top: 1px solid #eee; margin-top: 8px; padding-top: 8px; }
-  .stat { display: flex; justify-content: space-between; margin: 2px 0; }
-  .stat b { font-variant-numeric: tabular-nums; }
-  #classbar { display: flex; height: 12px; border-radius: 6px; overflow: hidden; margin: 8px 0; }
-  .caution { color: #a33; margin: 2px 0; }
-  .all-clear { color: #2a7; margin: 2px 0; }
+  #modes label { margin-right: 10px; cursor: pointer; white-space: nowrap; }
+  .tool-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 6px 0; }
+  .tool-row select { padding: 3px 5px; border-radius: 5px; border: 1px solid #bbb; }
+  #shed-panel { display: none; background: #f3f0ff; border-radius: 8px; padding: 7px 9px;
+                margin: 6px 0; }
+  #shed-info { color: #555; margin-top: 4px; }
   #options { margin: 8px 0 4px; }
   .options-head { color: #666; margin-bottom: 4px; }
   .option-card {
@@ -41,17 +46,28 @@
     color: #fff; border-radius: 6px; min-width: 20px; height: 20px;
     display: inline-flex; align-items: center; justify-content: center; font-size: 12px;
   }
+  #summary { display: none; border-top: 1px solid #eee; margin-top: 8px; padding-top: 8px; }
+  .stat { display: flex; justify-content: space-between; margin: 2px 0; }
+  .stat b { font-variant-numeric: tabular-nums; }
+  #classbar { display: flex; height: 12px; border-radius: 6px; overflow: hidden; margin: 8px 0; }
+  #ribbon { margin: 6px 0; }
+  .caution { color: #a33; margin: 2px 0; }
+  .caution a { font-size: 11px; }
+  .all-clear { color: #2a7; margin: 2px 0; }
   #why { margin-top: 8px; }
   #why summary { cursor: pointer; font-weight: 600; }
   #why ul { margin: 6px 0 0; padding-left: 18px; }
   #why li { margin: 4px 0; color: #444; }
+  #sketchy-section { display: none; border-top: 1px solid #eee; margin-top: 8px; padding-top: 6px; }
+  .sketchy-row { display: flex; justify-content: space-between; align-items: center; margin: 2px 0; }
+  .sketchy-row button { margin: 0; padding: 1px 6px; font-size: 11px; }
   .legend { display: grid; grid-template-columns: 14px auto; gap: 3px 7px; margin-top: 8px;
             align-items: center; }
   .legend i { width: 14px; height: 5px; border-radius: 2px; display: inline-block; }
   button { margin-top: 8px; margin-right: 6px; padding: 5px 10px; border: 1px solid #bbb;
            background: #f6f6f6; border-radius: 6px; cursor: pointer; }
   button:hover { background: #eee; }
-  label.toggle { display: block; margin-top: 8px; user-select: none; cursor: pointer; }
+  label.toggle { display: block; margin-top: 6px; user-select: none; cursor: pointer; }
   #error { color: #b00; display: none; margin-top: 6px; }
   #loading { display: none; color: #666; margin-top: 6px; }
 </style>
@@ -61,37 +77,70 @@
 <div id="panel">
   <h1>Family Bike Router</h1>
   <div class="hint">Cambridge + Somerville, safety first.<br>
-    Click the map (or search) to set <b>start</b> and <b>end</b>; drag markers to adjust.</div>
+    Click the map (or search) to set <b>start</b> and <b>end</b>; drag markers to adjust.
+    Right-click any street to mark it sketchy.</div>
   <input id="search" type="search" placeholder="search address or place…" autocomplete="off">
   <div id="search-results"></div>
   <div id="modes">
-    <label><input type="radio" name="mode" value="kids" checked> with kids</label>
-    <label><input type="radio" name="mode" value="solo"> solo</label>
+    <label><input type="radio" name="profile" value="young_kids" checked> young kids</label>
+    <label><input type="radio" name="profile" value="older_kids"> older kids</label>
+    <label><input type="radio" name="profile" value="solo"> solo</label>
     <label title="Adds a cost for every meter of climb (extra on >4% grades)">
       <input type="checkbox" id="prefer-flat"> prefer flat</label>
+  </div>
+  <div class="tool-row">
+    <button id="shed-btn" style="margin:0" title="Show everything reachable from a point at your comfort level">🗺 Reach map</button>
+    <select id="loop-dist" title="loop length">
+      <option value="3">3 km</option><option value="5" selected>5 km</option>
+      <option value="8">8 km</option><option value="12">12 km</option>
+    </select>
+    <select id="loop-stop" title="loop stop">
+      <option value="playground">🛝 playground</option>
+      <option value="ice_cream">🍦 ice cream</option>
+      <option value="library">📚 library</option>
+      <option value="any">any stop</option>
+    </select>
+    <button id="loop-btn" style="margin:0" title="Round trip from the start marker with a stop halfway">↻ Loop</button>
+  </div>
+  <div id="shed-panel">
+    <label>comfort budget <input type="range" id="shed-budget" min="1" max="8" step="0.5" value="3">
+      <span id="shed-budget-label">3 km</span></label>
+    <div id="shed-info"></div>
   </div>
   <div id="loading">routing…</div>
   <div id="options" style="display:none"></div>
   <div id="summary">
-    <div class="stat"><span>Safest route</span><b id="s-dist"></b></div>
-    <div class="stat"><span>Riding time (kid pace)</span><b id="s-time"></b></div>
+    <div class="stat"><span>Route</span><b id="s-dist"></b></div>
+    <div class="stat"><span>Riding time</span><b id="s-time"></b></div>
     <div class="stat"><span>Protected / off-street</span><b id="s-prot"></b></div>
     <div class="stat"><span>Quiet streets</span><b id="s-quiet"></b></div>
     <div class="stat"><span>vs. shortest route</span><b id="s-detour"></b></div>
     <div id="classbar"></div>
+    <div id="ribbon" title="the ride, start to finish: stress colors on top, elevation profile below, ▲ = busy crossing"></div>
     <div id="cautions"></div>
     <details id="why" open>
       <summary>Why this route?</summary>
       <ul id="why-list"></ul>
     </details>
+    <button id="gpx" title="Download GPX for your phone or bike computer">⬇ GPX</button>
+    <button id="print-cues" title="Printable cue sheet">🖨 Cue sheet</button>
+  </div>
+  <div id="sketchy-section">
+    <b>Your sketchy marks</b> (routes avoid these)
+    <div id="sketchy-list"></div>
   </div>
   <div id="error"></div>
   <button id="reset">Reset</button><button id="swap">⇄ Swap A/B</button>
-  <label class="toggle"><input type="checkbox" id="show-net" checked> show safety network</label>
+  <label class="toggle"><input type="checkbox" id="show-net" checked> safety network
+    <small>(dashed = OSM-only facility)</small></label>
   <label class="toggle" title="~100 m cells: average stress of the streets inside — green safe, yellow moderate, red unsafe">
     <input type="checkbox" id="show-heat"> safety heatmap</label>
   <label class="toggle" title="Terrain elevation: blue low → red high; hover for meters">
     <input type="checkbox" id="show-elev"> elevation map</label>
+  <label class="toggle" title="Playgrounds, ice cream, libraries, water fountains, restrooms">
+    <input type="checkbox" id="show-pois"> kid stops</label>
+  <label class="toggle" title="Signalized crossings of busy streets — the safe ways through barriers">
+    <input type="checkbox" id="show-gates"> safe crossings</label>
   <div class="legend" id="legend"></div>
 </div>
 <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>

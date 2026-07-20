@@ -411,6 +411,8 @@ def build() -> None:
             pen = (node_penalty(u) + node_penalty(v)) / 2
         data = G.edges[u, v, k]
         data["climb"] = round(max(0.0, elev[v] - elev[u]), 2)
+        data["xpen"] = round(pen, 1)
+        data["road_busy"] = bool(row["road_busy"])
         data["cls"] = row["cls"]
         data["stress_mult"] = float(row["stress_mult"])
         data["crash_factor"] = float(row["crash_factor"])

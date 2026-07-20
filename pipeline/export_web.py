@@ -1,17 +1,21 @@
 """Export the routing graph to web/data/graph.json for in-browser routing.
 
-Compact format (index-based, flat coordinate arrays):
-  nodes:   [[lon, lat], ...]                     graph nodes
+Compact format v2 (index-based, flat coordinate arrays). Weights are NOT
+precomputed — the browser computes them from raw components so rider profiles
+are fully client-side:
+  nodes:   [[lon, lat, elev_m], ...]             graph nodes
   names:   ["", "Main Street", ...]              deduped street names
   classes: ["path", ...]                         protection classes
-  edges:   [[u, v, len_m, w_kids, w_solo, clsIdx, nameIdx, geomIdx, crashFactor,
-             climb_m], ...]   (climb_m = positive elevation gain u->v)
+  edges:   [[u, v, len_m, clsIdx, nameIdx, geomIdx, crashFactor, pen_m,
+             climb_m, busyRoad01], ...]
+           pen_m = busy-crossing penalty meters, climb_m = elevation gain u->v
   geoms:   [[lon, lat, lon, lat, ...], ...]      flat coords, edge u->v order;
            geomIdx = -1 when the edge is a straight line between its nodes
-Also copies network.geojson alongside it for the map display layer, and writes
-heatmap.geojson — a ~100 m grid where each cell is colored by the
-length-weighted average kid-stress (multiplier x crash factor) of the streets
-inside it: green = safe, yellow = moderate, red = unsafe.
+Also copies network.geojson + pois.geojson for map layers, writes
+gateways.geojson (signalized crossings of busy streets — the safe "passes"
+through barriers), heatmap.geojson (~100 m cells colored by length-weighted
+average kid-stress: green/yellow/red), and elevation.geojson (hypsometric
+grid).
 """
 
 import itertools
@@ -146,6 +150,34 @@ def export_elevation_heatmap() -> None:
     print(f"wrote {path} ({len(feats)} cells)")
 
 
+def export_gateways(graph: nx.MultiDiGraph) -> None:
+    """Signalized nodes touching a busy street: the safe crossings ("passes")
+    through the barriers that split the low-stress network into islands."""
+    busy_nodes: set[int] = set()
+    for u, v, d in graph.edges(data=True):
+        if d.get("road_busy") or d.get("cls") == "busy_street":
+            busy_nodes.add(u)
+            busy_nodes.add(v)
+    feats: list[dict[str, Any]] = []
+    for n, nd in graph.nodes(data=True):
+        if n in busy_nodes and nd.get("highway") == "traffic_signals":
+            feats.append(
+                {
+                    "type": "Feature",
+                    "geometry": {
+                        "type": "Point",
+                        "coordinates": [round(nd["x"], 6), round(nd["y"], 6)],
+                    },
+                    "properties": {},
+                }
+            )
+    path = WEB_DATA / "gateways.geojson"
+    path.write_text(
+        json.dumps({"type": "FeatureCollection", "features": feats}, separators=(",", ":"))
+    )
+    print(f"wrote {path} ({len(feats)} signalized busy crossings)")
+
+
 def export() -> None:
     with open(config.DATA_DIR / "graph.pkl", "rb") as f:
         graph: nx.MultiDiGraph = pickle.load(f)
@@ -154,7 +186,7 @@ def export() -> None:
     nodes: list[list[float]] = []
     for n, nd in graph.nodes(data=True):
         node_index[n] = len(nodes)
-        nodes.append([round(nd["x"], 6), round(nd["y"], 6)])
+        nodes.append([round(nd["x"], 6), round(nd["y"], 6), round(float(nd.get("elev", 0)), 1)])
 
     name_index: dict[str, int] = {"": 0}
     names: list[str] = [""]
@@ -194,13 +226,13 @@ def export() -> None:
                 node_index[u],
                 node_index[v],
                 round(float(d["length"]), 1),
-                round(float(d["weight"]), 1),
-                round(float(d["weight_solo"]), 1),
                 cls_index[d["cls"]],
                 name_index[name],
                 geom_idx,
                 round(float(d.get("crash_factor", 1.0)), 2),
+                round(float(d.get("xpen", 0.0)), 1),
                 round(float(d.get("climb", 0.0)), 1),
+                1 if d.get("road_busy") else 0,
             ]
         )
 
@@ -219,6 +251,10 @@ def export() -> None:
         f"wrote {path} ({path.stat().st_size / 1e6:.1f} MB): "
         f"{len(nodes)} nodes, {len(edges)} edges, {len(geoms)} geometries"
     )
+    pois = config.RAW_DIR / "pois.geojson"
+    if pois.exists():
+        shutil.copy(pois, WEB_DATA / "pois.geojson")
+    export_gateways(graph)
     export_heatmap(graph)
     export_elevation_heatmap()
 

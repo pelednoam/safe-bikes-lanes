@@ -25,20 +25,31 @@ routing runs in your browser (GitHub Pages, deployed by CI on every push).
    (`pipeline/export_web.py`); a **TypeScript Dijkstra router** (`web/src/router.ts`)
    computes safest + shortest routes entirely in the browser (~40 ms), so the
    whole app hosts as a static site.
-4. The **MapLibre** frontend (`web/`) shows the network colored by safety
-   class; click or search to set start/end, drag markers to explore, toggle
-   "with kids" vs "solo" weighting. Hover any street to inspect it. For each
-   trip it offers up to three distinct options (Safest / Balanced / Direct),
-   each **graded A–F on kid-level stress per meter** with a "Why this route?"
-   panel explaining the trade-offs: what the detour buys, which protected
-   corridors form the backbone, crash hotspots avoided, and any unavoidable
-   compromises.
+4. The **MapLibre + TypeScript** frontend (`web/`) shows the network colored by
+   safety class (dashed where a facility is known from OSM only); click or
+   search to set start/end, drag markers to explore. Three **rider profiles**
+   (young kids / older kids / solo) are computed client-side from raw edge
+   data. Each trip offers up to three distinct options (Safest / Balanced /
+   Direct), **graded A–F on kid-level stress per meter**, with a "Why this
+   route?" panel, a **route ribbon** (stress colors + elevation profile +
+   busy-crossing marks), Street View links at caution spots, **GPX download**,
+   and a printable **cue sheet**.
 5. **Elevation** (AWS Terrain Tiles, ~14 m resolution) gives every edge a climb
    cost; a "prefer flat" toggle penalizes climbing (double on >4% grades) at
-   query time, and each option card shows total climb. Two optional overlays:
-   a **safety heatmap** (~100 m cells, green/yellow/red by average street
-   stress) and an **elevation map** (hypsometric tints, hover for meters).
-6. A **FastAPI** server (`server/`) offers the same routing as an HTTP API for
+   query time. Overlays: **safety heatmap**, **elevation map**, **kid stops**
+   (playgrounds, ice cream, libraries, water, restrooms from OSM), and **safe
+   crossings** (signalized crossings of busy streets — the gateways between
+   low-stress islands).
+6. **Explore modes**: the **Reach map** floods from any point and shows
+   everything reachable within a "perceived distance" comfort budget — the
+   low-stress island around your home. The **Loop planner** builds a round
+   trip of a chosen length with a kid stop halfway, returning a different way.
+7. **Personal feedback**: right-click any street to mark it sketchy — routes
+   avoid it from then on (stored locally, removable from the panel).
+8. The app is a **PWA** (installable, works offline once loaded), and a
+   **monthly GitHub Action** re-pulls every data source, rebuilds, and
+   redeploys automatically so new bike lanes appear without manual work.
+9. A **FastAPI** server (`server/`) offers the same routing as an HTTP API for
    local development and the Python end-to-end tests.
 
 ## Setup
