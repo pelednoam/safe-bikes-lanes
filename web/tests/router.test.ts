@@ -167,6 +167,51 @@ describe("sketchy marks", () => {
   });
 });
 
+describe("heading bias (go with my street choice)", () => {
+  /* Two quiet ways from 0 to 1 (east):
+   *   0 -> 2 (20 m WEST) -> 1 (120 m)  = 140 m, normally cheapest
+   *   0 -> 3 (50 m NORTH) -> 1 (111 m) = 161 m
+   * A rider heading EAST should not be told to start by going west. */
+  function forkRouter(): Router {
+    const dlon = 1 / (111_320 * Math.cos((42.38 * Math.PI) / 180));
+    const dlat = 1 / 110_540;
+    const nodes: [number, number, number][] = [
+      [-71.1, 42.38, 10],
+      [-71.1 + 100 * dlon, 42.38, 10],
+      [-71.1 - 20 * dlon, 42.38, 10],
+      [-71.1, 42.38 + 50 * dlat, 10],
+    ];
+    const edges = [
+      edge(0, 2, 20, "quiet_street", 1),
+      edge(2, 0, 20, "quiet_street", 1),
+      edge(2, 1, 120, "quiet_street", 1),
+      edge(1, 2, 120, "quiet_street", 1),
+      edge(0, 3, 50, "quiet_street", 2),
+      edge(3, 0, 50, "quiet_street", 2),
+      edge(3, 1, 111, "quiet_street", 2),
+      edge(1, 3, 111, "quiet_street", 2),
+    ];
+    return new Router({
+      nodes,
+      names: ["", "West Way", "North Way"],
+      classes: [...CLASSES],
+      edges,
+      geoms: [],
+    });
+  }
+
+  it("avoids starting with a U-turn when biased by heading", () => {
+    const r = forkRouter();
+    const from: [number, number] = [-71.1, 42.38];
+    const to: [number, number] = [-71.1 + 100 / (111_320 * Math.cos((42.38 * Math.PI) / 180)), 42.38];
+    const plain = r.routeOptions(from, to, "young_kids")[0];
+    expect(plain?.payload.summary.meters).toBe(140); // via the westward jog
+    const bias = r.headingBias(from, 90); // rider is heading east
+    const biased = r.routeOptions(from, to, "young_kids", false, bias)[0];
+    expect(biased?.payload.summary.meters).toBe(161); // forward via North Way
+  });
+});
+
 describe("loop planning", () => {
   it("builds a round trip with a stop", () => {
     const pois: PoiFeature[] = [
