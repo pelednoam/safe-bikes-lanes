@@ -3,7 +3,7 @@
 // single tsconfig project; this file is small, boilerplate, and stable.
 "use strict";
 
-const CACHE = "family-bike-router-v3";
+const CACHE = "family-bike-router-v4";
 const ASSETS = [
   ".",
   "index.html",
@@ -39,17 +39,16 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   if (url.origin !== self.location.origin) return; // tiles/CDN: network only
+  // network-first: always prefer fresh app/data, fall back to cache offline
   event.respondWith(
-    caches.match(event.request).then(
-      (cached) =>
-        cached ??
-        fetch(event.request).then((resp) => {
-          if (resp.ok) {
-            const clone = resp.clone();
-            void caches.open(CACHE).then((cache) => cache.put(event.request, clone));
-          }
-          return resp;
-        }),
-    ),
+    fetch(event.request)
+      .then((resp) => {
+        if (resp.ok) {
+          const clone = resp.clone();
+          void caches.open(CACHE).then((cache) => cache.put(event.request, clone));
+        }
+        return resp;
+      })
+      .catch(() => caches.match(event.request).then((c) => c ?? Response.error())),
   );
 });

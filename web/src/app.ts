@@ -150,6 +150,8 @@ let shedMode = false;
 let shedCenter: [number, number] | null = null;
 let sketchyMarks: [number, number][] = loadSketchy();
 let pois: PoiFeature[] = [];
+let loopParams: { km: number; kind: string } | null = null;
+let pendingSelect: RouteOption["id"] | null = null;
 
 const routerReady: Promise<void> = Router.load("data/graph.json")
   .then((r) => {
@@ -166,7 +168,7 @@ const routerReady: Promise<void> = Router.load("data/graph.json")
 el<HTMLDivElement>("loading").textContent = "loading routing graph…";
 el<HTMLDivElement>("loading").style.display = "block";
 
-void fetch("data/pois.geojson")
+const poisReady: Promise<void> = fetch("data/pois.geojson")
   .then((r) => (r.ok ? r.json() : { features: [] }))
   .then((fc: { features: PoiFeature[] }) => {
     pois = fc.features;
@@ -219,11 +221,13 @@ async function requestRoute(): Promise<void> {
     const d = end.getLngLat();
     poiMarker?.remove();
     poiMarker = null;
+    loopParams = null;
     options = router.routeOptions([s.lng, s.lat], [d.lng, d.lat], profileId, preferFlat);
     const fallback = options[0];
     if (!fallback) throw new Error("no route found");
-    selectOption(fallback.id);
-    updateHash();
+    const wanted = pendingSelect;
+    pendingSelect = null;
+    selectOption(wanted !== null && options.some((o) => o.id === wanted) ? wanted : fallback.id);
   } catch (err) {
     options = [];
     selectedId = null;
@@ -245,6 +249,7 @@ async function requestLoop(): Promise<void> {
     errBox.style.display = "block";
     return;
   }
+  await poisReady;
   const km = Number(el<HTMLSelectElement>("loop-dist").value);
   const kind = el<HTMLSelectElement>("loop-stop").value;
   const candidates = kind === "any" ? pois : pois.filter((p) => p.properties.kind === kind);
@@ -264,6 +269,7 @@ async function requestLoop(): Promise<void> {
     end?.remove();
     end = null;
     options = [option];
+    loopParams = { km, kind };
     selectOption("loop");
     poiMarker?.remove();
     poiMarker = new maplibregl.Marker({ color: "#e67e22" })
@@ -293,6 +299,7 @@ function selectOption(id: RouteOption["id"]): void {
   } as GeoJSON.GeoJSON);
   renderOptions();
   showSummary(chosen);
+  updateHash();
 }
 
 function renderOptions(): void {
@@ -493,13 +500,20 @@ el<HTMLButtonElement>("print-cues").addEventListener("click", () => {
 // ---------------------------------------------------------------------------
 
 function updateHash(): void {
-  if (!start || !end) return;
+  if (!start) return;
   const s = start.getLngLat();
-  const d = end.getLngLat();
-  const h =
-    `s=${s.lng.toFixed(6)},${s.lat.toFixed(6)}` +
-    `&e=${d.lng.toFixed(6)},${d.lat.toFixed(6)}&m=${profileId}` +
-    (preferFlat ? "&f=1" : "");
+  const base = `s=${s.lng.toFixed(6)},${s.lat.toFixed(6)}&m=${profileId}` + (preferFlat ? "&f=1" : "");
+  let h: string;
+  if (loopParams !== null) {
+    h = `${base}&l=${loopParams.km},${loopParams.kind}`;
+  } else if (end) {
+    const d = end.getLngLat();
+    h =
+      `${base}&e=${d.lng.toFixed(6)},${d.lat.toFixed(6)}` +
+      (selectedId !== null && selectedId !== "loop" ? `&o=${selectedId}` : "");
+  } else {
+    return;
+  }
   history.replaceState(null, "", `#${h}`);
 }
 
@@ -527,11 +541,51 @@ function parseHash(): void {
     preferFlat = true;
     el<HTMLInputElement>("prefer-flat").checked = true;
   }
+  const o = params.get("o");
+  if (o === "safest" || o === "balanced" || o === "direct") pendingSelect = o;
   const s = parse(params.get("s"));
   const e = parse(params.get("e"));
+  const l = params.get("l");
+  if (s && l !== null) {
+    // shared loop: restore controls, place the start, and re-plan it
+    const [kmRaw, kind] = l.split(",");
+    const km = Number(kmRaw);
+    if (km > 0 && kind) {
+      el<HTMLSelectElement>("loop-dist").value = String(km);
+      el<HTMLSelectElement>("loop-stop").value = kind;
+      start = makeMarker(s, "#2b83ba", "start");
+      void requestLoop();
+      return;
+    }
+  }
   if (s) setPoint("start", s);
   if (e) setPoint("end", e);
 }
+
+// share: Web Share API on mobile, clipboard elsewhere
+el<HTMLButtonElement>("share").addEventListener("click", () => {
+  const url = window.location.href;
+  const btn = el<HTMLButtonElement>("share");
+  const flash = (text: string): void => {
+    const prev = btn.textContent;
+    btn.textContent = text;
+    window.setTimeout(() => {
+      btn.textContent = prev;
+    }, 1500);
+  };
+  if (typeof navigator.share === "function") {
+    void navigator.share({ title: "Family bike route", url }).catch(() => undefined);
+    return;
+  }
+  void navigator.clipboard
+    .writeText(url)
+    .then(() => {
+      flash("✓ copied");
+    })
+    .catch(() => {
+      window.prompt("copy this link:", url);
+    });
+});
 
 // ---------------------------------------------------------------------------
 // address search (Nominatim, bounded to our area)
