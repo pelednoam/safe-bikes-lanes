@@ -11,7 +11,13 @@ import type {
 } from "maplibre-gl";
 
 import { Router } from "./router.js";
-import type { ProtectionClass, RideMode, RouteSummary } from "./types.js";
+import type {
+  ProtectionClass,
+  RideMode,
+  RouteOption,
+  RouteSummary,
+  SafetyGrade,
+} from "./types.js";
 
 declare const maplibregl: typeof import("maplibre-gl");
 
@@ -50,6 +56,14 @@ const CLASS_COLORS: Record<ProtectionClass, string> = {
 };
 
 const BBOX = { west: -71.18, south: 42.34, east: -71.05, north: 42.43 } as const;
+
+const GRADE_COLORS: Record<SafetyGrade, string> = {
+  A: "#1a9850",
+  B: "#66bd63",
+  C: "#fdae61",
+  D: "#f46d43",
+  F: "#d73027",
+};
 
 // ---------------------------------------------------------------------------
 // DOM helpers
@@ -103,6 +117,8 @@ let start: Marker | null = null;
 let end: Marker | null = null;
 let mode: RideMode = "kids";
 let hoverPopup: Popup | null = null;
+let options: RouteOption[] = [];
+let selectedId: RouteOption["id"] | null = null;
 
 const routerReady: Promise<void> = Router.load("data/graph.json")
   .then((r) => {
@@ -162,16 +178,70 @@ async function requestRoute(): Promise<void> {
   try {
     const s = start.getLngLat();
     const d = end.getLngLat();
-    const data = router.route([s.lng, s.lat], [d.lng, d.lat], mode);
-    getSource("route").setData(data.safest.geojson as GeoJSON.GeoJSON);
-    getSource("shortest").setData(data.shortest.geojson as GeoJSON.GeoJSON);
-    showSummary(data.safest.summary);
+    options = router.routeOptions([s.lng, s.lat], [d.lng, d.lat]);
+    const preferred: RouteOption["id"] = mode === "kids" ? "safest" : "balanced";
+    const fallback = options[0];
+    if (!fallback) throw new Error("no route found");
+    selectOption(options.some((o) => o.id === preferred) ? preferred : fallback.id);
     updateHash();
   } catch (err) {
+    options = [];
+    selectedId = null;
+    renderOptions();
     errBox.textContent = err instanceof Error ? err.message : String(err);
     errBox.style.display = "block";
   } finally {
     loading.style.display = "none";
+  }
+}
+
+function selectOption(id: RouteOption["id"]): void {
+  const chosen = options.find((o) => o.id === id);
+  if (!chosen) return;
+  selectedId = id;
+  getSource("route").setData(chosen.payload.geojson as GeoJSON.GeoJSON);
+  const altFeatures = options
+    .filter((o) => o.id !== id)
+    .flatMap((o) => o.payload.geojson.features);
+  getSource("alts").setData({
+    type: "FeatureCollection",
+    features: altFeatures,
+  } as GeoJSON.GeoJSON);
+  renderOptions();
+  showSummary(chosen.payload.summary);
+}
+
+function renderOptions(): void {
+  const box = el<HTMLDivElement>("options");
+  box.innerHTML = "";
+  if (options.length === 0) {
+    box.style.display = "none";
+    return;
+  }
+  box.style.display = "block";
+  if (options.length > 1) {
+    const head = document.createElement("div");
+    head.className = "options-head";
+    head.textContent = `${options.length} route options — safety-rated:`;
+    box.appendChild(head);
+  }
+  for (const o of options) {
+    const card = document.createElement("div");
+    card.className = "option-card" + (o.id === selectedId ? " selected" : "");
+    card.title = o.gradeReason;
+    const s = o.payload.summary;
+    const badge = document.createElement("b");
+    badge.className = "grade";
+    badge.style.background = GRADE_COLORS[o.grade];
+    badge.textContent = o.grade;
+    card.appendChild(badge);
+    const label = document.createElement("span");
+    label.innerHTML = `<b>${o.label}</b> · ${fmtDist(s.meters)} · ~${s.minutes} min · ${s.pct_protected}% protected`;
+    card.appendChild(label);
+    card.addEventListener("click", () => {
+      selectOption(o.id);
+    });
+    box.appendChild(card);
   }
 }
 
@@ -314,13 +384,17 @@ map.on("load", () => {
       "line-opacity": 0.75,
     },
   });
-  map.addSource("shortest", { type: "geojson", data: emptyFC() });
+  map.addSource("alts", { type: "geojson", data: emptyFC() });
   map.addLayer({
-    id: "shortest",
+    id: "alts",
     type: "line",
-    source: "shortest",
-    layout: { visibility: "none" },
-    paint: { "line-color": "#555", "line-width": 3, "line-dasharray": [2, 2] },
+    source: "alts",
+    paint: {
+      "line-color": "#777",
+      "line-width": 3,
+      "line-dasharray": [2, 2],
+      "line-opacity": 0.7,
+    },
   });
   map.addSource("route", { type: "geojson", data: emptyFC() });
   map.addLayer({
@@ -376,8 +450,11 @@ el<HTMLButtonElement>("reset").addEventListener("click", () => {
   start?.remove();
   end?.remove();
   start = end = null;
+  options = [];
+  selectedId = null;
+  renderOptions();
   getSource("route").setData(emptyFC());
-  getSource("shortest").setData(emptyFC());
+  getSource("alts").setData(emptyFC());
   el<HTMLDivElement>("summary").style.display = "none";
   el<HTMLDivElement>("error").style.display = "none";
   history.replaceState(null, "", "#");
@@ -394,11 +471,6 @@ el<HTMLButtonElement>("swap").addEventListener("click", () => {
 el<HTMLInputElement>("show-net").addEventListener("change", (e: Event) => {
   const checked = (e.target as HTMLInputElement).checked;
   map.setLayoutProperty("network", "visibility", checked ? "visible" : "none");
-});
-
-el<HTMLInputElement>("show-short").addEventListener("change", (e: Event) => {
-  const checked = (e.target as HTMLInputElement).checked;
-  map.setLayoutProperty("shortest", "visibility", checked ? "visible" : "none");
 });
 
 for (const radio of document.querySelectorAll<HTMLInputElement>("input[name=mode]")) {

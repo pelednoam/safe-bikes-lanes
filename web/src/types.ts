@@ -59,3 +59,15 @@ export interface RouteResponse {
   safest: RoutePayload;
   shortest: RoutePayload;
 }
+
+/** Safety grade for a whole route: average kid-level stress per meter. */
+export type SafetyGrade = "A" | "B" | "C" | "D" | "F";
+
+export interface RouteOption {
+  id: "safest" | "balanced" | "direct";
+  label: string;
+  grade: SafetyGrade;
+  /** One-line justification of the grade. */
+  gradeReason: string;
+  payload: RoutePayload;
+}

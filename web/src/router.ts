@@ -7,8 +7,10 @@ import type {
   LineFeature,
   ProtectionClass,
   RideMode,
+  RouteOption,
   RoutePayload,
   RouteResponse,
+  SafetyGrade,
 } from "./types.js";
 
 /** Raw shape of graph.json. */
@@ -319,15 +321,60 @@ export class Router {
     return runs.sort((a, b) => b.meters - a.meters);
   }
 
+  /** Grade a route by its average kid-level stress cost per meter (crash
+   * factors and crossing penalties included), regardless of riding mode —
+   * safety is rated on the same scale for every option. */
+  private gradeRoute(edgePath: number[]): { grade: SafetyGrade; reason: string } {
+    let len = 0;
+    let kidsCost = 0;
+    let protectedM = 0;
+    for (const ei of edgePath) {
+      const e = this.g.edges[ei];
+      if (!e) continue;
+      len += e[2];
+      kidsCost += e[3];
+      const cls = this.g.classes[e[5]];
+      if (cls !== undefined && (PROTECTED.has(cls) || cls === "buffered")) protectedM += e[2];
+    }
+    const avg = len > 0 ? kidsCost / len : 1;
+    const stress = this.stressMeters(edgePath);
+    const grade: SafetyGrade =
+      avg <= 1.6 ? "A" : avg <= 2.4 ? "B" : avg <= 4 ? "C" : avg <= 8 ? "D" : "F";
+    const pctProt = len > 0 ? Math.round((100 * protectedM) / len) : 0;
+    const reason =
+      `avg kid-stress ${avg.toFixed(1)}× per meter — ${pctProt}% protected, ` +
+      (stress < 30 ? "no busy/moderate streets" : `${fmt(stress)} on busy/moderate streets`);
+    return { grade, reason };
+  }
+
   private explain(
     safestPath: number[],
     shortestPath: number[],
     safest: RoutePayload,
     shortest: RoutePayload,
     mode: RideMode,
+    isDirect = false,
   ): string[] {
-    const reasons: string[] = [];
     const s = safest.summary;
+    if (isDirect) {
+      const reasons = [
+        "This is the shortest possible route — it minimizes distance, not stress.",
+      ];
+      const hotspot = this.hotspotMeters(safestPath);
+      if (hotspot > 150) {
+        reasons.push(
+          `It passes ~${fmt(hotspot)} of bike-crash hotspots ` +
+            `(MassDOT crash records, 2021–2026).`,
+        );
+      }
+      for (const c of s.cautions) {
+        reasons.push(
+          `${fmt(c.meters)} of ${c.cls.replace("_", " ")} along ${c.name}.`,
+        );
+      }
+      return reasons;
+    }
+    const reasons: string[] = [];
     const detour = s.detour_pct ?? 0;
     const safeStress = this.stressMeters(safestPath);
     const shortStress = this.stressMeters(shortestPath);
@@ -415,5 +462,54 @@ export class Router {
         : 0;
     safest.summary.explanation = this.explain(safestPath, shortestPath, safest, shortest, mode);
     return { safest, shortest };
+  }
+
+  /** Up to three distinct options (safest / balanced / direct), each graded
+   * for safety on the same kid-stress scale and individually explained.
+   * Identical paths are deduped, so fewer options appear when the safest
+   * route already is the direct one. */
+  routeOptions(start: [number, number], end: [number, number]): RouteOption[] {
+    const a = this.nearestNode(start[0], start[1]);
+    const b = this.nearestNode(end[0], end[1]);
+    if (a === b) throw new Error("start and end snap to the same intersection");
+    const candidates: { id: RouteOption["id"]; label: string; col: WeightColumn; mode: RideMode }[] = [
+      { id: "safest", label: "Safest", col: 3, mode: "kids" },
+      { id: "balanced", label: "Balanced", col: 4, mode: "solo" },
+      { id: "direct", label: "Direct", col: 2, mode: "solo" },
+    ];
+    const paths = new Map<RouteOption["id"], number[]>();
+    for (const c of candidates) {
+      const p = this.shortestPath(a, b, c.col);
+      if (p === null) throw new Error("no path found");
+      paths.set(c.id, p);
+    }
+    const directPath = paths.get("direct") as number[];
+    const directPayload = this.payload(directPath);
+
+    const options: RouteOption[] = [];
+    const seen = new Set<string>();
+    for (const c of candidates) {
+      const path = paths.get(c.id) as number[];
+      const key = path.join(",");
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const payload = c.id === "direct" ? directPayload : this.payload(path);
+      payload.summary.shortest_meters = directPayload.summary.meters;
+      payload.summary.detour_pct =
+        directPayload.summary.meters > 0
+          ? Math.round(100 * (payload.summary.meters / directPayload.summary.meters - 1))
+          : 0;
+      payload.summary.explanation = this.explain(
+        path,
+        directPath,
+        payload,
+        directPayload,
+        c.mode,
+        c.id === "direct",
+      );
+      const { grade, reason } = this.gradeRoute(path);
+      options.push({ id: c.id, label: c.label, grade, gradeReason: reason, payload });
+    }
+    return options;
   }
 }
