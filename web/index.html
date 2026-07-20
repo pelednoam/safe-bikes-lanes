@@ -114,10 +114,44 @@
                          text-align: left; font-variant-numeric: tabular-nums; }
   #about-close { position: absolute; top: 10px; right: 12px; margin: 0; }
   #about ol { padding-left: 18px; } #about li { margin: 4px 0; }
+  #nav-banner {
+    display: none; position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+    z-index: 6; background: var(--bg); color: var(--fg); border-radius: 12px;
+    box-shadow: 0 3px 14px rgba(0,0,0,.35); padding: 10px 14px; min-width: 260px;
+    max-width: calc(100% - 90px); text-align: center;
+  }
+  #nav-main { display: flex; align-items: center; gap: 12px; justify-content: center; }
+  #nav-icon { font-size: 34px; line-height: 1; }
+  #nav-texts { text-align: left; }
+  #nav-dist { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  #nav-street { font-size: 15px; color: var(--muted); max-width: 220px;
+                overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #nav-remaining { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  #nav-buttons button { margin-top: 6px; padding: 4px 10px; }
+  .nav-dot {
+    width: 18px; height: 18px; border-radius: 50%; background: #2b6ef2;
+    border: 3px solid #fff; box-shadow: 0 0 8px rgba(43,110,242,.9);
+  }
+  body.navigating #panel { display: none; }
 </style>
 </head>
 <body>
 <div id="map"></div>
+<div id="nav-banner">
+  <div id="nav-main">
+    <span id="nav-icon">⬆</span>
+    <div id="nav-texts">
+      <div id="nav-dist">–</div>
+      <div id="nav-street">–</div>
+    </div>
+  </div>
+  <div id="nav-remaining"></div>
+  <div id="nav-buttons">
+    <button id="nav-mute" title="voice on/off">🔊</button>
+    <button id="nav-recenter" style="display:none">⌖ recenter</button>
+    <button id="nav-exit">✕ end</button>
+  </div>
+</div>
 <div id="panel">
   <button id="panel-collapse" title="collapse panel">▾</button>
   <h1>Family Bike Router</h1>
@@ -170,6 +204,7 @@
     <button id="gpx" title="Download GPX for your phone or bike computer">⬇ GPX</button>
     <button id="print-cues" title="Printable cue sheet">🖨 Cue sheet</button>
     <button id="share" title="Copy a link that opens exactly this route">🔗 Share</button>
+    <button id="nav-btn" title="Turn-by-turn navigation following your location (voice + screen stays on)">▶ Navigate</button>
   </div>
   <div id="sketchy-section">
     <b>Your sketchy marks</b> (routes avoid these)
