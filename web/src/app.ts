@@ -21,6 +21,16 @@ import {
   sunsetTime,
   trackBearing,
 } from "./nav.js";
+import type { HazardCategory, HazardReport } from "./hazards.js";
+import {
+  addHazard,
+  buildReportText,
+  downscalePhoto,
+  getHazardPhoto,
+  HAZARD_LABELS,
+  listHazards,
+  removeHazard,
+} from "./hazards.js";
 import type { RideSummary } from "./rides.js";
 import {
   clearRides,
@@ -178,14 +188,26 @@ let shedMode = false;
 let shedCenter: [number, number] | null = null;
 let sketchyMarks: [number, number][] = loadSketchy();
 let pois: PoiFeature[] = [];
+let hazards: HazardReport[] = [];
+let hazardPendingLoc: [number, number] | null = null;
+let hazardPhoto: Blob | null = null;
+
+/** Routes avoid both quick sketchy marks and full hazard reports. */
+function applyAvoidPoints(): void {
+  router?.setSketchyMarks([
+    ...sketchyMarks,
+    ...hazards.map((h): [number, number] => [h.lon, h.lat]),
+  ]);
+}
 let loopParams: { km: number; kind: string } | null = null;
 let pendingSelect: RouteOption["id"] | null = null;
 
 const routerReady: Promise<void> = Router.load("data/graph.json")
   .then((r) => {
     router = r;
-    router.setSketchyMarks(sketchyMarks);
+    applyAvoidPoints();
     renderSketchy();
+    void refreshHazards();
     el<HTMLDivElement>("loading").style.display = "none";
   })
   .catch((err: unknown) => {
@@ -749,7 +771,7 @@ function renderSketchy(): void {
     rm.addEventListener("click", () => {
       sketchyMarks = sketchyMarks.filter((_, j) => j !== i);
       saveSketchy(sketchyMarks);
-      router?.setSketchyMarks(sketchyMarks);
+      applyAvoidPoints();
       renderSketchy();
       void requestRoute();
     });
@@ -904,6 +926,61 @@ map.on("load", () => {
     layout: { "line-cap": "round", "line-join": "round" },
     paint: { "line-color": ["get", "color"], "line-width": 5 },
   });
+  map.addSource("hazardpts", { type: "geojson", data: emptyFC() });
+  map.addLayer({
+    id: "hazardpts",
+    type: "circle",
+    source: "hazardpts",
+    paint: {
+      "circle-radius": 7,
+      "circle-color": "#e67e22",
+      "circle-stroke-color": "#fff",
+      "circle-stroke-width": 2,
+    },
+  });
+  map.on("click", "hazardpts", (e: MapLayerMouseEvent) => {
+    const f = e.features?.[0];
+    if (!f) return;
+    const props = f.properties as {
+      id?: string;
+      category?: HazardCategory;
+      note?: string;
+      t?: number;
+      hasPhoto?: boolean;
+    };
+    if (props.id === undefined) return;
+    const box = document.createElement("div");
+    const title = document.createElement("b");
+    title.textContent = `⚠ ${props.category !== undefined ? HAZARD_LABELS[props.category] : "hazard"}`;
+    box.appendChild(title);
+    if (props.note) {
+      const note = document.createElement("div");
+      note.textContent = props.note;
+      box.appendChild(note);
+    }
+    const when = document.createElement("small");
+    when.textContent = props.t !== undefined ? new Date(props.t).toLocaleDateString() : "";
+    box.appendChild(when);
+    if (props.hasPhoto) {
+      const img = document.createElement("img");
+      img.style.cssText = "max-width:200px;display:block;border-radius:6px;margin:6px 0";
+      void getHazardPhoto(props.id).then((blob) => {
+        if (blob) img.src = URL.createObjectURL(blob);
+      });
+      box.appendChild(img);
+    }
+    const rm = document.createElement("button");
+    rm.textContent = "✕ remove";
+    const popup = new maplibregl.Popup().setLngLat(e.lngLat).setDOMContent(box).addTo(map);
+    rm.addEventListener("click", () => {
+      if (props.id === undefined) return;
+      void removeHazard(props.id).then(() => {
+        popup.remove();
+        void refreshHazards().then(() => requestRoute());
+      });
+    });
+    box.appendChild(rm);
+  });
   map.addSource("history", { type: "geojson", data: emptyFC() });
   map.addLayer({
     id: "history",
@@ -1019,6 +1096,7 @@ map.on("load", () => {
     hoverPopup = null;
   });
 
+  void refreshHazards();
   parseHash();
 });
 
@@ -1035,16 +1113,25 @@ map.on("click", (e: MapMouseEvent) => {
 // touch devices have no right-click: a long-press on a street opens the
 // same "mark sketchy" popup
 function openSketchyPopup(lngLat: [number, number]): void {
+  const box = document.createElement("div");
   const btn = document.createElement("button");
   btn.textContent = "⚠ mark this spot as sketchy";
-  const popup = new maplibregl.Popup().setLngLat(lngLat).setDOMContent(btn).addTo(map);
+  box.appendChild(btn);
+  const report = document.createElement("button");
+  report.textContent = "📷 report hazard…";
+  box.appendChild(report);
+  const popup = new maplibregl.Popup().setLngLat(lngLat).setDOMContent(box).addTo(map);
   btn.addEventListener("click", () => {
     sketchyMarks.push(lngLat);
     saveSketchy(sketchyMarks);
-    router?.setSketchyMarks(sketchyMarks);
+    applyAvoidPoints();
     renderSketchy();
     popup.remove();
     void requestRoute();
+  });
+  report.addEventListener("click", () => {
+    popup.remove();
+    openHazardDialog(lngLat[0], lngLat[1]);
   });
 }
 
@@ -1195,7 +1282,11 @@ searchInput.addEventListener("input", () => {
 
 document.addEventListener("keydown", (e: KeyboardEvent) => {
   if (e.key === "Escape") {
-    if (el<HTMLDialogElement>("about").open || el<HTMLDialogElement>("rides").open) {
+    if (
+      el<HTMLDialogElement>("about").open ||
+      el<HTMLDialogElement>("rides").open ||
+      el<HTMLDialogElement>("hazard").open
+    ) {
       return; // dialogs handle it
     }
     if (shedMode) exitShedMode();
@@ -1256,6 +1347,109 @@ function fillAbout(): void {
     })
     .catch(() => undefined);
 }
+
+// ---------------------------------------------------------------------------
+// hazard reports (category + note + photo), stored on-device
+// ---------------------------------------------------------------------------
+
+async function refreshHazards(): Promise<void> {
+  try {
+    hazards = await listHazards();
+  } catch {
+    hazards = [];
+  }
+  applyAvoidPoints();
+  const features = hazards.map((h) => ({
+    type: "Feature",
+    geometry: { type: "Point", coordinates: [h.lon, h.lat] },
+    properties: { id: h.id, category: h.category, note: h.note, t: h.t, hasPhoto: h.hasPhoto },
+  }));
+  const src = map.getSource("hazardpts");
+  if (src) {
+    (src as GeoJSONSource).setData({
+      type: "FeatureCollection",
+      features,
+    } as GeoJSON.GeoJSON);
+  }
+}
+
+function openHazardDialog(lon: number, lat: number): void {
+  hazardPendingLoc = [lon, lat];
+  hazardPhoto = null;
+  el<HTMLSelectElement>("hazard-category").value = "surface";
+  el<HTMLInputElement>("hazard-note").value = "";
+  el<HTMLInputElement>("hazard-photo").value = "";
+  const preview = el<HTMLImageElement>("hazard-preview");
+  preview.style.display = "none";
+  preview.src = "";
+  el<HTMLDivElement>("hazard-loc").textContent =
+    `at ${lat.toFixed(5)}, ${lon.toFixed(5)} — saved reports appear on the map and routes avoid them`;
+  el<HTMLDialogElement>("hazard").showModal();
+}
+
+function pendingHazardReport(): HazardReport | null {
+  if (!hazardPendingLoc) return null;
+  return {
+    id: `${Date.now()}`,
+    t: Date.now(),
+    lon: hazardPendingLoc[0],
+    lat: hazardPendingLoc[1],
+    category: el<HTMLSelectElement>("hazard-category").value as HazardCategory,
+    note: el<HTMLInputElement>("hazard-note").value,
+    hasPhoto: hazardPhoto !== null,
+  };
+}
+
+el<HTMLInputElement>("hazard-photo").addEventListener("change", () => {
+  const file = el<HTMLInputElement>("hazard-photo").files?.[0] ?? null;
+  hazardPhoto = file;
+  const preview = el<HTMLImageElement>("hazard-preview");
+  if (file) {
+    preview.src = URL.createObjectURL(file);
+    preview.style.display = "block";
+  } else {
+    preview.style.display = "none";
+  }
+});
+
+el<HTMLButtonElement>("hazard-save").addEventListener("click", () => {
+  const report = pendingHazardReport();
+  if (!report) return;
+  void (async () => {
+    const photo = hazardPhoto ? await downscalePhoto(hazardPhoto) : null;
+    await addHazard(report, photo);
+    await refreshHazards();
+    el<HTMLDialogElement>("hazard").close();
+    speak("hazard saved. routes will avoid it.");
+    void requestRoute();
+  })().catch(() => {
+    el<HTMLDivElement>("hazard-loc").textContent = "could not save (storage unavailable)";
+  });
+});
+
+el<HTMLButtonElement>("hazard-share").addEventListener("click", () => {
+  const report = pendingHazardReport();
+  if (!report) return;
+  const text = buildReportText(report);
+  const files =
+    hazardPhoto !== null
+      ? [new File([hazardPhoto], "hazard.jpg", { type: hazardPhoto.type || "image/jpeg" })]
+      : [];
+  const payload = files.length > 0 ? { text, files } : { text };
+  if (typeof navigator.canShare === "function" && navigator.canShare(payload)) {
+    void navigator.share(payload).catch(() => undefined);
+  } else {
+    window.location.href = `mailto:?subject=${encodeURIComponent("Bike hazard report")}&body=${encodeURIComponent(text)}`;
+  }
+});
+
+el<HTMLButtonElement>("hazard-close").addEventListener("click", () => {
+  el<HTMLDialogElement>("hazard").close();
+});
+
+el<HTMLButtonElement>("nav-report").addEventListener("click", () => {
+  if (navLastPos) openHazardDialog(navLastPos[0], navLastPos[1]);
+});
 
 // ---------------------------------------------------------------------------
 // ride history dialog
@@ -1696,7 +1890,7 @@ el<HTMLButtonElement>("nav-hazard").addEventListener("click", () => {
   if (!navLastPos) return;
   sketchyMarks.push(navLastPos);
   saveSketchy(sketchyMarks);
-  router?.setSketchyMarks(sketchyMarks);
+  applyAvoidPoints();
   renderSketchy();
   vibrate([80]);
   speak("marked. future routes will avoid this spot.");
