@@ -102,17 +102,19 @@
   label.toggle { display: block; margin-top: 6px; user-select: none; cursor: pointer; }
   #error { color: #b00; display: none; margin-top: 6px; }
   #loading { display: none; color: var(--muted); margin-top: 6px; }
-  #about { max-width: 540px; width: calc(100% - 40px); max-height: 85vh;
+  #about, #rides { max-width: 540px; width: calc(100% - 40px); max-height: 85vh;
            background: var(--bg); color: var(--fg);
            border: none; border-radius: 12px; padding: 18px 22px; font-size: 13px;
            box-shadow: 0 6px 30px rgba(0,0,0,.35); }
-  #about::backdrop { background: rgba(0,0,0,.45); }
-  #about h2 { font-size: 15px; margin: 14px 0 6px; }
-  #about h2:first-of-type { margin-top: 0; padding-right: 30px; }
-  #about table { border-collapse: collapse; width: 100%; margin: 6px 0; }
-  #about td, #about th { border-bottom: 1px solid var(--border); padding: 3px 6px;
-                         text-align: left; font-variant-numeric: tabular-nums; }
-  #about-close { position: absolute; top: 10px; right: 12px; margin: 0; }
+  #about::backdrop, #rides::backdrop { background: rgba(0,0,0,.45); }
+  #about h2, #rides h2 { font-size: 15px; margin: 14px 0 6px; }
+  #about h2:first-of-type, #rides h2:first-of-type { margin-top: 0; padding-right: 30px; }
+  #about table, #rides table { border-collapse: collapse; width: 100%; margin: 6px 0; }
+  #about td, #about th, #rides td, #rides th {
+    border-bottom: 1px solid var(--border); padding: 3px 6px;
+    text-align: left; font-variant-numeric: tabular-nums; }
+  #rides td button { margin: 0 2px 0 0; padding: 1px 7px; font-size: 11px; }
+  #about-close, #rides-close { position: absolute; top: 10px; right: 12px; margin: 0; }
   #about ol { padding-left: 18px; } #about li { margin: 4px 0; }
   #nav-banner {
     display: none; position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
@@ -189,6 +191,7 @@
       <option value="any">any stop</option>
     </select>
     <button id="loop-btn" style="margin:0" title="Round trip from the start marker with a stop halfway">↻ Loop</button>
+    <button id="record-btn" style="margin:0" title="Record a free ride (no planned route); saved to your ride history">● Record</button>
   </div>
   <div id="shed-panel">
     <label>comfort budget <input type="range" id="shed-budget" min="1" max="8" step="0.5" value="3">
@@ -239,7 +242,18 @@
     <input type="checkbox" id="show-gates"> safe crossings</label>
   <div class="legend" id="legend"></div>
   <button id="about-btn" style="margin-top:10px">ℹ How safety is decided</button>
+  <button id="rides-btn" style="margin-top:10px" title="Your ride history and stats (stored on this device only)">📊 Rides</button>
 </div>
+<dialog id="rides">
+  <button id="rides-close" title="close">✕</button>
+  <h2>Your rides</h2>
+  <div id="ride-totals"></div>
+  <table id="ride-list"></table>
+  <p class="hint" style="color:var(--muted)">Rides are recorded while navigating or with
+  ● Record, and stored only on this device. Auto-saves on arrival or when you end
+  navigation; free recordings stop themselves after 10 minutes without movement.</p>
+  <button id="rides-clear" title="Delete all ride history">🗑 clear history</button>
+</dialog>
 <dialog id="about">
   <button id="about-close" title="close">✕</button>
   <h2>How this router decides what's safe</h2>
