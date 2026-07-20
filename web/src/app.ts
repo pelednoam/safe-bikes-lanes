@@ -10,6 +10,8 @@ import type {
   Popup,
 } from "maplibre-gl";
 
+import type { Maneuver, Track } from "./nav.js";
+import { buildManeuvers, buildTrack, snapToTrack, trackBearing } from "./nav.js";
 import { buildCues, PROFILES, Router, toGPX } from "./router.js";
 import type {
   PoiFeature,
@@ -1220,6 +1222,194 @@ el<HTMLButtonElement>("about-close").addEventListener("click", () => {
 });
 el<HTMLDialogElement>("about").addEventListener("click", (e: MouseEvent) => {
   if (e.target === el<HTMLDialogElement>("about")) el<HTMLDialogElement>("about").close();
+});
+
+// ---------------------------------------------------------------------------
+// turn-by-turn navigation: follows the GPS along the selected route with a
+// banner, voice instructions, wake lock, and automatic rerouting
+// ---------------------------------------------------------------------------
+
+const OFF_ROUTE_M = 40;
+const OFF_ROUTE_STRIKES = 3;
+const ANNOUNCE_FAR_M = 90;
+const ANNOUNCE_NOW_M = 25;
+
+let navActive = false;
+let navWatchId: number | null = null;
+let navTrack: Track | null = null;
+let navManeuvers: Maneuver[] = [];
+let navNext = 0;
+/** 0 = nothing announced for navNext, 1 = "in X m" said, 2 = "now" said */
+let navAnnounceStage = 0;
+let navHint = -1;
+let navMuted = false;
+let navFollowing = true;
+let navDest: [number, number] | null = null;
+let navOffCount = 0;
+let navDot: Marker | null = null;
+let navArrived = false;
+let wakeLock: WakeLockSentinel | null = null;
+
+function speak(text: string): void {
+  if (navMuted || !("speechSynthesis" in window)) return;
+  window.speechSynthesis.cancel();
+  const utter = new SpeechSynthesisUtterance(text);
+  utter.rate = 1.05;
+  window.speechSynthesis.speak(utter);
+}
+
+function rebuildNavFromSelected(): boolean {
+  const sel = options.find((o) => o.id === selectedId);
+  if (!sel) return false;
+  navTrack = buildTrack(sel.payload);
+  navManeuvers = buildManeuvers(sel.payload);
+  navNext = 0;
+  navAnnounceStage = 0;
+  navHint = -1;
+  navArrived = false;
+  return true;
+}
+
+function navUpdateBanner(distToNext: number, remainingM: number): void {
+  const m = navManeuvers[navNext];
+  el<HTMLElement>("nav-icon").textContent = m?.icon ?? "⬆";
+  el<HTMLElement>("nav-dist").textContent =
+    distToNext < 15 ? "now" : fmtDist(Math.round(distToNext / 10) * 10);
+  el<HTMLElement>("nav-street").textContent = m?.text ?? "";
+  const mins = Math.round((remainingM / 1000 / PROFILES[profileId].paceKmh) * 60);
+  el<HTMLElement>("nav-remaining").textContent =
+    `${fmtDist(remainingM)} to go · ~${mins} min`;
+}
+
+function navOnPosition(pos: GeolocationPosition): void {
+  if (!navActive || !navTrack || !router) return;
+  const lon = pos.coords.longitude;
+  const lat = pos.coords.latitude;
+  if (!navDot) {
+    const dot = document.createElement("div");
+    dot.className = "nav-dot";
+    navDot = new maplibregl.Marker({ element: dot }).setLngLat([lon, lat]).addTo(map);
+  } else {
+    navDot.setLngLat([lon, lat]);
+  }
+  const snap = snapToTrack(navTrack, lon, lat, navHint);
+
+  // off-route: three bad fixes in a row trigger a reroute to the destination
+  if (snap.offM > OFF_ROUTE_M) {
+    navOffCount++;
+    if (navOffCount >= OFF_ROUTE_STRIKES && navDest) {
+      navOffCount = 0;
+      speak("off route. rerouting.");
+      try {
+        options = router.routeOptions([lon, lat], navDest, profileId, preferFlat);
+        const first = options[0];
+        if (first) {
+          selectOption(first.id);
+          rebuildNavFromSelected();
+        }
+      } catch {
+        el<HTMLElement>("nav-street").textContent = "off route — can't reroute here";
+      }
+    }
+    return;
+  }
+  navOffCount = 0;
+  navHint = snap.idx;
+
+  // advance past maneuvers we've already ridden through
+  while (navNext < navManeuvers.length - 1 && (navManeuvers[navNext]?.atM ?? 0) < snap.alongM - 20) {
+    navNext++;
+    navAnnounceStage = 0;
+  }
+  const next = navManeuvers[navNext];
+  const distToNext = Math.max(0, (next?.atM ?? 0) - snap.alongM);
+  const remaining = Math.max(0, navTrack.totalM - snap.alongM);
+  navUpdateBanner(distToNext, remaining);
+
+  if (next && navAnnounceStage < 2 && distToNext <= ANNOUNCE_NOW_M) {
+    speak(next.voice);
+    navAnnounceStage = 2;
+  } else if (next && navAnnounceStage < 1 && distToNext <= ANNOUNCE_FAR_M) {
+    speak(`in ${Math.round(distToNext / 10) * 10} meters, ${next.voice}`);
+    navAnnounceStage = 1;
+  }
+
+  if (remaining < 15 && !navArrived) {
+    navArrived = true;
+    speak("you have arrived");
+    el<HTMLElement>("nav-dist").textContent = "🏁";
+    el<HTMLElement>("nav-street").textContent = "arrived!";
+  }
+
+  if (navFollowing) {
+    map.easeTo({
+      center: [lon, lat],
+      zoom: 16.8,
+      pitch: 50,
+      bearing: trackBearing(navTrack, snap.idx),
+      duration: 900,
+    });
+  }
+}
+
+async function startNav(): Promise<void> {
+  if (!rebuildNavFromSelected()) return;
+  const destLngLat = end?.getLngLat() ?? start?.getLngLat();
+  if (!destLngLat) return;
+  navDest = [destLngLat.lng, destLngLat.lat];
+  navActive = true;
+  navFollowing = true;
+  document.body.classList.add("navigating");
+  el<HTMLDivElement>("nav-banner").style.display = "block";
+  el<HTMLButtonElement>("nav-recenter").style.display = "none";
+  try {
+    wakeLock = await navigator.wakeLock.request("screen");
+  } catch {
+    wakeLock = null; // unsupported or denied — navigation still works
+  }
+  navWatchId = navigator.geolocation.watchPosition(
+    navOnPosition,
+    () => {
+      el<HTMLElement>("nav-street").textContent = "location unavailable — check permissions";
+    },
+    { enableHighAccuracy: true, maximumAge: 1000, timeout: 15000 },
+  );
+  speak("navigation started");
+}
+
+function exitNav(): void {
+  navActive = false;
+  if (navWatchId !== null) navigator.geolocation.clearWatch(navWatchId);
+  navWatchId = null;
+  void wakeLock?.release().catch(() => undefined);
+  wakeLock = null;
+  navDot?.remove();
+  navDot = null;
+  if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+  document.body.classList.remove("navigating");
+  el<HTMLDivElement>("nav-banner").style.display = "none";
+  const threeD = el<HTMLInputElement>("show-3d").checked;
+  map.easeTo({ pitch: threeD ? 60 : 0, bearing: 0, duration: 800 });
+}
+
+el<HTMLButtonElement>("nav-btn").addEventListener("click", () => {
+  void startNav();
+});
+el<HTMLButtonElement>("nav-exit").addEventListener("click", exitNav);
+el<HTMLButtonElement>("nav-mute").addEventListener("click", () => {
+  navMuted = !navMuted;
+  el<HTMLButtonElement>("nav-mute").textContent = navMuted ? "🔇" : "🔊";
+  if (navMuted && "speechSynthesis" in window) window.speechSynthesis.cancel();
+});
+el<HTMLButtonElement>("nav-recenter").addEventListener("click", () => {
+  navFollowing = true;
+  el<HTMLButtonElement>("nav-recenter").style.display = "none";
+});
+map.on("dragstart", () => {
+  if (navActive) {
+    navFollowing = false;
+    el<HTMLButtonElement>("nav-recenter").style.display = "inline-block";
+  }
 });
 
 // ---------------------------------------------------------------------------
