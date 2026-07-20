@@ -25,6 +25,13 @@ const CLASS_COLORS = {
     busy_street: "#d73027",
 };
 const BBOX = { west: -71.18, south: 42.34, east: -71.05, north: 42.43 };
+const GRADE_COLORS = {
+    A: "#1a9850",
+    B: "#66bd63",
+    C: "#fdae61",
+    D: "#f46d43",
+    F: "#d73027",
+};
 // ---------------------------------------------------------------------------
 // DOM helpers
 // ---------------------------------------------------------------------------
@@ -71,6 +78,8 @@ let start = null;
 let end = null;
 let mode = "kids";
 let hoverPopup = null;
+let options = [];
+let selectedId = null;
 const routerReady = Router.load("data/graph.json")
     .then((r) => {
     router = r;
@@ -132,18 +141,72 @@ async function requestRoute() {
     try {
         const s = start.getLngLat();
         const d = end.getLngLat();
-        const data = router.route([s.lng, s.lat], [d.lng, d.lat], mode);
-        getSource("route").setData(data.safest.geojson);
-        getSource("shortest").setData(data.shortest.geojson);
-        showSummary(data.safest.summary);
+        options = router.routeOptions([s.lng, s.lat], [d.lng, d.lat]);
+        const preferred = mode === "kids" ? "safest" : "balanced";
+        const fallback = options[0];
+        if (!fallback)
+            throw new Error("no route found");
+        selectOption(options.some((o) => o.id === preferred) ? preferred : fallback.id);
         updateHash();
     }
     catch (err) {
+        options = [];
+        selectedId = null;
+        renderOptions();
         errBox.textContent = err instanceof Error ? err.message : String(err);
         errBox.style.display = "block";
     }
     finally {
         loading.style.display = "none";
+    }
+}
+function selectOption(id) {
+    const chosen = options.find((o) => o.id === id);
+    if (!chosen)
+        return;
+    selectedId = id;
+    getSource("route").setData(chosen.payload.geojson);
+    const altFeatures = options
+        .filter((o) => o.id !== id)
+        .flatMap((o) => o.payload.geojson.features);
+    getSource("alts").setData({
+        type: "FeatureCollection",
+        features: altFeatures,
+    });
+    renderOptions();
+    showSummary(chosen.payload.summary);
+}
+function renderOptions() {
+    const box = el("options");
+    box.innerHTML = "";
+    if (options.length === 0) {
+        box.style.display = "none";
+        return;
+    }
+    box.style.display = "block";
+    if (options.length > 1) {
+        const head = document.createElement("div");
+        head.className = "options-head";
+        head.textContent = `${options.length} route options — safety-rated:`;
+        box.appendChild(head);
+    }
+    for (const o of options) {
+        const card = document.createElement("div");
+        card.className = "option-card" + (o.id === selectedId ? " selected" : "");
+        card.title = o.gradeReason;
+        const s = o.payload.summary;
+        const badge = document.createElement("b");
+        badge.className = "grade";
+        badge.style.background = GRADE_COLORS[o.grade];
+        badge.textContent = o.grade;
+        card.appendChild(badge);
+        const label = document.createElement("span");
+        label.innerHTML = `<b>${o.label}</b> · ${fmtDist(s.meters)} · ~${s.minutes} min · ${s.pct_protected}% protected`;
+        card.appendChild(label);
+        card.addEventListener("click", () => {
+            selectOption(o.id);
+        });
+        box.appendChild(card);
     }
 }
 function showSummary(s) {
@@ -283,13 +346,17 @@ map.on("load", () => {
             "line-opacity": 0.75,
         },
     });
-    map.addSource("shortest", { type: "geojson", data: emptyFC() });
+    map.addSource("alts", { type: "geojson", data: emptyFC() });
     map.addLayer({
-        id: "shortest",
+        id: "alts",
         type: "line",
-        source: "shortest",
-        layout: { visibility: "none" },
-        paint: { "line-color": "#555", "line-width": 3, "line-dasharray": [2, 2] },
+        source: "alts",
+        paint: {
+            "line-color": "#777",
+            "line-width": 3,
+            "line-dasharray": [2, 2],
+            "line-opacity": 0.7,
+        },
     });
     map.addSource("route", { type: "geojson", data: emptyFC() });
     map.addLayer({
@@ -343,8 +410,11 @@ el("reset").addEventListener("click", () => {
     start?.remove();
     end?.remove();
     start = end = null;
+    options = [];
+    selectedId = null;
+    renderOptions();
     getSource("route").setData(emptyFC());
-    getSource("shortest").setData(emptyFC());
+    getSource("alts").setData(emptyFC());
     el("summary").style.display = "none";
     el("error").style.display = "none";
     history.replaceState(null, "", "#");
@@ -360,10 +430,6 @@ el("swap").addEventListener("click", () => {
 el("show-net").addEventListener("change", (e) => {
     const checked = e.target.checked;
     map.setLayoutProperty("network", "visibility", checked ? "visible" : "none");
-});
-el("show-short").addEventListener("change", (e) => {
-    const checked = e.target.checked;
-    map.setLayoutProperty("shortest", "visibility", checked ? "visible" : "none");
 });
 for (const radio of document.querySelectorAll("input[name=mode]")) {
     radio.addEventListener("change", () => {

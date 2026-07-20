@@ -101,6 +101,27 @@ describe("Router", () => {
     expect(why.join(" ")).toMatch(/quiet residential streets \(100% of the ride\)/);
   });
 
+  it("offers deduped, graded route options", () => {
+    const r = toyRouter();
+    const opts = r.routeOptions([-71.1, 42.38], [-71.099, 42.38]);
+    // kids and solo weighting both pick the quiet detour -> deduped to 2 options
+    expect(opts.map((o) => o.id)).toEqual(["safest", "direct"]);
+    expect(opts[0]?.grade).toBe("A");
+    expect(opts[1]?.grade).toBe("F");
+    expect(opts[0]?.gradeReason).toMatch(/no busy\/moderate streets/);
+    expect(opts[1]?.gradeReason).toMatch(/110 m on busy\/moderate streets/);
+    expect(opts[1]?.payload.summary.explanation?.[0]).toMatch(/shortest possible route/);
+    expect(opts[1]?.payload.summary.explanation?.join(" ")).toMatch(/Busy Ave/);
+  });
+
+  it("collapses to a single option when the direct route is safest", () => {
+    const r = toyRouter();
+    const opts = r.routeOptions([-71.1, 42.38], [-71.0995, 42.3805]);
+    expect(opts).toHaveLength(1);
+    expect(opts[0]?.id).toBe("safest");
+    expect(opts[0]?.grade).toBe("A");
+  });
+
   it("says no detour was needed when the direct route wins", () => {
     const r = toyRouter();
     // 0 -> 2 is a single quiet edge; direct route is already safest

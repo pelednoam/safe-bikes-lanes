@@ -27,7 +27,12 @@ routing runs in your browser (GitHub Pages, deployed by CI on every push).
    whole app hosts as a static site.
 4. The **MapLibre** frontend (`web/`) shows the network colored by safety
    class; click or search to set start/end, drag markers to explore, toggle
-   "with kids" vs "solo" weighting. Hover any street to inspect it.
+   "with kids" vs "solo" weighting. Hover any street to inspect it. For each
+   trip it offers up to three distinct options (Safest / Balanced / Direct),
+   each **graded A–F on kid-level stress per meter** with a "Why this route?"
+   panel explaining the trade-offs: what the detour buys, which protected
+   corridors form the backbone, crash hotspots avoided, and any unavoidable
+   compromises.
 5. A **FastAPI** server (`server/`) offers the same routing as an HTTP API for
    local development and the Python end-to-end tests.
 
