@@ -1,3 +1,4 @@
+import { Router } from "./router.js";
 // ---------------------------------------------------------------------------
 // constants
 // ---------------------------------------------------------------------------
@@ -65,10 +66,23 @@ map.addControl(new maplibregl.ScaleControl({}), "bottom-left");
 // ---------------------------------------------------------------------------
 // state
 // ---------------------------------------------------------------------------
+let router = null;
 let start = null;
 let end = null;
 let mode = "kids";
 let hoverPopup = null;
+const routerReady = Router.load("data/graph.json")
+    .then((r) => {
+    router = r;
+    el("loading").style.display = "none";
+})
+    .catch((err) => {
+    const errBox = el("error");
+    errBox.textContent = `failed to load routing graph: ${String(err)}`;
+    errBox.style.display = "block";
+});
+el("loading").textContent = "loading routing graph…";
+el("loading").style.display = "block";
 function getSource(id) {
     const src = map.getSource(id);
     if (src === undefined)
@@ -100,41 +114,36 @@ function setPoint(kind, lngLat) {
     void requestRoute();
 }
 // ---------------------------------------------------------------------------
-// routing
+// routing (in-browser)
 // ---------------------------------------------------------------------------
-let routeInFlight = null;
 async function requestRoute() {
     if (!start || !end)
         return;
-    const s = start.getLngLat();
-    const d = end.getLngLat();
-    const url = `/route/${s.lng.toFixed(6)},${s.lat.toFixed(6)}` +
-        `/${d.lng.toFixed(6)},${d.lat.toFixed(6)}?mode=${mode}`;
+    await routerReady;
+    if (!router)
+        return;
     const errBox = el("error");
     errBox.style.display = "none";
-    el("loading").style.display = "block";
-    routeInFlight?.abort();
-    routeInFlight = new AbortController();
+    const loading = el("loading");
+    loading.textContent = "routing…";
+    loading.style.display = "block";
+    // let the loading indicator paint before the (brief) synchronous search
+    await new Promise((resolve) => setTimeout(resolve, 0));
     try {
-        const resp = await fetch(url, { signal: routeInFlight.signal });
-        if (!resp.ok) {
-            const body = await resp.json().catch(() => ({}));
-            throw new Error(body.detail ?? `routing failed (${resp.status})`);
-        }
-        const data = await resp.json();
+        const s = start.getLngLat();
+        const d = end.getLngLat();
+        const data = router.route([s.lng, s.lat], [d.lng, d.lat], mode);
         getSource("route").setData(data.safest.geojson);
         getSource("shortest").setData(data.shortest.geojson);
         showSummary(data.safest.summary);
         updateHash();
     }
     catch (err) {
-        if (err instanceof DOMException && err.name === "AbortError")
-            return;
         errBox.textContent = err instanceof Error ? err.message : String(err);
         errBox.style.display = "block";
     }
     finally {
-        el("loading").style.display = "none";
+        loading.style.display = "none";
     }
 }
 function showSummary(s) {
@@ -253,7 +262,7 @@ function renderSearchResults(results) {
 // layers + interaction wiring
 // ---------------------------------------------------------------------------
 map.on("load", () => {
-    map.addSource("network", { type: "geojson", data: "/network.geojson" });
+    map.addSource("network", { type: "geojson", data: "data/network.geojson" });
     map.addLayer({
         id: "network",
         type: "line",
@@ -387,4 +396,3 @@ for (const [cls, label] of Object.entries(CLASS_LABELS)) {
     span.textContent = label;
     legend.appendChild(span);
 }
-export {};

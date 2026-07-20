@@ -1,4 +1,5 @@
-// Frontend for the family bike router. Class colors mirror pipeline/config.py.
+// Frontend for the family bike router. Routing runs fully in the browser
+// (see router.ts); class colors mirror pipeline/config.py.
 import type {
   GeoJSONSource,
   LngLat,
@@ -9,68 +10,10 @@ import type {
   Popup,
 } from "maplibre-gl";
 
+import { Router } from "./router.js";
+import type { ProtectionClass, RideMode, RouteSummary } from "./types.js";
+
 declare const maplibregl: typeof import("maplibre-gl");
-
-// ---------------------------------------------------------------------------
-// types mirroring the FastAPI payloads (server/app.py)
-// ---------------------------------------------------------------------------
-
-type ProtectionClass =
-  | "path"
-  | "separated"
-  | "buffered"
-  | "quiet_street"
-  | "service"
-  | "lane"
-  | "sharrow"
-  | "moderate_street"
-  | "busy_street";
-
-type RideMode = "kids" | "solo";
-
-interface Caution {
-  name: string;
-  cls: ProtectionClass;
-  meters: number;
-}
-
-interface RouteSummary {
-  meters: number;
-  minutes: number;
-  pct_protected: number;
-  pct_quiet: number;
-  by_class_m: Partial<Record<ProtectionClass, number>>;
-  cautions: Caution[];
-  shortest_meters?: number;
-  detour_pct?: number;
-}
-
-interface RouteFeatureProps {
-  cls: ProtectionClass;
-  color: string;
-  name: string | null;
-}
-
-interface LineFeature {
-  type: "Feature";
-  geometry: { type: "LineString"; coordinates: [number, number][] };
-  properties: RouteFeatureProps;
-}
-
-interface FeatureCollection {
-  type: "FeatureCollection";
-  features: LineFeature[];
-}
-
-interface RoutePayload {
-  geojson: FeatureCollection;
-  summary: RouteSummary;
-}
-
-interface RouteResponse {
-  safest: RoutePayload;
-  shortest: RoutePayload;
-}
 
 interface NominatimResult {
   display_name: string;
@@ -122,7 +65,7 @@ function fmtDist(m: number): string {
   return m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(1)} km`;
 }
 
-function emptyFC(): FeatureCollection {
+function emptyFC(): GeoJSON.FeatureCollection {
   return { type: "FeatureCollection", features: [] };
 }
 
@@ -155,10 +98,24 @@ map.addControl(new maplibregl.ScaleControl({}), "bottom-left");
 // state
 // ---------------------------------------------------------------------------
 
+let router: Router | null = null;
 let start: Marker | null = null;
 let end: Marker | null = null;
 let mode: RideMode = "kids";
 let hoverPopup: Popup | null = null;
+
+const routerReady: Promise<void> = Router.load("data/graph.json")
+  .then((r) => {
+    router = r;
+    el<HTMLDivElement>("loading").style.display = "none";
+  })
+  .catch((err: unknown) => {
+    const errBox = el<HTMLDivElement>("error");
+    errBox.textContent = `failed to load routing graph: ${String(err)}`;
+    errBox.style.display = "block";
+  });
+el<HTMLDivElement>("loading").textContent = "loading routing graph…";
+el<HTMLDivElement>("loading").style.display = "block";
 
 function getSource(id: string): GeoJSONSource {
   const src = map.getSource(id);
@@ -188,40 +145,33 @@ function setPoint(kind: "start" | "end", lngLat: LngLat | [number, number]): voi
 }
 
 // ---------------------------------------------------------------------------
-// routing
+// routing (in-browser)
 // ---------------------------------------------------------------------------
-
-let routeInFlight: AbortController | null = null;
 
 async function requestRoute(): Promise<void> {
   if (!start || !end) return;
-  const s = start.getLngLat();
-  const d = end.getLngLat();
-  const url =
-    `/route/${s.lng.toFixed(6)},${s.lat.toFixed(6)}` +
-    `/${d.lng.toFixed(6)},${d.lat.toFixed(6)}?mode=${mode}`;
+  await routerReady;
+  if (!router) return;
   const errBox = el<HTMLDivElement>("error");
   errBox.style.display = "none";
-  el<HTMLDivElement>("loading").style.display = "block";
-  routeInFlight?.abort();
-  routeInFlight = new AbortController();
+  const loading = el<HTMLDivElement>("loading");
+  loading.textContent = "routing…";
+  loading.style.display = "block";
+  // let the loading indicator paint before the (brief) synchronous search
+  await new Promise((resolve) => setTimeout(resolve, 0));
   try {
-    const resp = await fetch(url, { signal: routeInFlight.signal });
-    if (!resp.ok) {
-      const body: { detail?: string } = await resp.json().catch(() => ({}));
-      throw new Error(body.detail ?? `routing failed (${resp.status})`);
-    }
-    const data: RouteResponse = await resp.json();
-    getSource("route").setData(data.safest.geojson);
-    getSource("shortest").setData(data.shortest.geojson);
+    const s = start.getLngLat();
+    const d = end.getLngLat();
+    const data = router.route([s.lng, s.lat], [d.lng, d.lat], mode);
+    getSource("route").setData(data.safest.geojson as GeoJSON.GeoJSON);
+    getSource("shortest").setData(data.shortest.geojson as GeoJSON.GeoJSON);
     showSummary(data.safest.summary);
     updateHash();
   } catch (err) {
-    if (err instanceof DOMException && err.name === "AbortError") return;
     errBox.textContent = err instanceof Error ? err.message : String(err);
     errBox.style.display = "block";
   } finally {
-    el<HTMLDivElement>("loading").style.display = "none";
+    loading.style.display = "none";
   }
 }
 
@@ -343,7 +293,7 @@ function renderSearchResults(results: NominatimResult[]): void {
 // ---------------------------------------------------------------------------
 
 map.on("load", () => {
-  map.addSource("network", { type: "geojson", data: "/network.geojson" });
+  map.addSource("network", { type: "geojson", data: "data/network.geojson" });
   map.addLayer({
     id: "network",
     type: "line",
