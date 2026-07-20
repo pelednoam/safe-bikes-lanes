@@ -7,6 +7,8 @@
 <title>Family Bike Router — Cambridge + Somerville</title>
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
 <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
 <style>
   :root { font-family: system-ui, sans-serif; }
@@ -16,10 +18,26 @@
     position: absolute; top: 10px; left: 10px; z-index: 5; width: 316px;
     background: #fff; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,.25);
     padding: 12px 14px; font-size: 13px; max-height: calc(100% - 40px); overflow-y: auto;
+    overscroll-behavior: contain;
   }
-  @media (max-width: 480px) {
-    #panel { width: calc(100% - 20px); max-height: 55%; font-size: 12px; }
+  #panel-collapse { display: none; }
+  /* phones + small tablets: panel becomes a collapsible bottom sheet */
+  @media (max-width: 760px), (max-height: 500px) {
+    #panel {
+      top: auto; bottom: 0; left: 0; right: 0; width: auto; max-height: 48%;
+      border-radius: 14px 14px 0 0; font-size: 13px;
+      padding-bottom: calc(12px + env(safe-area-inset-bottom));
+    }
+    #panel.collapsed { max-height: 88px; overflow: hidden; }
+    #panel-collapse {
+      display: block; position: absolute; top: 6px; right: 10px; margin: 0;
+      padding: 2px 12px; font-size: 15px; border-radius: 10px;
+    }
+    button, select, input[type="search"] { min-height: 36px; }
+    label.toggle, #modes label { padding: 3px 0; display: inline-block; }
+    .option-card { padding: 9px 8px; }
   }
+  button, input, select, label { touch-action: manipulation; }
   #panel h1 { font-size: 15px; margin: 0 0 4px; }
   #panel .hint { color: #666; margin: 4px 0 8px; }
   #search { width: 100%; box-sizing: border-box; padding: 5px 8px; border: 1px solid #bbb;
@@ -75,10 +93,11 @@
 <body>
 <div id="map"></div>
 <div id="panel">
+  <button id="panel-collapse" title="collapse panel">▾</button>
   <h1>Family Bike Router</h1>
   <div class="hint">Cambridge + Somerville, safety first.<br>
-    Click the map (or search) to set <b>start</b> and <b>end</b>; drag markers to adjust.
-    Right-click any street to mark it sketchy.</div>
+    Tap the map (or search) to set <b>start</b> and <b>end</b>; drag markers to adjust.
+    Right-click (or long-press) any street to mark it sketchy.</div>
   <input id="search" type="search" placeholder="search address or place…" autocomplete="off">
   <div id="search-results"></div>
   <div id="modes">
@@ -137,6 +156,8 @@
     <input type="checkbox" id="show-heat"> safety heatmap</label>
   <label class="toggle" title="Terrain elevation: blue low → red high; hover for meters">
     <input type="checkbox" id="show-elev"> elevation map</label>
+  <label class="toggle" title="Tilt the map with 3D terrain; heatmaps extrude — taller = more stress / higher ground. Drag with two fingers (or right-drag) to rotate">
+    <input type="checkbox" id="show-3d"> 3D view</label>
   <label class="toggle" title="Playgrounds, ice cream, libraries, water fountains, restrooms">
     <input type="checkbox" id="show-pois"> kid stops</label>
   <label class="toggle" title="Signalized crossings of busy streets — the safe ways through barriers">
