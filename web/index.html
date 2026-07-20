@@ -67,6 +67,8 @@
   <div id="modes">
     <label><input type="radio" name="mode" value="kids" checked> with kids</label>
     <label><input type="radio" name="mode" value="solo"> solo</label>
+    <label title="Adds a cost for every meter of climb (extra on >4% grades)">
+      <input type="checkbox" id="prefer-flat"> prefer flat</label>
   </div>
   <div id="loading">routing…</div>
   <div id="options" style="display:none"></div>
@@ -86,6 +88,10 @@
   <div id="error"></div>
   <button id="reset">Reset</button><button id="swap">⇄ Swap A/B</button>
   <label class="toggle"><input type="checkbox" id="show-net" checked> show safety network</label>
+  <label class="toggle" title="~100 m cells: average stress of the streets inside — green safe, yellow moderate, red unsafe">
+    <input type="checkbox" id="show-heat"> safety heatmap</label>
+  <label class="toggle" title="Terrain elevation: blue low → red high; hover for meters">
+    <input type="checkbox" id="show-elev"> elevation map</label>
   <div class="legend" id="legend"></div>
 </div>
 <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>

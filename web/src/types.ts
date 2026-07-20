@@ -29,6 +29,8 @@ export interface RouteSummary {
   cautions: Caution[];
   shortest_meters?: number;
   detour_pct?: number;
+  /** Total elevation gain along the route, meters. */
+  climb_m?: number;
   /** Human-readable reasons why this route was chosen (browser router only). */
   explanation?: string[];
 }

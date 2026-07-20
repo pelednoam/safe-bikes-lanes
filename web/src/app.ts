@@ -119,6 +119,7 @@ let mode: RideMode = "kids";
 let hoverPopup: Popup | null = null;
 let options: RouteOption[] = [];
 let selectedId: RouteOption["id"] | null = null;
+let preferFlat = false;
 
 const routerReady: Promise<void> = Router.load("data/graph.json")
   .then((r) => {
@@ -178,7 +179,7 @@ async function requestRoute(): Promise<void> {
   try {
     const s = start.getLngLat();
     const d = end.getLngLat();
-    options = router.routeOptions([s.lng, s.lat], [d.lng, d.lat]);
+    options = router.routeOptions([s.lng, s.lat], [d.lng, d.lat], preferFlat);
     const preferred: RouteOption["id"] = mode === "kids" ? "safest" : "balanced";
     const fallback = options[0];
     if (!fallback) throw new Error("no route found");
@@ -236,7 +237,9 @@ function renderOptions(): void {
     badge.textContent = o.grade;
     card.appendChild(badge);
     const label = document.createElement("span");
-    label.innerHTML = `<b>${o.label}</b> · ${fmtDist(s.meters)} · ~${s.minutes} min · ${s.pct_protected}% protected`;
+    label.innerHTML =
+      `<b>${o.label}</b> · ${fmtDist(s.meters)} · ~${s.minutes} min · ` +
+      `${s.pct_protected}% protected · ↗ ${s.climb_m ?? 0} m`;
     card.appendChild(label);
     card.addEventListener("click", () => {
       selectOption(o.id);
@@ -299,7 +302,8 @@ function updateHash(): void {
   const d = end.getLngLat();
   const h =
     `s=${s.lng.toFixed(6)},${s.lat.toFixed(6)}` +
-    `&e=${d.lng.toFixed(6)},${d.lat.toFixed(6)}&m=${mode}`;
+    `&e=${d.lng.toFixed(6)},${d.lat.toFixed(6)}&m=${mode}` +
+    (preferFlat ? "&f=1" : "");
   history.replaceState(null, "", `#${h}`);
 }
 
@@ -318,6 +322,10 @@ function parseHash(): void {
     mode = m;
     const radio = document.querySelector<HTMLInputElement>(`input[name=mode][value=${m}]`);
     if (radio) radio.checked = true;
+  }
+  if (params.get("f") === "1") {
+    preferFlat = true;
+    el<HTMLInputElement>("prefer-flat").checked = true;
   }
   const s = parse(params.get("s"));
   const e = parse(params.get("e"));
@@ -373,6 +381,23 @@ function renderSearchResults(results: NominatimResult[]): void {
 // ---------------------------------------------------------------------------
 
 map.on("load", () => {
+  // area overlays (hidden until toggled) sit under the street/route lines
+  map.addSource("heatmap", { type: "geojson", data: "data/heatmap.geojson" });
+  map.addLayer({
+    id: "heatmap",
+    type: "fill",
+    source: "heatmap",
+    layout: { visibility: "none" },
+    paint: { "fill-color": ["get", "color"], "fill-opacity": 0.35, "fill-outline-color": "rgba(0,0,0,0)" },
+  });
+  map.addSource("elevmap", { type: "geojson", data: "data/elevation.geojson" });
+  map.addLayer({
+    id: "elevmap",
+    type: "fill",
+    source: "elevmap",
+    layout: { visibility: "none" },
+    paint: { "fill-color": ["get", "color"], "fill-opacity": 0.45, "fill-outline-color": "rgba(0,0,0,0)" },
+  });
   map.addSource("network", { type: "geojson", data: "data/network.geojson" });
   map.addLayer({
     id: "network",
@@ -438,6 +463,23 @@ map.on("load", () => {
     });
   }
 
+  // hover readouts for the area overlays (only while visible)
+  map.on("mousemove", "elevmap", (e: MapLayerMouseEvent) => {
+    const f = e.features?.[0];
+    if (!f) return;
+    const props = f.properties as { elev?: number };
+    if (props.elev === undefined) return;
+    hoverPopup?.remove();
+    hoverPopup = new maplibregl.Popup({ closeButton: false, closeOnClick: false })
+      .setLngLat(e.lngLat)
+      .setHTML(`elevation ~${props.elev} m`)
+      .addTo(map);
+  });
+  map.on("mouseleave", "elevmap", () => {
+    hoverPopup?.remove();
+    hoverPopup = null;
+  });
+
   parseHash();
 });
 
@@ -471,6 +513,30 @@ el<HTMLButtonElement>("swap").addEventListener("click", () => {
 el<HTMLInputElement>("show-net").addEventListener("change", (e: Event) => {
   const checked = (e.target as HTMLInputElement).checked;
   map.setLayoutProperty("network", "visibility", checked ? "visible" : "none");
+});
+
+el<HTMLInputElement>("prefer-flat").addEventListener("change", (e: Event) => {
+  preferFlat = (e.target as HTMLInputElement).checked;
+  void requestRoute();
+});
+
+// the two area overlays are mutually exclusive to stay readable
+el<HTMLInputElement>("show-heat").addEventListener("change", (e: Event) => {
+  const checked = (e.target as HTMLInputElement).checked;
+  if (checked) {
+    el<HTMLInputElement>("show-elev").checked = false;
+    map.setLayoutProperty("elevmap", "visibility", "none");
+  }
+  map.setLayoutProperty("heatmap", "visibility", checked ? "visible" : "none");
+});
+
+el<HTMLInputElement>("show-elev").addEventListener("change", (e: Event) => {
+  const checked = (e.target as HTMLInputElement).checked;
+  if (checked) {
+    el<HTMLInputElement>("show-heat").checked = false;
+    map.setLayoutProperty("heatmap", "visibility", "none");
+  }
+  map.setLayoutProperty("elevmap", "visibility", checked ? "visible" : "none");
 });
 
 for (const radio of document.querySelectorAll<HTMLInputElement>("input[name=mode]")) {

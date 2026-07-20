@@ -33,7 +33,12 @@ routing runs in your browser (GitHub Pages, deployed by CI on every push).
    panel explaining the trade-offs: what the detour buys, which protected
    corridors form the backbone, crash hotspots avoided, and any unavoidable
    compromises.
-5. A **FastAPI** server (`server/`) offers the same routing as an HTTP API for
+5. **Elevation** (AWS Terrain Tiles, ~14 m resolution) gives every edge a climb
+   cost; a "prefer flat" toggle penalizes climbing (double on >4% grades) at
+   query time, and each option card shows total climb. Two optional overlays:
+   a **safety heatmap** (~100 m cells, green/yellow/red by average street
+   stress) and an **elevation map** (hypsometric tints, hover for meters).
+6. A **FastAPI** server (`server/`) offers the same routing as an HTTP API for
    local development and the Python end-to-end tests.
 
 ## Setup
