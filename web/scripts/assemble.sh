@@ -7,8 +7,8 @@ cd "$(dirname "$0")/.."
 npx tsc
 rm -rf dist
 mkdir -p dist
-cp index.html app.js router.js types.js nav.js rides.js hazards.js sharecard.js dist/
-cp sw.js manifest.json icon-192.png icon-512.png dist/
+cp index.html ./*.js dist/
+cp manifest.json icon-192.png icon-512.png dist/
 cp -r data dist/data
 cp node_modules/maplibre-gl/dist/maplibre-gl.js dist/
 cp node_modules/maplibre-gl/dist/maplibre-gl.css dist/

@@ -10,6 +10,13 @@ import type {
   Popup,
 } from "maplibre-gl";
 
+import type { NativeFix } from "./native.js";
+import {
+  isNativeApp,
+  nativeSpeak,
+  startBackgroundWatcher,
+  stopBackgroundWatcher,
+} from "./native.js";
 import type { Maneuver, RideAlert, Track } from "./nav.js";
 import {
   bearingDeg,
@@ -1627,6 +1634,9 @@ let navHeading: number | null = null;
 let recorder: RideRecorder | null = null;
 let recordMode = false;
 let recordWatchId: number | null = null;
+/** Background (native) watcher ids — used instead of web watches in the app. */
+let navBgWatcherId: string | null = null;
+let recordBgWatcherId: string | null = null;
 
 /** Free-record auto-stop: end the ride after this long with no movement. */
 const RECORD_IDLE_STOP_MS = 10 * 60_000;
@@ -1644,11 +1654,14 @@ function vibrate(pattern: number[]): void {
 }
 
 function speak(text: string): void {
-  if (navMuted || !("speechSynthesis" in window)) return;
-  window.speechSynthesis.cancel();
-  const utter = new SpeechSynthesisUtterance(text);
-  utter.rate = 1.05;
-  window.speechSynthesis.speak(utter);
+  if (navMuted) return;
+  void nativeSpeak(text).then((spoken) => {
+    if (spoken || !("speechSynthesis" in window)) return;
+    window.speechSynthesis.cancel();
+    const utter = new SpeechSynthesisUtterance(text);
+    utter.rate = 1.05;
+    window.speechSynthesis.speak(utter);
+  });
 }
 
 function rebuildNavFromSelected(): boolean {
@@ -1678,14 +1691,28 @@ function navUpdateBanner(distToNext: number, remainingM: number): void {
     `${fmtDist(remainingM)} to go · ~${mins} min`;
 }
 
+function toFix(pos: GeolocationPosition): NativeFix {
+  return {
+    lon: pos.coords.longitude,
+    lat: pos.coords.latitude,
+    accuracy: pos.coords.accuracy,
+    heading: pos.coords.heading,
+    speed: pos.coords.speed,
+  };
+}
+
 function navOnPosition(pos: GeolocationPosition): void {
+  navOnFix(toFix(pos));
+}
+
+function navOnFix(fix: NativeFix): void {
   if (!navActive || !navTrack || !router) return;
-  const lon = pos.coords.longitude;
-  const lat = pos.coords.latitude;
+  const lon = fix.lon;
+  const lat = fix.lat;
   navLastPos = [lon, lat];
   // travel direction: GPS heading when moving, else derived from movement
-  const gpsHeading = pos.coords.heading;
-  if (gpsHeading !== null && !Number.isNaN(gpsHeading) && (pos.coords.speed ?? 0) > 0.7) {
+  const gpsHeading = fix.heading;
+  if (gpsHeading !== null && !Number.isNaN(gpsHeading) && (fix.speed ?? 0) > 0.7) {
     navHeading = gpsHeading;
   } else if (navPrevPos && distM(navPrevPos, [lon, lat]) > 5) {
     navHeading = (bearingDeg(navPrevPos, [lon, lat]) + 360) % 360;
@@ -1705,7 +1732,7 @@ function navOnPosition(pos: GeolocationPosition): void {
   // (like Google Maps — ride wherever you like, the route follows you)
   if (snap.offM > OFF_ROUTE_M) {
     // a poor GPS fix shouldn't count as a deviation
-    if (pos.coords.accuracy > MAX_GPS_ACCURACY_M) return;
+    if (fix.accuracy > MAX_GPS_ACCURACY_M) return;
     navOffCount++;
     // instant feedback while we make sure it's a real deviation
     el<HTMLElement>("nav-icon").textContent = "↩";
@@ -1826,13 +1853,27 @@ async function startNav(): Promise<void> {
   } catch {
     wakeLock = null; // unsupported or denied — navigation still works
   }
-  navWatchId = navigator.geolocation.watchPosition(
-    navOnPosition,
-    () => {
-      el<HTMLElement>("nav-street").textContent = "location unavailable — check permissions";
-    },
-    { enableHighAccuracy: true, maximumAge: 1000, timeout: 15000 },
-  );
+  if (isNativeApp()) {
+    // native app: background watcher keeps GPS + voice alive with the
+    // screen off (shows a persistent notification while navigating)
+    navBgWatcherId = await startBackgroundWatcher(
+      "Family Bike Router",
+      "Turn-by-turn navigation is running",
+      navOnFix,
+      (message) => {
+        el<HTMLElement>("nav-street").textContent = message;
+      },
+    );
+  }
+  if (navBgWatcherId === null) {
+    navWatchId = navigator.geolocation.watchPosition(
+      navOnPosition,
+      () => {
+        el<HTMLElement>("nav-street").textContent = "location unavailable — check permissions";
+      },
+      { enableHighAccuracy: true, maximumAge: 1000, timeout: 15000 },
+    );
+  }
   speak("navigation started");
 }
 
@@ -1843,6 +1884,8 @@ function exitNav(): void {
   navLastPos = null;
   if (navWatchId !== null) navigator.geolocation.clearWatch(navWatchId);
   navWatchId = null;
+  if (navBgWatcherId !== null) void stopBackgroundWatcher(navBgWatcherId);
+  navBgWatcherId = null;
   void wakeLock?.release().catch(() => undefined);
   wakeLock = null;
   navDot?.remove();
@@ -1942,9 +1985,13 @@ el<HTMLButtonElement>("nav-hazard").addEventListener("click", () => {
 // ---------------------------------------------------------------------------
 
 function recordOnPosition(pos: GeolocationPosition): void {
+  recordOnFix(toFix(pos));
+}
+
+function recordOnFix(fix: NativeFix): void {
   if (!recordMode || !recorder) return;
-  const lon = pos.coords.longitude;
-  const lat = pos.coords.latitude;
+  const lon = fix.lon;
+  const lat = fix.lat;
   navLastPos = [lon, lat];
   if (!navDot) {
     const dot = document.createElement("div");
@@ -1984,13 +2031,27 @@ function startRecording(): void {
       wakeLock = wl;
     })
     .catch(() => undefined);
-  recordWatchId = navigator.geolocation.watchPosition(
-    recordOnPosition,
-    () => {
-      el<HTMLElement>("nav-street").textContent = "location unavailable — check permissions";
-    },
-    { enableHighAccuracy: true, maximumAge: 1000, timeout: 15000 },
-  );
+  void (async () => {
+    if (isNativeApp()) {
+      recordBgWatcherId = await startBackgroundWatcher(
+        "Family Bike Router",
+        "Recording your ride",
+        recordOnFix,
+        (message) => {
+          el<HTMLElement>("nav-street").textContent = message;
+        },
+      );
+    }
+    if (recordBgWatcherId === null) {
+      recordWatchId = navigator.geolocation.watchPosition(
+        recordOnPosition,
+        () => {
+          el<HTMLElement>("nav-street").textContent = "location unavailable — check permissions";
+        },
+        { enableHighAccuracy: true, maximumAge: 1000, timeout: 15000 },
+      );
+    }
+  })();
   speak("recording. ride on!");
 }
 
@@ -1999,6 +2060,8 @@ function stopRecording(): void {
   recordMode = false;
   if (recordWatchId !== null) navigator.geolocation.clearWatch(recordWatchId);
   recordWatchId = null;
+  if (recordBgWatcherId !== null) void stopBackgroundWatcher(recordBgWatcherId);
+  recordBgWatcherId = null;
   finishAndSaveRide();
   void wakeLock?.release().catch(() => undefined);
   wakeLock = null;
