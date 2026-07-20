@@ -1,0 +1,65 @@
+{
+ "built": "2026-07-20",
+ "sources": [
+  {
+   "name": "cambridge_bike_facilities",
+   "retrieved": "2026-07-20",
+   "features": 671
+  },
+  {
+   "name": "crashes_2021",
+   "retrieved": "2026-07-20",
+   "features": 92
+  },
+  {
+   "name": "crashes_2022",
+   "retrieved": "2026-07-20",
+   "features": 158
+  },
+  {
+   "name": "crashes_2023",
+   "retrieved": "2026-07-20",
+   "features": 188
+  },
+  {
+   "name": "crashes_2024",
+   "retrieved": "2026-07-20",
+   "features": 182
+  },
+  {
+   "name": "crashes_2025",
+   "retrieved": "2026-07-20",
+   "features": 163
+  },
+  {
+   "name": "crashes_2026",
+   "retrieved": "2026-07-20",
+   "features": 70
+  },
+  {
+   "name": "massdot_bike_inventory",
+   "retrieved": "2026-07-20",
+   "features": 997
+  },
+  {
+   "name": "massdot_lts",
+   "retrieved": "2026-07-20",
+   "features": 990
+  },
+  {
+   "name": "pois",
+   "retrieved": "2026-07-20",
+   "features": 842
+  },
+  {
+   "name": "somerville_high_crash_corridors",
+   "retrieved": "2026-07-20",
+   "features": 16
+  },
+  {
+   "name": "somerville_high_crash_intersections",
+   "retrieved": "2026-07-20",
+   "features": 29
+  }
+ ]
+}

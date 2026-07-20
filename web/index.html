@@ -88,6 +88,17 @@
   label.toggle { display: block; margin-top: 6px; user-select: none; cursor: pointer; }
   #error { color: #b00; display: none; margin-top: 6px; }
   #loading { display: none; color: #666; margin-top: 6px; }
+  #about { max-width: 540px; width: calc(100% - 40px); max-height: 85vh;
+           border: none; border-radius: 12px; padding: 18px 22px; font-size: 13px;
+           box-shadow: 0 6px 30px rgba(0,0,0,.35); }
+  #about::backdrop { background: rgba(0,0,0,.45); }
+  #about h2 { font-size: 15px; margin: 14px 0 6px; }
+  #about h2:first-of-type { margin-top: 0; padding-right: 30px; }
+  #about table { border-collapse: collapse; width: 100%; margin: 6px 0; }
+  #about td, #about th { border-bottom: 1px solid #eee; padding: 3px 6px;
+                         text-align: left; font-variant-numeric: tabular-nums; }
+  #about-close { position: absolute; top: 10px; right: 12px; margin: 0; }
+  #about ol { padding-left: 18px; } #about li { margin: 4px 0; }
 </style>
 </head>
 <body>
@@ -163,7 +174,58 @@
   <label class="toggle" title="Signalized crossings of busy streets — the safe ways through barriers">
     <input type="checkbox" id="show-gates"> safe crossings</label>
   <div class="legend" id="legend"></div>
+  <button id="about-btn" style="margin-top:10px">ℹ How safety is decided</button>
 </div>
+<dialog id="about">
+  <button id="about-close" title="close">✕</button>
+  <h2>How this router decides what's safe</h2>
+  <p>Every street and path in Cambridge &amp; Somerville gets a <b>protection
+  class</b> by merging several sources, most-trusted first:</p>
+  <ol>
+    <li>Your own <b>sketchy marks</b> (right-click / long-press a street) — strongest;</li>
+    <li><b>Cambridge's official Bike Facilities GIS</b> — explicit facility types
+      (separated lane, buffered, painted, path…), updated by the city as
+      construction finishes;</li>
+    <li><b>MassDOT's statewide Bike Inventory</b> and <b>Bike Level of Traffic
+      Stress</b> layers (the Furth/Mekuria LTS methodology);</li>
+    <li><b>OpenStreetMap</b> tags (<code>cycleway=track/lane</code>, road class,
+      speed limits) — the base network, and often the freshest source since local
+      mappers add new lanes quickly. Facilities known <i>only</i> from OSM draw
+      dashed on the map.</li>
+  </ol>
+  <p>Each class costs a <b>multiplier on its length</b> — how much longer a detour
+  the router will accept to avoid it. For the strictest profile (young kids):</p>
+  <table id="mult-table"></table>
+  <p>On top of that: segments near <b>bicycle crashes</b>
+  (MassDOT IMPACT records, 2021–present, ~850 in these two cities) cost up to
+  2.5× extra; <b>crossing a busy street without a signal</b> adds a large
+  penalty (a small one when signalized); Somerville's official
+  <b>high-crash corridors</b> add 1.5×; and with "prefer flat" each meter of
+  climb costs 12 m-equivalent (doubled over 4% grade, from ~14 m-resolution
+  terrain data). Routes are graded <b>A–F</b> on average kid-stress per meter —
+  the same scale regardless of profile, so grades are always comparable.</p>
+
+  <h2>Data sources &amp; freshness</h2>
+  <p>Everything below refreshes <b>automatically every month</b>; the map you're
+  looking at was built on <b id="built-date">…</b>.</p>
+  <table id="freshness-table"><tr><th>source</th><th>retrieved</th><th>features</th></tr></table>
+  <p>Sources:
+    <a href="https://github.com/cambridgegis/cambridgegis_data" target="_blank" rel="noopener">Cambridge GIS</a> ·
+    <a href="https://gis.massdot.state.ma.us/arcgis/rest/services/Multimodal" target="_blank" rel="noopener">MassDOT Bike Inventory &amp; LTS</a> ·
+    <a href="https://apps.crashdata.dot.mass.gov/cdp/home" target="_blank" rel="noopener">MassDOT IMPACT crashes</a> ·
+    <a href="https://maps.somervillema.gov/arcgis/rest/services" target="_blank" rel="noopener">Somerville GIS</a> ·
+    <a href="https://www.openstreetmap.org" target="_blank" rel="noopener">OpenStreetMap</a> (© contributors, ODbL) ·
+    <a href="https://registry.opendata.aws/terrain-tiles/" target="_blank" rel="noopener">AWS Terrain Tiles</a>.
+    Code: <a href="https://github.com/pelednoam/safe-bikes-lanes" target="_blank" rel="noopener">github.com/pelednoam/safe-bikes-lanes</a>.</p>
+
+  <h2>Limitations</h2>
+  <p>Data can lag reality — construction, temporary closures, and brand-new lanes
+  may be wrong for a few weeks (right-click any street to correct it for
+  yourself). A painted lane's on-the-ground condition (parked cars, debris)
+  isn't in any dataset. Crash records reflect where people already ride, not
+  pure risk. <b>This is a planning aid: always ride to conditions and use your
+  own judgment, especially with kids.</b></p>
+</dialog>
 <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
 <script src="app.js" type="module"></script>
 </body>
