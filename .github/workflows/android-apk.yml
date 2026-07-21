@@ -33,6 +33,8 @@ jobs:
         run: npm run check && npm test
         working-directory: web
       - name: Assemble web bundle + sync
+        env:
+          APP_VERSION: ${{ github.ref_name }}
         run: npm run app:sync
         working-directory: web
       - name: Build debug APK

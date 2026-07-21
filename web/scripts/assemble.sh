@@ -18,4 +18,6 @@ sed -i.bak \
   -e 's|https://unpkg.com/maplibre-gl@[0-9.]*/dist/maplibre-gl.js|maplibre-gl.js|' \
   dist/index.html
 rm -f dist/index.html.bak
+# app build version (git tag in CI; "dev" locally) for the in-app updater
+printf '{"version": "%s"}\n' "${APP_VERSION:-dev}" > dist/version.json
 echo "assembled dist/ ($(du -sh dist | cut -f1))"

@@ -188,3 +188,14 @@ describe("walk alerts", () => {
     expect(alerts.some((a) => /ride again/.test(a.voice))).toBe(true);
   });
 });
+
+describe("app version compare", () => {
+  it("orders app-vN tags and rejects garbage", async () => {
+    const { isNewerAppVersion } = await import("../src/native.js");
+    expect(isNewerAppVersion("app-v14", "app-v15")).toBe(true);
+    expect(isNewerAppVersion("app-v15", "app-v15")).toBe(false);
+    expect(isNewerAppVersion("app-v15", "app-v14")).toBe(false);
+    expect(isNewerAppVersion("dev", "app-v15")).toBe(false);
+    expect(isNewerAppVersion("app-v14", "main")).toBe(false);
+  });
+});
