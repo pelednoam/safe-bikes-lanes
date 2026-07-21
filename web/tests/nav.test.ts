@@ -169,3 +169,22 @@ describe("snapToTrack", () => {
     expect(snap.alongM).toBeGreaterThan(90);
   });
 });
+
+describe("walk alerts", () => {
+  it("announces dismount and remount around a walking stretch", () => {
+    const seg = (m: number, walk: boolean): RibbonSeg => ({
+      m,
+      cls: walk ? "busy_street" : "quiet_street",
+      e0: 10,
+      e1: 10,
+      crossing: false,
+      walk,
+    });
+    const alerts = buildAlerts({
+      ...lRoute(),
+      ribbon: [seg(400, false), seg(150, true), seg(400, false)],
+    });
+    expect(alerts.some((a) => /walk the bike for about 150 meters/.test(a.voice))).toBe(true);
+    expect(alerts.some((a) => /ride again/.test(a.voice))).toBe(true);
+  });
+});

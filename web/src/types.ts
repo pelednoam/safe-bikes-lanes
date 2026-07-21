@@ -46,6 +46,8 @@ export interface RibbonSeg {
   e1: number;
   /** True where the segment starts at a penalized busy crossing. */
   crossing: boolean;
+  /** True where the rider dismounts and walks the bike. */
+  walk?: boolean;
 }
 
 export interface RouteSummary {
@@ -59,6 +61,8 @@ export interface RouteSummary {
   detour_pct?: number;
   /** Total elevation gain along the route, meters. */
   climb_m?: number;
+  /** Meters walked (bike pushed) along the route. */
+  walk_m?: number;
   /** Human-readable reasons why this route was chosen (browser router only). */
   explanation?: string[];
 }
@@ -67,6 +71,8 @@ export interface RouteFeatureProps {
   cls: ProtectionClass;
   color: string;
   name: string | null;
+  /** True where the rider walks the bike. */
+  walk?: boolean;
 }
 
 export interface LineFeature {

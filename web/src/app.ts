@@ -218,6 +218,22 @@ let poiMarker: Marker | null = null;
 let shedMarker: Marker | null = null;
 let profileId: ProfileId = "young_kids";
 let preferFlat = false;
+let walkOk = false;
+const AVOIDABLE: [ProtectionClass, string][] = [
+  ["lane", "painted lanes"],
+  ["buffered", "buffered lanes"],
+  ["sharrow", "sharrows"],
+  ["moderate_street", "moderate streets"],
+  ["busy_street", "busy streets"],
+];
+let avoidTypes = new Set<ProtectionClass>(
+  JSON.parse(localStorage.getItem("avoidTypes") ?? "[]") as ProtectionClass[],
+);
+
+function syncAvoidSummary(): void {
+  el<HTMLElement>("avoid-summary").textContent =
+    avoidTypes.size === 0 ? "🛡 avoid lane types" : `🛡 avoiding ${avoidTypes.size} lane type${avoidTypes.size > 1 ? "s" : ""}`;
+}
 let hoverPopup: Popup | null = null;
 let options: RouteOption[] = [];
 let selectedId: RouteOption["id"] | null = null;
@@ -358,7 +374,15 @@ async function requestRoute(): Promise<void> {
     poiMarker?.remove();
     poiMarker = null;
     loopParams = null;
-    options = router.routeOptions([s.lng, s.lat], [d.lng, d.lat], profileId, preferFlat);
+    options = router.routeOptions(
+      [s.lng, s.lat],
+      [d.lng, d.lat],
+      profileId,
+      preferFlat,
+      undefined,
+      avoidTypes,
+      walkOk,
+    );
     const fallback = options[0];
     if (!fallback) throw new Error("no route found");
     const wanted = pendingSelect;
@@ -510,9 +534,11 @@ function renderRibbon(option: RouteOption): void {
   const linePts: string[] = [];
   for (const seg of ribbon) {
     const wpx = (seg.m / total) * W;
+    const fill = seg.walk === true ? "#8aa4b8" : CLASS_COLORS[seg.cls];
+    const segLabel = seg.walk === true ? "walk the bike" : CLASS_LABELS[seg.cls];
     rects.push(
       `<rect x="${x.toFixed(2)}" y="0" width="${Math.max(wpx, 0.4).toFixed(2)}" height="12"` +
-        ` fill="${CLASS_COLORS[seg.cls]}"><title>${CLASS_LABELS[seg.cls]}: ${fmtDist(seg.m)}</title></rect>`,
+        ` fill="${fill}"><title>${segLabel}: ${fmtDist(seg.m)}</title></rect>`,
     );
     if (seg.crossing) {
       crossings.push(
@@ -537,7 +563,8 @@ function showSummary(option: RouteOption): void {
   const s: RouteSummary = option.payload.summary;
   el<HTMLDivElement>("summary").style.display = "block";
   el<HTMLElement>("s-dist").textContent = fmtDist(s.meters);
-  el<HTMLElement>("s-time").textContent = `~${s.minutes} min`;
+  el<HTMLElement>("s-time").textContent =
+    `~${s.minutes} min` + ((s.walk_m ?? 0) > 0 ? ` · 🚶 ${fmtDist(s.walk_m ?? 0)}` : "");
   el<HTMLElement>("s-prot").textContent = `${s.pct_protected}%`;
   el<HTMLElement>("s-quiet").textContent = `${s.pct_quiet}%`;
   el<HTMLElement>("s-detour").textContent =
@@ -815,6 +842,19 @@ function parseHash(): void {
   if (params.get("f") === "1") {
     preferFlat = true;
     el<HTMLInputElement>("prefer-flat").checked = true;
+  }
+  if (params.get("wk") === "1") {
+    walkOk = true;
+    el<HTMLInputElement>("walk-ok").checked = true;
+  }
+  const x = params.get("x");
+  if (x !== null) {
+    const valid = new Set(AVOIDABLE.map(([c]) => c as string));
+    avoidTypes = new Set(x.split(",").filter((t) => valid.has(t)) as ProtectionClass[]);
+    for (const [cls] of AVOIDABLE) {
+      el<HTMLInputElement>(`avoid-${cls}`).checked = avoidTypes.has(cls);
+    }
+    syncAvoidSummary();
   }
   const o = params.get("o");
   if (o === "safest" || o === "balanced" || o === "direct") pendingSelect = o;
@@ -1348,6 +1388,14 @@ map.on("load", () => {
     layout: { "line-cap": "round", "line-join": "round" },
     paint: { "line-color": ["get", "color"], "line-width": 5 },
   });
+  // walking stretches: white dashes over the route line
+  map.addLayer({
+    id: "route-walk",
+    type: "line",
+    source: "route",
+    filter: ["==", ["get", "walk"], true],
+    paint: { "line-color": "#ffffff", "line-width": 2.5, "line-dasharray": [1.5, 1.5] },
+  });
   map.addSource("construction", { type: "geojson", data: "data/construction.geojson" });
   map.addLayer({
     id: "construction-lines",
@@ -1820,6 +1868,24 @@ el<HTMLInputElement>("prefer-flat").addEventListener("change", (e: Event) => {
   void requestRoute();
   void computeShed();
 });
+
+el<HTMLInputElement>("walk-ok").addEventListener("change", (e: Event) => {
+  walkOk = (e.target as HTMLInputElement).checked;
+  void requestRoute();
+});
+
+for (const [cls] of AVOIDABLE) {
+  const box = el<HTMLInputElement>(`avoid-${cls}`);
+  box.checked = avoidTypes.has(cls);
+  box.addEventListener("change", () => {
+    if (box.checked) avoidTypes.add(cls);
+    else avoidTypes.delete(cls);
+    localStorage.setItem("avoidTypes", JSON.stringify([...avoidTypes]));
+    syncAvoidSummary();
+    void requestRoute();
+  });
+}
+syncAvoidSummary();
 
 // the two area overlays are mutually exclusive to stay readable; in 3D view
 // the extruded variants replace the flat fills and terrain turns on
@@ -2364,7 +2430,7 @@ function navOnFix(fix: NativeFix): void {
           useMyWay && navHeading !== null
             ? router.headingBias([lon, lat], navHeading)
             : undefined;
-        options = router.routeOptions([lon, lat], navDest, profileId, preferFlat, bias);
+        options = router.routeOptions([lon, lat], navDest, profileId, preferFlat, bias, avoidTypes);
         const first = options[0];
         if (first) {
           selectOption(first.id);
@@ -2528,7 +2594,9 @@ function detourToNearest(kind: "water" | "restroom" | "playground"): void {
     return;
   }
   try {
-    options = router.routeOptions(navLastPos, poi.geometry.coordinates, profileId, preferFlat);
+    options = router.routeOptions(
+      navLastPos, poi.geometry.coordinates, profileId, preferFlat, undefined, avoidTypes,
+    );
     const first = options[0];
     if (!first) return;
     selectOption(first.id);
@@ -2558,7 +2626,9 @@ el<HTMLButtonElement>("nav-playground").addEventListener("click", () => {
 el<HTMLButtonElement>("nav-resume").addEventListener("click", () => {
   if (!router || !navLastPos || !navOriginalDest) return;
   try {
-    options = router.routeOptions(navLastPos, navOriginalDest, profileId, preferFlat);
+    options = router.routeOptions(
+      navLastPos, navOriginalDest, profileId, preferFlat, undefined, avoidTypes,
+    );
     const first = options[0];
     if (!first) return;
     selectOption(first.id);

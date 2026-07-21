@@ -274,3 +274,102 @@ describe("construction avoidance", () => {
     expect(cleared?.payload.summary.meters).toBe(120);
   });
 });
+
+describe("avoid lane types", () => {
+  /* 0 --painted lane(100m)-- 1   vs   0 --quiet(300m via 2)-- 1 */
+  function laneRouter(): Router {
+    const dlon = 1 / (111_320 * Math.cos((42.38 * Math.PI) / 180));
+    return new Router({
+      nodes: [
+        [-71.1, 42.38, 10],
+        [-71.1 + 100 * dlon, 42.38, 10],
+        [-71.0995, 42.3815, 10],
+      ],
+      names: ["", "Paint St", "Quiet Way"],
+      classes: ["lane", "quiet_street"],
+      edges: [
+        [0, 1, 100, 0, 1, -1, 1, 0, 0, 0],
+        [1, 0, 100, 0, 1, -1, 1, 0, 0, 0],
+        [0, 2, 150, 1, 2, -1, 1, 0, 0, 0],
+        [2, 0, 150, 1, 2, -1, 1, 0, 0, 0],
+        [2, 1, 150, 1, 2, -1, 1, 0, 0, 0],
+        [1, 2, 150, 1, 2, -1, 1, 0, 0, 0],
+      ],
+      geoms: [],
+    });
+  }
+  const from: [number, number] = [-71.1, 42.38];
+  const to: [number, number] = [-71.1 + 100 / (111_320 * Math.cos((42.38 * Math.PI) / 180)), 42.38];
+
+  it("normally rides the painted lane, avoids it when told to", () => {
+    const r = laneRouter();
+    const normal = r.routeOptions(from, to, "young_kids")[0];
+    expect(normal?.payload.summary.meters).toBe(100); // lane ×3 beats 300 m quiet ×1.4
+    const strict = r.routeOptions(from, to, "young_kids", false, undefined, new Set(["lane"]))[0];
+    expect(strict?.payload.summary.meters).toBe(300); // lane now ×30 — detour wins
+    expect(strict?.payload.summary.explanation?.join(" ")).toMatch(
+      /Avoiding lane: this route uses none at all/,
+    );
+  });
+
+  it("reports honestly when the avoided type is unavoidable", () => {
+    const r = laneRouter();
+    // avoid quiet streets too: every route touches something avoided
+    const res = r.routeOptions(
+      from, to, "young_kids", false, undefined, new Set(["lane", "quiet_street"]),
+    )[0];
+    expect(res?.payload.summary.explanation?.join(" ")).toMatch(/no better alternative exists/);
+  });
+});
+
+describe("ok-to-walk mode", () => {
+  /* 0 --busy(150m)-- 1   vs   0 --quiet(2km via 2)-- 1: the ride-around is
+   * so long that pushing the bike 150 m wins. */
+  function walkRouter(): Router {
+    const dlon = 1 / (111_320 * Math.cos((42.38 * Math.PI) / 180));
+    return new Router({
+      nodes: [
+        [-71.1, 42.38, 10],
+        [-71.1 + 150 * dlon, 42.38, 10],
+        [-71.0995, 42.389, 10],
+      ],
+      names: ["", "Busy Ave", "Long Quiet Way"],
+      classes: ["busy_street", "quiet_street"],
+      edges: [
+        [0, 1, 150, 0, 1, -1, 1, 0, 0, 1],
+        [1, 0, 150, 0, 1, -1, 1, 0, 0, 1],
+        [0, 2, 1000, 1, 2, -1, 1, 0, 0, 0],
+        [2, 0, 1000, 1, 2, -1, 1, 0, 0, 0],
+        [2, 1, 1000, 1, 2, -1, 1, 0, 0, 0],
+        [1, 2, 1000, 1, 2, -1, 1, 0, 0, 0],
+      ],
+      geoms: [],
+    });
+  }
+  const from: [number, number] = [-71.1, 42.38];
+  const to: [number, number] = [-71.1 + 150 / (111_320 * Math.cos((42.38 * Math.PI) / 180)), 42.38];
+
+  it("walks a short busy stretch instead of a huge ride-around", () => {
+    const r = walkRouter();
+    const riding = r.routeOptions(from, to, "young_kids")[0];
+    expect(riding?.payload.summary.meters).toBe(2000); // busy ×25 = 3750 > quiet 2800
+    const walking = r.routeOptions(
+      from, to, "young_kids", false, undefined, undefined, true,
+    )[0];
+    expect(walking?.payload.summary.meters).toBe(150);
+    expect(walking?.payload.summary.walk_m).toBe(150);
+    expect(walking?.payload.summary.cautions).toHaveLength(0); // walking is the mitigation
+    expect(walking?.payload.summary.explanation?.join(" ")).toMatch(/walking the bike/);
+    expect(walking?.grade).toBe("A"); // pushing the bike is calm
+    const ribbon = walking?.payload.ribbon ?? [];
+    expect(ribbon.some((s) => s.walk === true)).toBe(true);
+  });
+
+  it("does not walk when riding is already fine", () => {
+    const r = walkRouter();
+    const res = r.routeOptions(
+      [-71.1, 42.38], [-71.0995, 42.389], "young_kids", false, undefined, undefined, true,
+    )[0];
+    expect(res?.payload.summary.walk_m).toBeUndefined(); // quiet direct: just ride
+  });
+});

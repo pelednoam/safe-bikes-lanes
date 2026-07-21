@@ -61,6 +61,9 @@
   .search-row button { margin: 0; padding: 2px 7px; font-size: 11px; }
   #modes { margin: 8px 0; }
   #modes label { margin-right: 10px; cursor: pointer; white-space: nowrap; }
+  #avoid-box { margin: 6px 0; }
+  #avoid-box summary { cursor: pointer; font-weight: 600; }
+  #avoid-box label { display: inline-block; margin: 2px 10px 2px 0; cursor: pointer; }
   .tool-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 6px 0; }
   .tool-row select { padding: 3px 5px; border-radius: 5px; border: 1px solid var(--border); background: var(--btn-bg); color: var(--fg); }
   #shed-panel { display: none; background: var(--sel-bg); border-radius: 8px; padding: 7px 9px;
@@ -180,7 +183,19 @@
     <label><input type="radio" name="profile" value="solo"> solo</label>
     <label title="Adds a cost for every meter of climb (extra on >4% grades)">
       <input type="checkbox" id="prefer-flat"> prefer flat</label>
+    <label title="Allow short bike-walking stretches (sidewalk pace) to bridge safe segments instead of long ride-arounds — shown dashed white, announced in navigation">
+      <input type="checkbox" id="walk-ok"> 🚶 ok to walk</label>
   </div>
+  <details id="avoid-box">
+    <summary id="avoid-summary">🛡 avoid lane types</summary>
+    <div class="hint">route around these as much as possible (never a hard ban —
+    unavoidable stretches are called out):</div>
+    <label><input type="checkbox" id="avoid-lane"> painted lanes</label>
+    <label><input type="checkbox" id="avoid-buffered"> buffered lanes</label>
+    <label><input type="checkbox" id="avoid-sharrow"> sharrows</label>
+    <label><input type="checkbox" id="avoid-moderate_street"> moderate streets</label>
+    <label><input type="checkbox" id="avoid-busy_street"> busy streets</label>
+  </details>
   <div class="tool-row">
     <button id="shed-btn" style="margin:0" title="Show everything reachable from a point at your comfort level">🗺 Reach map</button>
     <select id="loop-dist" title="loop length">
@@ -311,6 +326,12 @@
   <p>Each class costs a <b>multiplier on its length</b> — how much longer a detour
   the router will accept to avoid it. For the strictest profile (young kids):</p>
   <table id="mult-table"></table>
+  <p>Two per-trip controls sit on top: <b>🛡 avoid lane types</b> raises chosen
+  types (e.g. painted lanes) to a near-prohibitive ×30 — "as much as possible",
+  never a hard ban — and <b>🚶 ok to walk</b> lets the router bridge safe
+  segments with short bike-walking stretches (sidewalk pace, dismount friction
+  included) when that beats a long ride-around; walking stretches draw as white
+  dashes, appear in the cue sheet, and are announced in navigation.</p>
   <p>On top of that: segments near <b>bicycle crashes</b>
   (MassDOT IMPACT records, 2021–present, ~850 in these two cities) cost up to
   2.5× extra; <b>crossing a busy street without a signal</b> adds a large

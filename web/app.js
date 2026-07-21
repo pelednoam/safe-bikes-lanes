@@ -130,6 +130,19 @@ let poiMarker = null;
 let shedMarker = null;
 let profileId = "young_kids";
 let preferFlat = false;
+let walkOk = false;
+const AVOIDABLE = [
+    ["lane", "painted lanes"],
+    ["buffered", "buffered lanes"],
+    ["sharrow", "sharrows"],
+    ["moderate_street", "moderate streets"],
+    ["busy_street", "busy streets"],
+];
+let avoidTypes = new Set(JSON.parse(localStorage.getItem("avoidTypes") ?? "[]"));
+function syncAvoidSummary() {
+    el("avoid-summary").textContent =
+        avoidTypes.size === 0 ? "🛡 avoid lane types" : `🛡 avoiding ${avoidTypes.size} lane type${avoidTypes.size > 1 ? "s" : ""}`;
+}
 let hoverPopup = null;
 let options = [];
 let selectedId = null;
@@ -266,7 +279,7 @@ async function requestRoute() {
         poiMarker?.remove();
         poiMarker = null;
         loopParams = null;
-        options = router.routeOptions([s.lng, s.lat], [d.lng, d.lat], profileId, preferFlat);
+        options = router.routeOptions([s.lng, s.lat], [d.lng, d.lat], profileId, preferFlat, undefined, avoidTypes, walkOk);
         const fallback = options[0];
         if (!fallback)
             throw new Error("no route found");
@@ -415,8 +428,10 @@ function renderRibbon(option) {
     const linePts = [];
     for (const seg of ribbon) {
         const wpx = (seg.m / total) * W;
+        const fill = seg.walk === true ? "#8aa4b8" : CLASS_COLORS[seg.cls];
+        const segLabel = seg.walk === true ? "walk the bike" : CLASS_LABELS[seg.cls];
         rects.push(`<rect x="${x.toFixed(2)}" y="0" width="${Math.max(wpx, 0.4).toFixed(2)}" height="12"` +
-            ` fill="${CLASS_COLORS[seg.cls]}"><title>${CLASS_LABELS[seg.cls]}: ${fmtDist(seg.m)}</title></rect>`);
+            ` fill="${fill}"><title>${segLabel}: ${fmtDist(seg.m)}</title></rect>`);
         if (seg.crossing) {
             crossings.push(`<text x="${x.toFixed(2)}" y="22" font-size="9" fill="#a33">▲<title>busy crossing</title></text>`);
         }
@@ -437,7 +452,8 @@ function showSummary(option) {
     const s = option.payload.summary;
     el("summary").style.display = "block";
     el("s-dist").textContent = fmtDist(s.meters);
-    el("s-time").textContent = `~${s.minutes} min`;
+    el("s-time").textContent =
+        `~${s.minutes} min` + ((s.walk_m ?? 0) > 0 ? ` · 🚶 ${fmtDist(s.walk_m ?? 0)}` : "");
     el("s-prot").textContent = `${s.pct_protected}%`;
     el("s-quiet").textContent = `${s.pct_quiet}%`;
     el("s-detour").textContent =
@@ -699,6 +715,19 @@ function parseHash() {
     if (params.get("f") === "1") {
         preferFlat = true;
         el("prefer-flat").checked = true;
+    }
+    if (params.get("wk") === "1") {
+        walkOk = true;
+        el("walk-ok").checked = true;
+    }
+    const x = params.get("x");
+    if (x !== null) {
+        const valid = new Set(AVOIDABLE.map(([c]) => c));
+        avoidTypes = new Set(x.split(",").filter((t) => valid.has(t)));
+        for (const [cls] of AVOIDABLE) {
+            el(`avoid-${cls}`).checked = avoidTypes.has(cls);
+        }
+        syncAvoidSummary();
     }
     const o = params.get("o");
     if (o === "safest" || o === "balanced" || o === "direct")
@@ -1225,6 +1254,14 @@ map.on("load", () => {
         layout: { "line-cap": "round", "line-join": "round" },
         paint: { "line-color": ["get", "color"], "line-width": 5 },
     });
+    // walking stretches: white dashes over the route line
+    map.addLayer({
+        id: "route-walk",
+        type: "line",
+        source: "route",
+        filter: ["==", ["get", "walk"], true],
+        paint: { "line-color": "#ffffff", "line-width": 2.5, "line-dasharray": [1.5, 1.5] },
+    });
     map.addSource("construction", { type: "geojson", data: "data/construction.geojson" });
     map.addLayer({
         id: "construction-lines",
@@ -1665,6 +1702,24 @@ el("prefer-flat").addEventListener("change", (e) => {
     void requestRoute();
     void computeShed();
 });
+el("walk-ok").addEventListener("change", (e) => {
+    walkOk = e.target.checked;
+    void requestRoute();
+});
+for (const [cls] of AVOIDABLE) {
+    const box = el(`avoid-${cls}`);
+    box.checked = avoidTypes.has(cls);
+    box.addEventListener("change", () => {
+        if (box.checked)
+            avoidTypes.add(cls);
+        else
+            avoidTypes.delete(cls);
+        localStorage.setItem("avoidTypes", JSON.stringify([...avoidTypes]));
+        syncAvoidSummary();
+        void requestRoute();
+    });
+}
+syncAvoidSummary();
 // the two area overlays are mutually exclusive to stay readable; in 3D view
 // the extruded variants replace the flat fills and terrain turns on
 const AREA_OVERLAYS = [
@@ -2177,7 +2232,7 @@ function navOnFix(fix) {
                 const bias = useMyWay && navHeading !== null
                     ? router.headingBias([lon, lat], navHeading)
                     : undefined;
-                options = router.routeOptions([lon, lat], navDest, profileId, preferFlat, bias);
+                options = router.routeOptions([lon, lat], navDest, profileId, preferFlat, bias, avoidTypes);
                 const first = options[0];
                 if (first) {
                     selectOption(first.id);
@@ -2326,7 +2381,7 @@ function detourToNearest(kind) {
         return;
     }
     try {
-        options = router.routeOptions(navLastPos, poi.geometry.coordinates, profileId, preferFlat);
+        options = router.routeOptions(navLastPos, poi.geometry.coordinates, profileId, preferFlat, undefined, avoidTypes);
         const first = options[0];
         if (!first)
             return;
@@ -2356,7 +2411,7 @@ el("nav-resume").addEventListener("click", () => {
     if (!router || !navLastPos || !navOriginalDest)
         return;
     try {
-        options = router.routeOptions(navLastPos, navOriginalDest, profileId, preferFlat);
+        options = router.routeOptions(navLastPos, navOriginalDest, profileId, preferFlat, undefined, avoidTypes);
         const first = options[0];
         if (!first)
             return;

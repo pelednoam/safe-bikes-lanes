@@ -194,7 +194,24 @@ export function buildAlerts(payload) {
         runLen = 0;
         runCls = "";
     };
+    let walkRun = -1.0;
+    let walkLen = 0.0;
     for (const seg of ribbon) {
+        if (seg.walk === true) {
+            if (walkRun < 0) {
+                walkRun = cum;
+                walkLen = 0;
+            }
+            walkLen += seg.m;
+        }
+        else if (walkRun >= 0) {
+            alerts.push({
+                atM: walkRun,
+                voice: `hop off and walk the bike for about ${Math.round(walkLen / 10) * 10} meters.`,
+            });
+            alerts.push({ atM: cum, voice: "you can ride again." });
+            walkRun = -1;
+        }
         if (seg.crossing) {
             alerts.push({ atM: cum, voice: "busy street crossing. gather up." });
         }
@@ -212,6 +229,12 @@ export function buildAlerts(payload) {
         cum += seg.m;
     }
     flushRun();
+    if (walkRun >= 0) {
+        alerts.push({
+            atM: walkRun,
+            voice: `hop off and walk the bike for about ${Math.round(walkLen / 10) * 10} meters.`,
+        });
+    }
     alerts.sort((a, b) => a.atM - b.atM);
     // drop alerts within 30 m of the previous one — voice pile-ups are worse
     // than a missed secondary warning
