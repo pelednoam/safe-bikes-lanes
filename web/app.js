@@ -516,6 +516,54 @@ function showSummary(option) {
         sunsetBox.style.display = "none";
     }
 }
+/** ~45 m cell cache so hovering along a street reuses one lookup. */
+const segPhotoCache = new Map();
+let segPhotoTimer;
+async function fetchSegmentPhoto(lon, lat) {
+    const key = `${Math.round(lon / 0.0005)},${Math.round(lat / 0.0005)}`;
+    const cached = segPhotoCache.get(key);
+    if (cached !== undefined)
+        return cached;
+    const d = 0.0004;
+    const url = "https://graph.mapillary.com/images?" +
+        new URLSearchParams({
+            access_token: mapillaryToken,
+            bbox: `${lon - d},${lat - d},${lon + d},${lat + d}`,
+            fields: "id,thumb_256_url,captured_at",
+            limit: "5",
+        }).toString();
+    let result = { url: null, captured: null };
+    try {
+        const resp = await fetch(url);
+        if (resp.ok) {
+            const data = (await resp.json());
+            const newest = [...data.data].sort((a, b) => (b.captured_at ?? 0) - (a.captured_at ?? 0))[0];
+            result = { url: newest?.thumb_256_url ?? null, captured: newest?.captured_at ?? null };
+        }
+    }
+    catch {
+        // offline or rate-limited: cache the miss too, avoids retry storms
+    }
+    segPhotoCache.set(key, result);
+    return result;
+}
+function fillSegmentPhoto(popup, lon, lat) {
+    void fetchSegmentPhoto(lon, lat).then(({ url, captured }) => {
+        if (popup !== hoverPopup)
+            return; // hover moved on
+        const slot = popup.getElement()?.querySelector("div[data-seg-photo]");
+        if (!slot || !slot.isConnected)
+            return;
+        if (url === null) {
+            slot.innerHTML = `<small><i>no street-level photo here</i></small>`;
+            return;
+        }
+        const when = captured !== null ? ` <small>${new Date(captured).toLocaleDateString()}</small>` : "";
+        slot.innerHTML =
+            `<img src="${url}" alt="" style="max-width:210px;border-radius:6px;display:block;` +
+                `margin-top:4px">📷${when}`;
+    });
+}
 async function showMapillaryPreview(lon, lat) {
     const d = 0.0005; // ~45 m box
     const url = "https://graph.mapillary.com/images?" +
@@ -1082,6 +1130,18 @@ map.on("load", () => {
             "line-dasharray": [2, 1.4],
         },
     });
+    // invisible hit layer: every street stays hoverable/right-clickable even
+    // when the network display is toggled off or covered by other layers
+    map.addLayer({
+        id: "network-hit",
+        type: "line",
+        source: "network",
+        paint: {
+            "line-color": "#000000",
+            "line-opacity": 0.02,
+            "line-width": ["interpolate", ["linear"], ["zoom"], 12, 8, 16, 15],
+        },
+    });
     // hover highlight: bright halo + boosted core for the segment under the cursor
     map.addLayer({
         id: "network-hover-halo",
@@ -1356,7 +1416,7 @@ map.on("load", () => {
         map.setFilter("network-hover-halo", filter);
         map.setFilter("network-hover-core", filter);
     };
-    for (const layer of ["network", "network-unconfirmed", "route"]) {
+    for (const layer of ["network-hit", "route"]) {
         map.on("mousemove", layer, (e) => {
             map.getCanvas().style.cursor = "crosshair";
             const f = e.features?.[0];
@@ -1385,12 +1445,23 @@ map.on("load", () => {
             const unconfirmed = props.source === "osm" && cls !== undefined && FACILITY_CLASSES.includes(cls)
                 ? "<br><small><i>facility per OSM only (not in official layers yet)</i></small>"
                 : "";
+            const photoSlot = mapillaryToken !== "" ? `<div data-seg-photo></div>` : "";
             hoverPopup?.remove();
             hoverPopup = new maplibregl.Popup({ closeButton: false, closeOnClick: false })
                 .setLngLat(e.lngLat)
                 .setHTML(`${badge}<b>${props.name ?? "unnamed"}</b><br>${label}${meaning}${stress}` +
-                `${crashes}${unconfirmed}<br><small>right-click to mark as sketchy</small>`)
+                `${crashes}${unconfirmed}${photoSlot}` +
+                `<br><small>right-click to mark as sketchy</small>`)
                 .addTo(map);
+            if (mapillaryToken !== "") {
+                window.clearTimeout(segPhotoTimer);
+                const popup = hoverPopup;
+                const { lng, lat } = e.lngLat;
+                // debounce: only fetch once the cursor rests on a segment
+                segPhotoTimer = window.setTimeout(() => {
+                    fillSegmentPhoto(popup, lng, lat);
+                }, 300);
+            }
         });
         map.on("mouseleave", layer, () => {
             map.getCanvas().style.cursor = "";
@@ -1490,7 +1561,7 @@ canvas.addEventListener("touchstart", (e) => {
     const px = [touch.clientX - rect.left, touch.clientY - rect.top];
     pressTimer = window.setTimeout(() => {
         const hits = map.queryRenderedFeatures(px, {
-            layers: ["network", "network-unconfirmed", "route"].filter((l) => map.getLayer(l)),
+            layers: ["network-hit", "route"].filter((l) => map.getLayer(l)),
         });
         if (hits.length > 0) {
             const lngLat = map.unproject(px);
@@ -1881,7 +1952,19 @@ el("rides").addEventListener("click", (e) => {
     if (e.target === el("rides"))
         el("rides").close();
 });
+el("mapillary-save").addEventListener("click", () => {
+    const token = el("mapillary-token").value.trim();
+    mapillaryToken = token;
+    if (token === "")
+        localStorage.removeItem("mapillaryToken");
+    else
+        localStorage.setItem("mapillaryToken", token);
+    segPhotoCache.clear();
+    el("mapillary-status").textContent =
+        token === "" ? "cleared" : "✓ saved — hover any street";
+});
 el("about-btn").addEventListener("click", () => {
+    el("mapillary-token").value = mapillaryToken;
     fillAbout();
     el("about").showModal();
 });
