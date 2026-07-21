@@ -2862,6 +2862,14 @@ el<HTMLInputElement>("show-constr").addEventListener("change", (e: Event) => {
 
 renderPlacesAndRecent();
 
+// test hook: E2E (Playwright) asserts on live layer state through this
+declare global {
+  interface Window {
+    _map?: MLMap;
+  }
+}
+window._map = map;
+
 // offline support (PWA)
 if ("serviceWorker" in navigator) {
   void navigator.serviceWorker.register("sw.js");

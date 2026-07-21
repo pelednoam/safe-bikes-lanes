@@ -2639,6 +2639,7 @@ el("show-constr").addEventListener("change", (e) => {
     }
 });
 renderPlacesAndRecent();
+window._map = map;
 // offline support (PWA)
 if ("serviceWorker" in navigator) {
     void navigator.serviceWorker.register("sw.js");

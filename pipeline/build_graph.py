@@ -451,6 +451,8 @@ def build() -> None:
         if key in seen:
             continue
         seen.add(key)
+        # pandas gives NaN for unnamed ways; NaN is invalid JSON
+        raw_name = (listy(row.get("name")) or [None])[0]
         feats.append(
             {
                 "type": "Feature",
@@ -463,14 +465,16 @@ def build() -> None:
                 "properties": {
                     "cls": row["cls"],
                     "color": config.CLASS_COLOR[row["cls"]],
-                    "name": (listy(row.get("name")) or [None])[0],
+                    "name": raw_name if isinstance(raw_name, str) else None,
                     "source": row["source"],
                     "crashes": int(row["crash_count"]),
                 },
             }
         )
     (config.DATA_DIR / "network.geojson").write_text(
-        json.dumps({"type": "FeatureCollection", "features": feats})
+        # allow_nan=False: fail loudly instead of emitting JSON that
+        # JavaScript cannot parse (this silently blanked the map once)
+        json.dumps({"type": "FeatureCollection", "features": feats}, allow_nan=False)
     )
     print(f"wrote network.geojson ({len(feats)} display edges)")
 
