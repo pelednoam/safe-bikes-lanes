@@ -1178,6 +1178,30 @@ map.on("load", () => {
       "fill-extrusion-height": ["*", ["coalesce", ["get", "stress"], 1], 25],
     },
   });
+  map.addSource("lanemap", { type: "geojson", data: "data/lanemap.geojson" });
+  map.addLayer({
+    id: "lanemap",
+    type: "fill",
+    source: "lanemap",
+    layout: { visibility: "none" },
+    paint: {
+      "fill-color": ["get", "color"],
+      "fill-opacity": 0.45,
+      "fill-outline-color": "rgba(0,0,0,0)",
+    },
+  });
+  map.addLayer({
+    id: "lanemap-3d",
+    type: "fill-extrusion",
+    source: "lanemap",
+    layout: { visibility: "none" },
+    paint: {
+      "fill-extrusion-color": ["get", "color"],
+      "fill-extrusion-opacity": 0.7,
+      // towers of infrastructure: 0.4 m per meter of facility in the cell
+      "fill-extrusion-height": ["*", ["coalesce", ["get", "fac_m"], 0], 0.4],
+    },
+  });
   map.addSource("elevmap", { type: "geojson", data: "data/elevation.geojson" });
   map.addLayer({
     id: "elevmap",
@@ -1639,6 +1663,24 @@ map.on("load", () => {
       .addTo(map);
   });
 
+  map.on("mousemove", "lanemap", (e: MapLayerMouseEvent) => {
+    const f = e.features?.[0];
+    if (!f) return;
+    const props = f.properties as { fac_m?: number; prot_m?: number };
+    if (props.fac_m === undefined) return;
+    hoverPopup?.remove();
+    hoverPopup = new maplibregl.Popup({ closeButton: false, closeOnClick: false })
+      .setLngLat(e.lngLat)
+      .setHTML(
+        `🚴 ${props.fac_m} m of bike facilities in this block` +
+          `<br><small>${props.prot_m ?? 0} m protected (path/separated)</small>`,
+      )
+      .addTo(map);
+  });
+  map.on("mouseleave", "lanemap", () => {
+    hoverPopup?.remove();
+    hoverPopup = null;
+  });
   map.on("mousemove", "elevmap", (e: MapLayerMouseEvent) => {
     const f = e.features?.[0];
     if (!f) return;
@@ -1781,30 +1823,32 @@ el<HTMLInputElement>("prefer-flat").addEventListener("change", (e: Event) => {
 
 // the two area overlays are mutually exclusive to stay readable; in 3D view
 // the extruded variants replace the flat fills and terrain turns on
+const AREA_OVERLAYS: [string, string][] = [
+  ["show-heat", "heatmap"],
+  ["show-elev", "elevmap"],
+  ["show-lanes", "lanemap"],
+];
+
 function syncOverlays(): void {
   const threeD = el<HTMLInputElement>("show-3d").checked;
-  const heat = el<HTMLInputElement>("show-heat").checked;
-  const elev = el<HTMLInputElement>("show-elev").checked;
   const vis = (on: boolean): "visible" | "none" => (on ? "visible" : "none");
-  map.setLayoutProperty("heatmap", "visibility", vis(heat && !threeD));
-  map.setLayoutProperty("heatmap-3d", "visibility", vis(heat && threeD));
-  map.setLayoutProperty("elevmap", "visibility", vis(elev && !threeD));
-  map.setLayoutProperty("elevmap-3d", "visibility", vis(elev && threeD));
+  for (const [checkbox, layer] of AREA_OVERLAYS) {
+    const on = el<HTMLInputElement>(checkbox).checked;
+    map.setLayoutProperty(layer, "visibility", vis(on && !threeD));
+    map.setLayoutProperty(`${layer}-3d`, "visibility", vis(on && threeD));
+  }
 }
 
-el<HTMLInputElement>("show-heat").addEventListener("change", (e: Event) => {
-  if ((e.target as HTMLInputElement).checked) {
-    el<HTMLInputElement>("show-elev").checked = false;
-  }
-  syncOverlays();
-});
-
-el<HTMLInputElement>("show-elev").addEventListener("change", (e: Event) => {
-  if ((e.target as HTMLInputElement).checked) {
-    el<HTMLInputElement>("show-heat").checked = false;
-  }
-  syncOverlays();
-});
+for (const [checkbox] of AREA_OVERLAYS) {
+  el<HTMLInputElement>(checkbox).addEventListener("change", (e: Event) => {
+    if ((e.target as HTMLInputElement).checked) {
+      for (const [other] of AREA_OVERLAYS) {
+        if (other !== checkbox) el<HTMLInputElement>(other).checked = false;
+      }
+    }
+    syncOverlays();
+  });
+}
 
 el<HTMLInputElement>("show-3d").addEventListener("change", (e: Event) => {
   const on = (e.target as HTMLInputElement).checked;

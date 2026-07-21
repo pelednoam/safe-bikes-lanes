@@ -103,6 +103,72 @@ def export_heatmap(graph: nx.MultiDiGraph) -> None:
     print(f"wrote {path} ({len(feats)} cells)")
 
 
+LANE_CLASSES = {"path", "separated", "buffered", "lane"}
+PROTECTED_LANE_CLASSES = {"path", "separated"}
+# lane-coverage bands: meters of facility per ~100 m cell → green intensity
+LANE_BANDS: list[tuple[float, str]] = [
+    (100.0, "#c7e9c0"),
+    (250.0, "#74c476"),
+    (float("inf"), "#238b45"),
+]
+
+
+def export_lane_heatmap(graph: nx.MultiDiGraph) -> None:
+    """Facility-density grid: meters of bike lane/path per ~100 m cell.
+    Cells with no facilities are omitted (transparent) — the map shows where
+    infrastructure exists and how dense it is."""
+    cells: defaultdict[tuple[int, int], list[float]] = defaultdict(lambda: [0.0, 0.0])
+    seen: set[tuple[int, int, float]] = set()
+    for u, v, d in graph.edges(data=True):
+        cls = d.get("cls")
+        if cls not in LANE_CLASSES:
+            continue
+        key = (min(u, v), max(u, v), round(float(d["length"]), 1))
+        if key in seen:
+            continue
+        seen.add(key)
+        if "geometry" in d:
+            coords = [(float(x), float(y)) for x, y in d["geometry"].coords]
+        else:
+            coords = [
+                (float(graph.nodes[u]["x"]), float(graph.nodes[u]["y"])),
+                (float(graph.nodes[v]["x"]), float(graph.nodes[v]["y"])),
+            ]
+        protected = cls in PROTECTED_LANE_CLASSES
+        for lon, lat, meters in _seg_samples(coords):
+            cell = (int(lon / CELL_LON), int(lat / CELL_LAT))
+            acc = cells[cell]
+            acc[0] += meters
+            if protected:
+                acc[1] += meters
+    feats: list[dict[str, Any]] = []
+    for (cx, cy), (fac_m, prot_m) in cells.items():
+        if fac_m < 20:
+            continue
+        color = next(c for cap, c in LANE_BANDS if fac_m <= cap)
+        w, so = cx * CELL_LON, cy * CELL_LAT
+        e, n = w + CELL_LON, so + CELL_LAT
+        feats.append(
+            {
+                "type": "Feature",
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [[[w, so], [e, so], [e, n], [w, n], [w, so]]],
+                },
+                "properties": {
+                    "color": color,
+                    "fac_m": round(fac_m),
+                    "prot_m": round(prot_m),
+                },
+            }
+        )
+    path = WEB_DATA / "lanemap.geojson"
+    path.write_text(
+        json.dumps({"type": "FeatureCollection", "features": feats}, separators=(",", ":"))
+    )
+    print(f"wrote {path} ({len(feats)} cells)")
+
+
 # Hypsometric bands (meters above sea level) → color; the area tops out ~60 m.
 ELEV_BANDS: list[tuple[float, str]] = [
     (5, "#4575b4"),
@@ -257,6 +323,7 @@ def export() -> None:
         shutil.copy(pois, WEB_DATA / "pois.geojson")
     export_gateways(graph)
     export_heatmap(graph)
+    export_lane_heatmap(graph)
     export_elevation_heatmap()
     export_construction()
     export_meta()
