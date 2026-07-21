@@ -222,10 +222,10 @@ export class Router {
     }
     /** Ride-equivalent cost of walking each edge (class-independent: pushing a
      * bike on the sidewalk is low-stress even beside a busy street). */
-    walkWeights() {
+    walkWeights(factor) {
         const w = new Float64Array(this.g.edges.length);
         this.g.edges.forEach((e, i) => {
-            w[i] = e[2] * WALK_FACTOR;
+            w[i] = e[2] * factor;
         });
         return w;
     }
@@ -351,9 +351,9 @@ export class Router {
     }
     /** Two-layer search (riding + walking the bike). States 0..N-1 ride at the
      * node; N..2N-1 walk. Layer switches cost dismount/mount friction. */
-    shortestPathWalk(from, to, w, extra) {
+    shortestPathWalk(from, to, w, walkFactor, extra) {
         const n = this.g.nodes.length;
-        const walkW = this.walkWeights();
+        const walkW = this.walkWeights(walkFactor);
         const dist = new Float64Array(2 * n).fill(Infinity);
         const prevEdge = new Int32Array(2 * n).fill(-1);
         const prevState = new Int32Array(2 * n).fill(-1);
@@ -717,10 +717,31 @@ export class Router {
         }
         return reasons;
     }
+    /** Walk-aware search honoring a total walking budget: if the best path
+     * walks more than budgetM, walking is made progressively more expensive
+     * until the result fits (worst case: an all-riding path). */
+    shortestPathWalkBudgeted(from, to, w, budgetM, extra) {
+        let factor = WALK_FACTOR;
+        for (let tries = 0; tries < 6; tries++) {
+            const r = this.shortestPathWalk(from, to, w, factor, extra);
+            if (r === null)
+                return null;
+            let walked = 0;
+            r.walk.forEach((flag, i) => {
+                if (flag)
+                    walked += this.g.edges[r.path[i] ?? -1]?.[2] ?? 0;
+            });
+            if (walked <= budgetM)
+                return r;
+            factor *= 2;
+        }
+        const plain = this.shortestPath(from, to, w, extra);
+        return plain === null ? null : { path: plain, walk: plain.map(() => false) };
+    }
     // -- public queries --------------------------------------------------------
     /** Up to three distinct options (safest / balanced / direct), graded and
      * explained. Fewer appear when the paths coincide. */
-    routeOptions(start, end, profileId = "young_kids", preferFlat = false, bias, avoid, walkOk = false) {
+    routeOptions(start, end, profileId = "young_kids", preferFlat = false, bias, avoid, walkMaxM = 0) {
         const a = this.nearestNode(start[0], start[1]);
         const b = this.nearestNode(end[0], end[1]);
         if (a === b)
@@ -756,8 +777,8 @@ export class Router {
         const walks = new Map();
         for (const c of candidates) {
             // the heading bias shapes real guidance, not the direct reference
-            if (walkOk && !c.isDirect) {
-                const r = this.shortestPathWalk(a, b, c.w, bias);
+            if (walkMaxM > 0 && !c.isDirect) {
+                const r = this.shortestPathWalkBudgeted(a, b, c.w, walkMaxM, bias);
                 if (r === null)
                     throw new Error("no path found");
                 paths.set(c.id, r.path);
@@ -792,8 +813,9 @@ export class Router {
             const walkM = payload.summary.walk_m ?? 0;
             if (walkM > 0) {
                 payload.summary.explanation?.push(`Includes ${fmt(walkM)} of walking the bike ` +
-                    `(~${Math.round((walkM / 1000 / 4) * 60)} min) to bridge safe segments — ` +
-                    `shorter overall than riding the long way around.`);
+                    `(~${Math.round((walkM / 1000 / 4) * 60)} min, within your ${fmt(walkMaxM)} ` +
+                    `walking budget) to bridge safe segments — shorter overall than riding ` +
+                    `the long way around.`);
             }
             if (avoid !== undefined && avoid.size > 0 && !c.isDirect) {
                 const onAvoided = this.metersOnClasses(path, avoid, walkFlags);

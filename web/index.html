@@ -183,8 +183,15 @@
     <label><input type="radio" name="profile" value="solo"> solo</label>
     <label title="Adds a cost for every meter of climb (extra on >4% grades)">
       <input type="checkbox" id="prefer-flat"> prefer flat</label>
-    <label title="Allow short bike-walking stretches (sidewalk pace) to bridge safe segments instead of long ride-arounds — shown dashed white, announced in navigation">
-      <input type="checkbox" id="walk-ok"> 🚶 ok to walk</label>
+    <label title="Bridge safe segments with short bike-walking stretches (sidewalk pace) instead of long ride-arounds — capped by this total budget; shown dashed white, announced in navigation">
+      🚶 walk up to
+      <select id="walk-max">
+        <option value="0" selected>0 m</option>
+        <option value="100">100 m</option>
+        <option value="250">250 m</option>
+        <option value="500">500 m</option>
+        <option value="1000">1 km</option>
+      </select></label>
   </div>
   <details id="avoid-box">
     <summary id="avoid-summary">🛡 avoid lane types</summary>
