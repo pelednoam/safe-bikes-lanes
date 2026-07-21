@@ -674,7 +674,10 @@ function updateHash() {
     if (!start)
         return;
     const s = start.getLngLat();
-    const base = `s=${s.lng.toFixed(6)},${s.lat.toFixed(6)}&m=${profileId}` + (preferFlat ? "&f=1" : "");
+    const base = `s=${s.lng.toFixed(6)},${s.lat.toFixed(6)}&m=${profileId}` +
+        (preferFlat ? "&f=1" : "") +
+        (walkMaxM > 0 ? `&wk=${walkMaxM}` : "") +
+        (avoidTypes.size > 0 ? `&x=${[...avoidTypes].join(",")}` : "");
     let h;
     if (loopParams !== null) {
         h = `${base}&l=${loopParams.km},${loopParams.kind}`;
@@ -729,8 +732,6 @@ function parseHash() {
             el(`avoid-${cls}`).checked = avoidTypes.has(cls);
         }
         syncAvoidSummary();
-        walkMaxM = Number(localStorage.getItem("walkMaxM") ?? "0") || 0;
-        el("walk-max").value = String(walkMaxM);
     }
     const o = params.get("o");
     if (o === "safest" || o === "balanced" || o === "direct")
@@ -1710,6 +1711,9 @@ el("walk-max").addEventListener("change", (e) => {
     localStorage.setItem("walkMaxM", String(walkMaxM));
     void requestRoute();
 });
+// restore the persisted walking budget
+walkMaxM = Number(localStorage.getItem("walkMaxM") ?? "0") || 0;
+el("walk-max").value = String(walkMaxM);
 for (const [cls] of AVOIDABLE) {
     const box = el(`avoid-${cls}`);
     box.checked = avoidTypes.has(cls);
@@ -2670,7 +2674,10 @@ function applyBasemap() {
             map.setPaintProperty(layer, "line-opacity", aerial ? 0.95 : 0.75);
         }
     };
-    if (map.loaded())
+    // map.loaded() is false whenever tiles are streaming, and "load" fires only
+    // once per map — gate on layer existence instead, or toggles made while
+    // tiles load would be silently dropped
+    if (map.getLayer("osm-dark") !== undefined)
         setVis();
     else
         map.once("load", setVis);

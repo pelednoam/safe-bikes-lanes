@@ -46,10 +46,15 @@ test("safety network toggle hides and restores the layers", async ({ page }) => 
   await page.locator("#show-net").click();
   expect(await vis(page, "network")).toBe("visible");
   expect(await vis(page, "network-unconfirmed")).toBe("visible");
-  const rendered = await page.evaluate(
-    () => window._map?.queryRenderedFeatures(undefined, { layers: ["network"] }).length ?? 0,
-  );
-  expect(rendered).toBeGreaterThan(50);
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () => window._map?.queryRenderedFeatures(undefined, { layers: ["network"] }).length ?? 0,
+        ),
+      { timeout: 15_000 },
+    )
+    .toBeGreaterThan(50);
   expect(errors).toEqual([]);
 });
 
