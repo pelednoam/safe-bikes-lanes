@@ -1364,16 +1364,24 @@ map.on("load", () => {
           : "";
       return `⚠ <b>${cat !== null ? HAZARD_LABELS[cat] : "hazard"}</b>${note}${photo}${when}`;
     },
-    "construction-pts": (p) => {
-      const name = typeof p["name"] === "string" && p["name"] !== "" ? p["name"] : "construction";
-      const kind = typeof p["kind"] === "string" ? `<br><small>${p["kind"]}</small>` : "";
-      const dates =
-        typeof p["start"] === "string" && typeof p["end"] === "string"
-          ? `<br><small>${p["start"]} → ${p["end"]}</small>`
-          : "";
-      return `🚧 <b>${name}</b>${kind}${dates}`;
-    },
+    "construction-pts": (p) => constructionHtml(p),
+    "construction-lines": (p) => constructionHtml(p),
   };
+  function constructionHtml(p: Record<string, unknown>): string {
+    const name = typeof p["name"] === "string" && p["name"] !== "" ? p["name"] : "construction";
+    const kind = typeof p["kind"] === "string" ? ` · ${p["kind"]}` : "";
+    const address =
+      typeof p["address"] === "string" && p["address"] !== "" ? `<br>${p["address"]}` : "";
+    const detail =
+      typeof p["detail"] === "string" && p["detail"] !== "" ? `<br>${p["detail"]}` : "";
+    const source =
+      p["src"] === "massdot_wzdx" ? "MassDOT work zone" : "Cambridge street permit";
+    const dates =
+      typeof p["start"] === "string" && typeof p["end"] === "string"
+        ? ` · ${p["start"]} → ${p["end"]}`
+        : "";
+    return `🚧 <b>${name}</b>${kind}${address}${detail}<br><small>${source}${dates}</small>`;
+  }
   for (const [layer, html] of Object.entries(hoverHtml)) {
     map.on("mousemove", layer, (e: MapLayerMouseEvent) => {
       map.getCanvas().style.cursor = "pointer";
