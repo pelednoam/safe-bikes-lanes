@@ -1128,6 +1128,19 @@ map.on("load", () => {
     },
   });
   map.addSource("network", { type: "geojson", data: "data/network.geojson" });
+  // dark halo under the network lines — only over aerial imagery, where
+  // colored lines otherwise vanish against bright pavement
+  map.addLayer({
+    id: "network-casing",
+    type: "line",
+    source: "network",
+    layout: { visibility: "none" },
+    paint: {
+      "line-color": "#111111",
+      "line-width": ["interpolate", ["linear"], ["zoom"], 12, 3.2, 16, 7.5],
+      "line-opacity": 0.85,
+    },
+  });
   // facilities confirmed by an official source (or non-facility classes): solid
   map.addLayer({
     id: "network",
@@ -1597,6 +1610,7 @@ el<HTMLButtonElement>("loop-btn").addEventListener("click", () => {
   void requestLoop();
 });
 
+el<HTMLInputElement>("show-net").addEventListener("change", applyBasemap);
 for (const [checkboxId, layers] of [
   ["show-net", ["network", "network-unconfirmed"]],
   ["show-pois", ["pois"]],
@@ -2589,12 +2603,26 @@ el<HTMLButtonElement>("offline-btn").addEventListener("click", () => {
 function applyBasemap(): void {
   const dark = document.body.classList.contains("dark");
   const aerial = el<HTMLInputElement>("show-aerial").checked;
+  const netOn = el<HTMLInputElement>("show-net").checked;
   const setVis = (): void => {
     map.setLayoutProperty("aerial", "visibility", aerial ? "visible" : "none");
     map.setLayoutProperty("osm-dark", "visibility", !aerial && dark ? "visible" : "none");
     map.setLayoutProperty("osm", "visibility", !aerial && !dark ? "visible" : "none");
     map.setPaintProperty("route-casing", "line-color", dark || aerial ? "#9db8ff" : "#1440a0");
     map.setPaintProperty("alts", "line-color", dark || aerial ? "#ccc" : "#777");
+    // over photos the lanes need contrast: dark halo + thicker, solid lines
+    map.setLayoutProperty(
+      "network-casing",
+      "visibility",
+      aerial && netOn ? "visible" : "none",
+    );
+    const width: unknown = aerial
+      ? ["interpolate", ["linear"], ["zoom"], 12, 2.0, 16, 5.0]
+      : ["interpolate", ["linear"], ["zoom"], 12, 1.2, 16, 3.5];
+    for (const layer of ["network", "network-unconfirmed"]) {
+      map.setPaintProperty(layer, "line-width", width);
+      map.setPaintProperty(layer, "line-opacity", aerial ? 0.95 : 0.75);
+    }
   };
   if (map.loaded()) setVis();
   else map.once("load", setVis);
