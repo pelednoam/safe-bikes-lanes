@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   refresh:
@@ -58,4 +59,9 @@ jobs:
           else
             git commit -m "Automated data refresh $(date -u +%F)" -m "$(git diff --cached --stat | tail -12)"
             git push
+            # pushes from GITHUB_TOKEN don't trigger push workflows —
+            # dispatch the Pages deploy explicitly (the documented exception)
+            gh workflow run pages.yml --ref main
           fi
+        env:
+          GH_TOKEN: ${{ github.token }}
