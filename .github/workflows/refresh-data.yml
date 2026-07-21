@@ -1,12 +1,12 @@
 name: Refresh data sources
 
-# Monthly: re-pull all sources (city GIS, MassDOT, crashes, OSM, POIs,
+# Weekly: re-pull all sources (city GIS, MassDOT, crashes, OSM, POIs,
 # terrain), rebuild the graph, re-export web data, and push if anything
 # changed — the push triggers the Pages deploy. The commit body carries the
 # diff stat so new-lane changes are visible in history.
 on:
   schedule:
-    - cron: "0 6 2 * *"
+    - cron: "0 6 * * 1"  # weekly (Mondays) — construction data moves fast
   workflow_dispatch:
 
 permissions:
@@ -25,6 +25,8 @@ jobs:
         run: pip install osmnx geopandas networkx shapely pillow
       - name: Refresh all sources
         working-directory: pipeline
+        env:
+          MASSDOT_WZDX_API_KEY: ${{ secrets.MASSDOT_WZDX_API_KEY }}
         run: python fetch.py --refresh
       - name: Rebuild graph
         working-directory: pipeline

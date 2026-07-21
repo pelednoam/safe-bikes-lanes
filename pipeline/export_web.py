@@ -258,7 +258,93 @@ def export() -> None:
     export_gateways(graph)
     export_heatmap(graph)
     export_elevation_heatmap()
+    export_construction()
     export_meta()
+
+
+def _in_bbox(coords: list[Any]) -> bool:
+    """True if any coordinate of a (possibly nested) coord array is in our bbox."""
+    flat: list[tuple[float, float]] = []
+
+    def walk(node: list[Any]) -> None:
+        if len(node) >= 2 and isinstance(node[0], (int, float)):
+            flat.append((float(node[0]), float(node[1])))
+            return
+        for child in node:
+            if isinstance(child, list):
+                walk(child)
+
+    walk(coords)
+    return any(
+        config.BBOX_WEST <= lon <= config.BBOX_EAST
+        and config.BBOX_SOUTH <= lat <= config.BBOX_NORTH
+        for lon, lat in flat
+    )
+
+
+def export_construction() -> None:
+    """Merge active construction into web/data/construction.geojson:
+    MassDOT WZDx work zones (when fetched) + Cambridge street/excavation
+    permits. Filter: currently active or starting within 21 days."""
+    now = datetime.datetime.now(datetime.UTC)
+    horizon = now + datetime.timedelta(days=21)
+    features: list[dict[str, Any]] = []
+
+    wz = config.RAW_DIR / "workzones.geojson"
+    if wz.exists():
+        feed = json.loads(wz.read_text())
+        for f in feed.get("features", []):
+            props = f.get("properties", {})
+            core = props.get("core_details", props)
+            start_s = str(props.get("start_date") or core.get("start_date") or "")[:19]
+            end_s = str(props.get("end_date") or core.get("end_date") or "")[:19]
+
+            def parse(s: str) -> datetime.datetime | None:
+                try:
+                    return datetime.datetime.fromisoformat(s).replace(
+                        tzinfo=datetime.UTC
+                    )
+                except ValueError:
+                    return None
+
+            start = parse(start_s)
+            end = parse(end_s)
+            if end is not None and end < now:
+                continue
+            if start is not None and start > horizon:
+                continue
+            geom = f.get("geometry")
+            if not geom or not _in_bbox(geom.get("coordinates", [])):
+                continue
+            roads = core.get("road_names") or []
+            features.append(
+                {
+                    "type": "Feature",
+                    "geometry": geom,
+                    "properties": {
+                        "src": "massdot_wzdx",
+                        "name": ", ".join(str(r) for r in roads) or "work zone",
+                        "detail": str(core.get("description", ""))[:200],
+                        "start": start_s[:10],
+                        "end": end_s[:10],
+                    },
+                }
+            )
+    else:
+        print("  (no workzones.geojson — WZDx key not configured, skipping)")
+
+    permits = config.RAW_DIR / "cambridge_permits.geojson"
+    if permits.exists():
+        for f in json.loads(permits.read_text()).get("features", []):
+            geom = f.get("geometry")
+            if geom and _in_bbox(geom.get("coordinates", [])):
+                features.append(f)
+
+    path = WEB_DATA / "construction.geojson"
+    path.write_text(
+        json.dumps({"type": "FeatureCollection", "features": features}, separators=(",", ":"))
+    )
+    print(f"wrote {path} ({len(features)} active construction features)")
 
 
 def export_meta() -> None:

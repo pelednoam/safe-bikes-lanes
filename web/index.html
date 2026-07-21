@@ -239,6 +239,10 @@
     <input type="checkbox" id="show-3d"> 3D view</label>
   <label class="toggle" title="Dark basemap and UI for night rides (remembered; defaults to your system setting)">
     <input type="checkbox" id="dark-mode"> 🌙 dark mode</label>
+  <label class="toggle" title="MassGIS 15 cm aerial imagery (2023) — sharp enough to see lane paint and flexposts">
+    <input type="checkbox" id="show-aerial"> 🛰 aerial view</label>
+  <label class="toggle" title="Active work zones and street permits (MassDOT + Cambridge); routes automatically avoid them">
+    <input type="checkbox" id="show-constr" checked> 🚧 construction</label>
   <label class="toggle" title="Playgrounds, ice cream, libraries, water fountains, restrooms">
     <input type="checkbox" id="show-pois"> kid stops</label>
   <label class="toggle" title="Signalized crossings of busy streets — the safe ways through barriers">
@@ -318,6 +322,14 @@
   <p>Everything below refreshes <b>automatically every month</b>; the map you're
   looking at was built on <b id="built-date">…</b>.</p>
   <table id="freshness-table"><tr><th>source</th><th>retrieved</th><th>features</th></tr></table>
+  <p><b>Construction</b>: active Cambridge street/excavation permits (city open
+  data) and — when a free MassDOT Work Zones API key is configured — statewide
+  WZDx work zones appear as 🚧 and routes automatically steer around them
+  (refreshed weekly). <b>Imagery</b>: the 🛰 aerial view is MassGIS 15 cm
+  orthophotos (2023); with a free
+  <a href="https://www.mapillary.com/developer" target="_blank" rel="noopener">Mapillary token</a>
+  (saved via browser console as <code>localStorage.setItem("mapillaryToken", "MLY|…")</code>)
+  caution spots gain 📷 street-level photo previews.</p>
   <p>Sources:
     <a href="https://github.com/cambridgegis/cambridgegis_data" target="_blank" rel="noopener">Cambridge GIS</a> ·
     <a href="https://gis.massdot.state.ma.us/arcgis/rest/services/Multimodal" target="_blank" rel="noopener">MassDOT Bike Inventory &amp; LTS</a> ·
