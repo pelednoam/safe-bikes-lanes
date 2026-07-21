@@ -104,6 +104,18 @@ install it on the phone (allow installs from unknown sources), or push a tag
 like `app-v1` to attach the APK to a release. Local builds work too with an
 Android SDK: `cd web && npm run app:sync && cd android && ./gradlew assembleDebug`.
 
+## Lane QA (aerial audit)
+
+`pipeline/aerial_audit.py` samples facility corridors (OSM-only segments
+first) and compares MassGIS 15 cm orthoimagery across vintages (2023 vs 2025):
+green-paint / white-marking pixel ratios per site, flagging changes and
+painted facilities with no visible markings (shadowed sites report "unclear").
+`pipeline/review_page.py` renders the worklist with side-by-side crops at
+`/data/review/` on the site. Heuristic flags for human review — confirm via
+the linked street-level photos, record real changes in
+`data/overrides.geojson`. Run on demand (imagery is static between vintages;
+tiles cache under `data/raw/aerial/`).
+
 ## Dev checks
 
 ```bash
