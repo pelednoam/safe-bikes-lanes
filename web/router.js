@@ -78,6 +78,16 @@ const CONSTRUCTION_MULT = 4.0;
 const CONSTRUCTION_SNAP_M = 40;
 /** Outbound-edge penalty when planning the return leg of a loop. */
 const LOOP_REUSE_MULT = 4.0;
+/** Multiplier floor for lane types the rider chose to avoid — the "as much
+ * as possible" semantics: near-prohibitive, never a hard ban. */
+const AVOID_TYPE_MULT = 30.0;
+/** Walking the bike: slower than riding (ride-equivalent distance factor at a
+ * kid's pace) but nearly stress-free; dismount/mount friction keeps the router
+ * from flip-flopping over tiny stretches. */
+const WALK_FACTOR = 2.4;
+const DISMOUNT_COST_M = 90.0;
+const MOUNT_COST_M = 40.0;
+const WALK_PACE_KMH = 4.0;
 function fmt(m) {
     return m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(1)} km`;
 }
@@ -184,7 +194,7 @@ export class Router {
     }
     // -- weights ---------------------------------------------------------------
     /** Per-edge weight for a profile (null = pure distance). */
-    weights(profile, preferFlat) {
+    weights(profile, preferFlat, avoid) {
         const w = new Float64Array(this.g.edges.length);
         this.g.edges.forEach((e, i) => {
             if (profile === null) {
@@ -197,6 +207,8 @@ export class Router {
                 mult = profile.busyLane;
             if (e[9] === 1 && cls === "buffered")
                 mult = profile.busyBuffered;
+            if (avoid?.has(cls))
+                mult = Math.max(mult, AVOID_TYPE_MULT);
             let wi = e[2] * mult * e[6] + e[7] * profile.penScale;
             if (preferFlat)
                 wi += this.hillPen[i];
@@ -205,6 +217,15 @@ export class Router {
             if (this.construction.has(i))
                 wi *= CONSTRUCTION_MULT;
             w[i] = wi;
+        });
+        return w;
+    }
+    /** Ride-equivalent cost of walking each edge (class-independent: pushing a
+     * bike on the sidewalk is low-stress even beside a busy street). */
+    walkWeights() {
+        const w = new Float64Array(this.g.edges.length);
+        this.g.edges.forEach((e, i) => {
+            w[i] = e[2] * WALK_FACTOR;
         });
         return w;
     }
@@ -328,6 +349,83 @@ export class Router {
             return null;
         return this.tracePath(prevEdge, from, to);
     }
+    /** Two-layer search (riding + walking the bike). States 0..N-1 ride at the
+     * node; N..2N-1 walk. Layer switches cost dismount/mount friction. */
+    shortestPathWalk(from, to, w, extra) {
+        const n = this.g.nodes.length;
+        const walkW = this.walkWeights();
+        const dist = new Float64Array(2 * n).fill(Infinity);
+        const prevEdge = new Int32Array(2 * n).fill(-1);
+        const prevState = new Int32Array(2 * n).fill(-1);
+        const done = new Uint8Array(2 * n);
+        dist[from] = 0;
+        const heap = new MinHeap();
+        heap.push(0, from);
+        while (heap.size > 0) {
+            const popped = heap.pop();
+            if (popped === null)
+                break;
+            const [d, s] = popped;
+            if (done[s])
+                continue;
+            done[s] = 1;
+            if (s === to)
+                break; // arriving riding is the goal
+            const walking = s >= n;
+            const node = walking ? s - n : s;
+            // layer switch
+            const t = walking ? node : node + n;
+            const switchCost = walking ? MOUNT_COST_M : DISMOUNT_COST_M;
+            if (!done[t] && d + switchCost < dist[t]) {
+                dist[t] = d + switchCost;
+                prevEdge[t] = -1;
+                prevState[t] = s;
+                heap.push(d + switchCost, t);
+            }
+            const edges = this.adj[node];
+            if (!edges)
+                continue;
+            for (const ei of edges) {
+                const e = this.g.edges[ei];
+                if (!e)
+                    continue;
+                const v = walking ? e[1] + n : e[1];
+                if (done[v])
+                    continue;
+                const cost = walking
+                    ? walkW[ei]
+                    : w[ei] * (extra?.get(ei) ?? 1);
+                const nd = d + cost;
+                if (nd < dist[v]) {
+                    dist[v] = nd;
+                    prevEdge[v] = ei;
+                    prevState[v] = s;
+                    heap.push(nd, v);
+                }
+            }
+        }
+        // arriving on foot is fine too (mount at the door costs nothing extra)
+        const endState = dist[to] <= dist[to + n] + MOUNT_COST_M ? to : to + n;
+        if (dist[endState] === Infinity)
+            return null;
+        const path = [];
+        const walk = [];
+        let cur = endState;
+        while (cur !== from) {
+            const ei = prevEdge[cur];
+            const prev = prevState[cur];
+            if (prev < 0)
+                return null;
+            if (ei >= 0) {
+                path.push(ei);
+                walk.push(cur >= n);
+            }
+            cur = prev;
+        }
+        path.reverse();
+        walk.reverse();
+        return { path, walk };
+    }
     /** Everything reachable from a point within a perceived-distance budget. */
     safeShed(center, budgetM, profileId, preferFlat) {
         const from = this.nearestNode(center[0], center[1]);
@@ -370,26 +468,32 @@ export class Router {
         const b = this.g.nodes[e[1]];
         return a && b ? [[a[0], a[1]], [b[0], b[1]]] : [];
     }
-    payload(edgePath, profile) {
+    payload(edgePath, profile, walkFlags) {
         const features = [];
         const byClass = new Map();
         const cautions = [];
         const ribbon = [];
         let total = 0;
         let climb = 0;
-        for (const ei of edgePath) {
+        let walkM = 0;
+        for (const [pi, ei] of edgePath.entries()) {
             const e = this.g.edges[ei];
             if (!e)
                 continue;
+            const walked = walkFlags?.[pi] === true;
             const cls = this.g.classes[e[3]] ?? "quiet_street";
             const name = this.g.names[e[4]] ?? "";
             const length = e[2];
             total += length;
             climb += e[8];
-            byClass.set(cls, (byClass.get(cls) ?? 0) + length);
+            if (walked)
+                walkM += length;
+            else
+                byClass.set(cls, (byClass.get(cls) ?? 0) + length);
             const coords = this.edgeCoords(ei);
             const first = coords[0];
-            if (CAUTION_CLASSES.has(cls)) {
+            // a walked stretch is the mitigation, not a caution
+            if (!walked && CAUTION_CLASSES.has(cls)) {
                 const prev = cautions[cautions.length - 1];
                 const label = name || "unnamed";
                 if (prev && prev.name === label && prev.cls === cls)
@@ -405,11 +509,16 @@ export class Router {
             }
             const e0 = this.g.nodes[e[0]]?.[2] ?? 0;
             const e1 = this.g.nodes[e[1]]?.[2] ?? 0;
-            ribbon.push({ m: length, cls, e0, e1, crossing: e[7] > 100 });
+            ribbon.push({ m: length, cls, e0, e1, crossing: !walked && e[7] > 100, walk: walked });
             features.push({
                 type: "Feature",
                 geometry: { type: "LineString", coordinates: coords },
-                properties: { cls, color: CLASS_COLORS[cls], name: name || null },
+                properties: {
+                    cls,
+                    color: CLASS_COLORS[cls],
+                    name: name || null,
+                    ...(walked ? { walk: true } : {}),
+                },
             });
         }
         const sum = (classes) => classes.reduce((acc, c) => acc + (byClass.get(c) ?? 0), 0);
@@ -418,7 +527,8 @@ export class Router {
             ribbon,
             summary: {
                 meters: Math.round(total),
-                minutes: Math.round((total / 1000 / profile.paceKmh) * 60),
+                minutes: Math.round(((total - walkM) / 1000 / profile.paceKmh + walkM / 1000 / WALK_PACE_KMH) * 60),
+                ...(walkM > 0 ? { walk_m: Math.round(walkM) } : {}),
                 climb_m: Math.round(climb),
                 pct_protected: total > 0 ? Math.round((100 * sum(["path", "separated", "buffered"])) / total) : 0,
                 pct_quiet: total > 0 ? Math.round((100 * sum(["quiet_street", "service"])) / total) : 0,
@@ -432,14 +542,27 @@ export class Router {
         };
     }
     // -- analysis helpers ------------------------------------------------------
-    stressMeters(edgePath) {
+    stressMeters(edgePath, walkFlags) {
         let m = 0;
-        for (const ei of edgePath) {
+        for (const [pi, ei] of edgePath.entries()) {
             const e = this.g.edges[ei];
-            if (!e)
+            if (!e || walkFlags?.[pi] === true)
                 continue;
             const cls = this.g.classes[e[3]];
             if (cls !== undefined && CAUTION_CLASSES.has(cls))
+                m += e[2];
+        }
+        return m;
+    }
+    /** Meters of the path ridden on the given classes. */
+    metersOnClasses(edgePath, classes, walkFlags) {
+        let m = 0;
+        for (const [pi, ei] of edgePath.entries()) {
+            const e = this.g.edges[ei];
+            if (!e || walkFlags?.[pi] === true)
+                continue;
+            const cls = this.g.classes[e[3]];
+            if (cls !== undefined && classes.has(cls))
                 m += e[2];
         }
         return m;
@@ -490,12 +613,12 @@ export class Router {
         return runs.sort((a, b) => b.meters - a.meters);
     }
     /** Objective safety grade on the young-kids stress scale. */
-    gradeRoute(edgePath) {
+    gradeRoute(edgePath, walkFlags) {
         const yk = PROFILES.young_kids;
         let len = 0;
         let cost = 0;
         let protectedM = 0;
-        for (const ei of edgePath) {
+        for (const [pi, ei] of edgePath.entries()) {
             const e = this.g.edges[ei];
             if (!e)
                 continue;
@@ -505,13 +628,15 @@ export class Router {
                 mult = yk.busyLane;
             if (e[9] === 1 && cls === "buffered")
                 mult = yk.busyBuffered;
+            if (walkFlags?.[pi] === true)
+                mult = 1.3; // pushing the bike is calm
             len += e[2];
             cost += e[2] * mult * e[6] + e[7];
             if (PROTECTED.has(cls) || cls === "buffered")
                 protectedM += e[2];
         }
         const avg = len > 0 ? cost / len : 1;
-        const stress = this.stressMeters(edgePath);
+        const stress = this.stressMeters(edgePath, walkFlags);
         const grade = avg <= 1.6 ? "A" : avg <= 2.4 ? "B" : avg <= 4 ? "C" : avg <= 8 ? "D" : "F";
         const pctProt = len > 0 ? Math.round((100 * protectedM) / len) : 0;
         const reason = `avg kid-stress ${avg.toFixed(1)}× per meter — ${pctProt}% protected, ` +
@@ -595,7 +720,7 @@ export class Router {
     // -- public queries --------------------------------------------------------
     /** Up to three distinct options (safest / balanced / direct), graded and
      * explained. Fewer appear when the paths coincide. */
-    routeOptions(start, end, profileId = "young_kids", preferFlat = false, bias) {
+    routeOptions(start, end, profileId = "young_kids", preferFlat = false, bias, avoid, walkOk = false) {
         const a = this.nearestNode(start[0], start[1]);
         const b = this.nearestNode(end[0], end[1]);
         if (a === b)
@@ -607,7 +732,7 @@ export class Router {
                 id: "safest",
                 label: "Safest",
                 profile,
-                w: this.weights(profile, preferFlat),
+                w: this.weights(profile, preferFlat, avoid),
                 isDirect: false,
             },
         ];
@@ -616,7 +741,7 @@ export class Router {
                 id: "balanced",
                 label: "Balanced",
                 profile: PROFILES[milderId],
-                w: this.weights(PROFILES[milderId], preferFlat),
+                w: this.weights(PROFILES[milderId], preferFlat, avoid),
                 isDirect: false,
             });
         }
@@ -628,12 +753,23 @@ export class Router {
             isDirect: true,
         });
         const paths = new Map();
+        const walks = new Map();
         for (const c of candidates) {
             // the heading bias shapes real guidance, not the direct reference
-            const p = this.shortestPath(a, b, c.w, c.isDirect ? undefined : bias);
-            if (p === null)
-                throw new Error("no path found");
-            paths.set(c.id, p);
+            if (walkOk && !c.isDirect) {
+                const r = this.shortestPathWalk(a, b, c.w, bias);
+                if (r === null)
+                    throw new Error("no path found");
+                paths.set(c.id, r.path);
+                walks.set(c.id, r.walk.some(Boolean) ? r.walk : undefined);
+            }
+            else {
+                const p = this.shortestPath(a, b, c.w, c.isDirect ? undefined : bias);
+                if (p === null)
+                    throw new Error("no path found");
+                paths.set(c.id, p);
+                walks.set(c.id, undefined);
+            }
         }
         const directPath = paths.get("direct");
         const directPayload = this.payload(directPath, profile);
@@ -641,18 +777,35 @@ export class Router {
         const seen = new Set();
         for (const c of candidates) {
             const path = paths.get(c.id);
-            const key = path.join(",");
+            const walkFlags = walks.get(c.id);
+            const key = path.join(",") + (walkFlags ? "|w" : "");
             if (seen.has(key))
                 continue;
             seen.add(key);
-            const payload = c.id === "direct" ? directPayload : this.payload(path, c.profile);
+            const payload = c.id === "direct" ? directPayload : this.payload(path, c.profile, walkFlags);
             payload.summary.shortest_meters = directPayload.summary.meters;
             payload.summary.detour_pct =
                 directPayload.summary.meters > 0
                     ? Math.round(100 * (payload.summary.meters / directPayload.summary.meters - 1))
                     : 0;
             payload.summary.explanation = this.explain(path, directPath, payload, directPayload, c.profile, c.isDirect, preferFlat);
-            const { grade, reason } = this.gradeRoute(path);
+            const walkM = payload.summary.walk_m ?? 0;
+            if (walkM > 0) {
+                payload.summary.explanation?.push(`Includes ${fmt(walkM)} of walking the bike ` +
+                    `(~${Math.round((walkM / 1000 / 4) * 60)} min) to bridge safe segments — ` +
+                    `shorter overall than riding the long way around.`);
+            }
+            if (avoid !== undefined && avoid.size > 0 && !c.isDirect) {
+                const onAvoided = this.metersOnClasses(path, avoid, walkFlags);
+                const directOn = this.metersOnClasses(directPath, avoid);
+                const names = [...avoid].map((t) => t.replace("_", " ")).join(", ");
+                payload.summary.explanation.push(onAvoided < 1
+                    ? `Avoiding ${names}: this route uses none at all ` +
+                        `(the direct route rides ${fmt(directOn)} on them).`
+                    : `Avoiding ${names}: kept to ${fmt(onAvoided)} ` +
+                        `(vs ${fmt(directOn)} direct) — no better alternative exists there.`);
+            }
+            const { grade, reason } = this.gradeRoute(path, walks.get(c.id));
             options.push({ id: c.id, label: c.label, grade, gradeReason: reason, payload });
         }
         return options;
@@ -832,14 +985,19 @@ export function buildCues(payload) {
     let lastName = null;
     const feats = payload.geojson.features;
     const ribbon = payload.ribbon ?? [];
+    let lastWalk = false;
     feats.forEach((f, i) => {
         const name = f.properties.name ?? "(unnamed path)";
-        if (name !== lastName) {
+        const walking = f.properties.walk === true;
+        if (name !== lastName || walking !== lastWalk) {
             cues.push({
                 km: Math.round(dist / 100) / 10,
-                text: `${name} — ${f.properties.cls.replace("_", " ")}`,
+                text: walking
+                    ? `🚶 walk the bike — ${name}`
+                    : `${name} — ${f.properties.cls.replace("_", " ")}`,
             });
             lastName = name;
+            lastWalk = walking;
         }
         dist += ribbon[i]?.m ?? 0;
     });
