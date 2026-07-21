@@ -7,6 +7,7 @@ Each fetch records a sidecar .meta.json with the source URL and retrieval time.
 import argparse
 import datetime
 import json
+import os
 import sys
 import urllib.parse
 import urllib.request
@@ -131,6 +132,58 @@ out center tags;"""
     return {"type": "FeatureCollection", "features": features}
 
 
+def fetch_cambridge_permits() -> GeoJSON:
+    """Active Cambridge street/excavation permits (geocoded, with end dates)."""
+    today = datetime.date.today().isoformat()
+    where = f"status='Active' AND end_date>='{today}T00:00:00.000'"
+    url = (
+        config.CAMBRIDGE_PERMITS_URL
+        + "?"
+        + urllib.parse.urlencode({"$where": where, "$limit": 5000})
+    )
+    rows: list[dict[str, Any]] = json.loads(_get(url))
+    features: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            lon = float(row["longitude"])
+            lat = float(row["latitude"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [round(lon, 6), round(lat, 6)]},
+                "properties": {
+                    "src": "cambridge_permit",
+                    "name": row.get("city_contract_name") or row.get("company_name") or "",
+                    "address": row.get("full_address", ""),
+                    "start": str(row.get("start_date", ""))[:10],
+                    "end": str(row.get("end_date", ""))[:10],
+                    "kind": row.get("permit_type", "Excavation"),
+                },
+            }
+        )
+    return {"type": "FeatureCollection", "features": features}
+
+
+def fetch_workzones() -> GeoJSON:
+    """MassDOT Connected Work Zones (WZDx GeoJSON). Needs an API key."""
+    key = os.environ.get(config.WZDX_KEY_ENV, "")
+    if not key:
+        raise RuntimeError(
+            f"{config.WZDX_KEY_ENV} not set — register (free) at the MassDOT "
+            "Work Zones portal to enable statewide work-zone data"
+        )
+    # auth style varies by portal deployment; send the key in the common spots
+    url = config.WZDX_FEED_URL + "?" + urllib.parse.urlencode({"key": key})
+    req = urllib.request.Request(
+        url, headers={**UA, "X-API-Key": key, "Ocp-Apim-Subscription-Key": key}
+    )
+    with urllib.request.urlopen(req, timeout=120) as r:
+        feed: GeoJSON = json.load(r)
+    return feed
+
+
 def fetch_all(refresh: bool = False) -> None:
     jobs: dict[str, Callable[[], GeoJSON]] = {
         "cambridge_bike_facilities.geojson": lambda: json.loads(
@@ -146,6 +199,8 @@ def fetch_all(refresh: bool = False) -> None:
         ),
     }
     jobs["pois.geojson"] = fetch_pois
+    jobs["cambridge_permits.geojson"] = fetch_cambridge_permits
+    jobs["workzones.geojson"] = fetch_workzones
     for year in config.IMPACT_CRASH_YEARS:
         service_year = config.IMPACT_CRASH_SERVICE_YEAR.get(year, str(year))
         jobs[f"crashes_{year}.geojson"] = (

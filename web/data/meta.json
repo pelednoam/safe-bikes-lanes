@@ -1,10 +1,15 @@
 {
- "built": "2026-07-20",
+ "built": "2026-07-21",
  "sources": [
   {
    "name": "cambridge_bike_facilities",
    "retrieved": "2026-07-20",
    "features": 671
+  },
+  {
+   "name": "cambridge_permits",
+   "retrieved": "2026-07-21",
+   "features": 145
   },
   {
    "name": "crashes_2021",

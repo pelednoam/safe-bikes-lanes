@@ -207,6 +207,36 @@ let shedCenter: [number, number] | null = null;
 let sketchyMarks: [number, number][] = loadSketchy();
 let pois: PoiFeature[] = [];
 let hazards: HazardReport[] = [];
+let mapillaryToken = "";
+interface ConstructionFC {
+  features: {
+    geometry: { type: string; coordinates: unknown };
+    properties: { src: string; name: string; detail?: string; start: string; end: string };
+  }[];
+}
+let constructionFC: ConstructionFC | null = null;
+
+/** Sample construction geometries into avoid-points for the router. */
+function constructionAvoidPoints(fc: ConstructionFC): [number, number][] {
+  const pts: [number, number][] = [];
+  const pushCoord = (c: unknown): void => {
+    if (Array.isArray(c) && typeof c[0] === "number" && typeof c[1] === "number") {
+      pts.push([c[0], c[1]]);
+    }
+  };
+  for (const f of fc.features) {
+    const g = f.geometry;
+    if (g.type === "Point") pushCoord(g.coordinates);
+    else if (g.type === "LineString" && Array.isArray(g.coordinates)) {
+      for (const c of g.coordinates) pushCoord(c);
+    } else if (Array.isArray(g.coordinates)) {
+      for (const part of g.coordinates) {
+        if (Array.isArray(part)) for (const c of part) pushCoord(c);
+      }
+    }
+  }
+  return pts;
+}
 let hazardPendingLoc: [number, number] | null = null;
 let hazardPhoto: Blob | null = null;
 
@@ -226,6 +256,11 @@ const routerReady: Promise<void> = Router.load("data/graph.json")
     applyAvoidPoints();
     renderSketchy();
     void refreshHazards();
+    void constructionReady.then(() => {
+      if (router && constructionFC) {
+        router.setConstructionPoints(constructionAvoidPoints(constructionFC));
+      }
+    });
     el<HTMLDivElement>("loading").style.display = "none";
   })
   .catch((err: unknown) => {
@@ -235,6 +270,20 @@ const routerReady: Promise<void> = Router.load("data/graph.json")
   });
 el<HTMLDivElement>("loading").textContent = "loading routing graph…";
 el<HTMLDivElement>("loading").style.display = "block";
+
+void fetch("data/keys.json")
+  .then((r) => (r.ok ? r.json() : {}))
+  .then((keys: { mapillary?: string }) => {
+    mapillaryToken = localStorage.getItem("mapillaryToken") ?? keys.mapillary ?? "";
+  })
+  .catch(() => undefined);
+
+const constructionReady: Promise<void> = fetch("data/construction.geojson")
+  .then((r) => (r.ok ? r.json() : null))
+  .then((fc: ConstructionFC | null) => {
+    constructionFC = fc;
+  })
+  .catch(() => undefined);
 
 const poisReady: Promise<void> = fetch("data/pois.geojson")
   .then((r) => (r.ok ? r.json() : { features: [] }))
@@ -498,12 +547,26 @@ function showSummary(option: RouteOption): void {
     div.className = "caution";
     div.textContent = `⚠ ${c.name}: ${fmtDist(c.meters)} of ${CLASS_LABELS[c.cls] ?? c.cls} `;
     if (c.lon !== undefined && c.lat !== undefined) {
+      const lon = c.lon;
+      const lat = c.lat;
       const a = document.createElement("a");
-      a.href = `https://maps.google.com/maps?q=&layer=c&cbll=${c.lat},${c.lon}`;
+      a.href = `https://maps.google.com/maps?q=&layer=c&cbll=${lat},${lon}`;
       a.target = "_blank";
       a.rel = "noopener";
       a.textContent = "street view";
       div.appendChild(a);
+      if (mapillaryToken !== "") {
+        div.appendChild(document.createTextNode(" · "));
+        const photo = document.createElement("a");
+        photo.href = "#";
+        photo.textContent = "📷 photo";
+        photo.title = "recent street-level photo (Mapillary)";
+        photo.addEventListener("click", (ev: Event) => {
+          ev.preventDefault();
+          void showMapillaryPreview(lon, lat);
+        });
+        div.appendChild(photo);
+      }
     }
     cautions.appendChild(div);
   }
@@ -532,6 +595,58 @@ function showSummary(option: RouteOption): void {
     sunsetBox.style.display = "block";
   } else {
     sunsetBox.style.display = "none";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Mapillary street-level photo previews (free client token; CC BY-SA imagery)
+// ---------------------------------------------------------------------------
+
+interface MapillaryImage {
+  thumb_1024_url?: string;
+  captured_at?: number;
+}
+
+async function showMapillaryPreview(lon: number, lat: number): Promise<void> {
+  const d = 0.0005; // ~45 m box
+  const url =
+    "https://graph.mapillary.com/images?" +
+    new URLSearchParams({
+      access_token: mapillaryToken,
+      bbox: `${lon - d},${lat - d},${lon + d},${lat + d}`,
+      fields: "id,thumb_1024_url,captured_at",
+      limit: "3",
+    }).toString();
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`mapillary ${resp.status}`);
+    const data = (await resp.json()) as { data: MapillaryImage[] };
+    const newest = [...data.data].sort((a, b) => (b.captured_at ?? 0) - (a.captured_at ?? 0))[0];
+    const box = document.createElement("div");
+    if (newest?.thumb_1024_url) {
+      const img = document.createElement("img");
+      img.src = newest.thumb_1024_url;
+      img.style.cssText = "max-width:260px;border-radius:6px;display:block";
+      box.appendChild(img);
+      const when = document.createElement("small");
+      when.textContent =
+        newest.captured_at !== undefined
+          ? `📷 ${new Date(newest.captured_at).toLocaleDateString()} · `
+          : "";
+      box.appendChild(when);
+    } else {
+      box.textContent = "no street-level photos here — ";
+    }
+    const link = document.createElement("a");
+    link.href = `https://www.mapillary.com/app/?lat=${lat}&lng=${lon}&z=17`;
+    link.target = "_blank";
+    link.rel = "noopener";
+    link.textContent = "open in Mapillary";
+    box.appendChild(link);
+    new maplibregl.Popup({ maxWidth: "290px" }).setLngLat([lon, lat]).setDOMContent(box).addTo(map);
+    map.flyTo({ center: [lon, lat], zoom: 16.5 });
+  } catch {
+    window.open(`https://www.mapillary.com/app/?lat=${lat}&lng=${lon}&z=17`, "_blank");
   }
 }
 
@@ -939,6 +1054,21 @@ map.on("load", () => {
     source: "carto-dark",
     layout: { visibility: "none" },
   });
+  // MassGIS 2023 15-cm orthoimagery (free tile service)
+  map.addSource("massgis-aerial", {
+    type: "raster",
+    tiles: [
+      "https://tiles.arcgis.com/tiles/hGdibHYSPO59RG1h/arcgis/rest/services/orthos2023/MapServer/tile/{z}/{y}/{x}",
+    ],
+    tileSize: 256,
+    attribution: "MassGIS 2023 orthoimagery",
+  });
+  map.addLayer({
+    id: "aerial",
+    type: "raster",
+    source: "massgis-aerial",
+    layout: { visibility: "none" },
+  });
   // terrain DEM: the same AWS terrarium tiles the pipeline samples
   map.addSource("dem", {
     type: "raster-dem",
@@ -1065,6 +1195,50 @@ map.on("load", () => {
     layout: { "line-cap": "round", "line-join": "round" },
     paint: { "line-color": ["get", "color"], "line-width": 5 },
   });
+  map.addSource("construction", { type: "geojson", data: "data/construction.geojson" });
+  map.addLayer({
+    id: "construction-lines",
+    type: "line",
+    source: "construction",
+    filter: ["!=", ["geometry-type"], "Point"],
+    paint: { "line-color": "#ff8c00", "line-width": 5, "line-dasharray": [1.2, 1], "line-opacity": 0.85 },
+  });
+  map.addLayer({
+    id: "construction-pts",
+    type: "circle",
+    source: "construction",
+    filter: ["==", ["geometry-type"], "Point"],
+    paint: {
+      "circle-radius": 6,
+      "circle-color": "#ff8c00",
+      "circle-stroke-color": "#7a3b00",
+      "circle-stroke-width": 2,
+    },
+  });
+  for (const layer of ["construction-lines", "construction-pts"]) {
+    map.on("click", layer, (e: MapLayerMouseEvent) => {
+      const f = e.features?.[0];
+      if (!f) return;
+      const props = f.properties as {
+        src?: string;
+        name?: string;
+        detail?: string;
+        start?: string;
+        end?: string;
+        kind?: string;
+        address?: string;
+      };
+      const source = props.src === "massdot_wzdx" ? "MassDOT work zone" : "Cambridge street permit";
+      new maplibregl.Popup()
+        .setLngLat(e.lngLat)
+        .setHTML(
+          `🚧 <b>${props.name || props.kind || "construction"}</b><br>` +
+            `${props.address ?? ""}${props.detail ? `<br>${props.detail}` : ""}` +
+            `<br><small>${source} · ${props.start ?? "?"} → ${props.end ?? "?"}</small>`,
+        )
+        .addTo(map);
+    });
+  }
   map.addSource("hazardpts", { type: "geojson", data: emptyFC() });
   map.addLayer({
     id: "hazardpts",
@@ -2328,17 +2502,24 @@ el<HTMLButtonElement>("offline-btn").addEventListener("click", () => {
 // system color scheme
 // ---------------------------------------------------------------------------
 
-function applyDark(dark: boolean): void {
-  document.body.classList.toggle("dark", dark);
-  el<HTMLInputElement>("dark-mode").checked = dark;
+function applyBasemap(): void {
+  const dark = document.body.classList.contains("dark");
+  const aerial = el<HTMLInputElement>("show-aerial").checked;
   const setVis = (): void => {
-    map.setLayoutProperty("osm-dark", "visibility", dark ? "visible" : "none");
-    map.setLayoutProperty("osm", "visibility", dark ? "none" : "visible");
-    map.setPaintProperty("route-casing", "line-color", dark ? "#9db8ff" : "#1440a0");
-    map.setPaintProperty("alts", "line-color", dark ? "#aaa" : "#777");
+    map.setLayoutProperty("aerial", "visibility", aerial ? "visible" : "none");
+    map.setLayoutProperty("osm-dark", "visibility", !aerial && dark ? "visible" : "none");
+    map.setLayoutProperty("osm", "visibility", !aerial && !dark ? "visible" : "none");
+    map.setPaintProperty("route-casing", "line-color", dark || aerial ? "#9db8ff" : "#1440a0");
+    map.setPaintProperty("alts", "line-color", dark || aerial ? "#ccc" : "#777");
   };
   if (map.loaded()) setVis();
   else map.once("load", setVis);
+}
+
+function applyDark(dark: boolean): void {
+  document.body.classList.toggle("dark", dark);
+  el<HTMLInputElement>("dark-mode").checked = dark;
+  applyBasemap();
 }
 
 const storedDark = localStorage.getItem(DARK_KEY);
@@ -2352,6 +2533,15 @@ el<HTMLInputElement>("dark-mode").addEventListener("change", (e: Event) => {
   const dark = (e.target as HTMLInputElement).checked;
   localStorage.setItem(DARK_KEY, dark ? "1" : "0");
   applyDark(dark);
+});
+
+el<HTMLInputElement>("show-aerial").addEventListener("change", applyBasemap);
+
+el<HTMLInputElement>("show-constr").addEventListener("change", (e: Event) => {
+  const on = (e.target as HTMLInputElement).checked;
+  for (const layer of ["construction-lines", "construction-pts"]) {
+    map.setLayoutProperty(layer, "visibility", on ? "visible" : "none");
+  }
 });
 
 renderPlacesAndRecent();

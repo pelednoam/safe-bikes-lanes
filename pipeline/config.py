@@ -48,6 +48,14 @@ SOMERVILLE_MOBILITY3: Final[str] = (
 )
 SOMERVILLE_HIGH_CRASH_LAYERS: Final[dict[str, int]] = {"intersections": 7, "corridors": 13}
 
+# Construction sources (verified 2026-07-21).
+# Cambridge street/excavation permits (Socrata; geocoded, status + start/end).
+CAMBRIDGE_PERMITS_URL: Final[str] = "https://data.cambridgema.gov/resource/nuxx-d95m.json"
+# MassDOT Connected Work Zones (WZDx). Requires a free API key from the
+# MassDOT Work Zones portal — set MASSDOT_WZDX_API_KEY; skipped when unset.
+WZDX_FEED_URL: Final[str] = "https://api.massdot-swzm.com/api/v1/cwz/work-zone-feed"
+WZDX_KEY_ENV: Final[str] = "MASSDOT_WZDX_API_KEY"
+
 # ---------------------------------------------------------------------------
 # Safety cost model — kids-on-their-own-bikes defaults.
 # weight = length_m * class_multiplier * crash_factor + node_penalties

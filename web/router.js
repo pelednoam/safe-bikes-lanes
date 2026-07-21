@@ -73,6 +73,9 @@ const STEEP_GRADE = 0.04;
 /** Weight multiplier for edges the user marked as sketchy. */
 const SKETCHY_MULT = 5.0;
 const SKETCHY_SNAP_M = 30;
+/** Weight multiplier for edges inside active construction zones. */
+const CONSTRUCTION_MULT = 4.0;
+const CONSTRUCTION_SNAP_M = 40;
 /** Outbound-edge penalty when planning the return leg of a loop. */
 const LOOP_REUSE_MULT = 4.0;
 function fmt(m) {
@@ -145,6 +148,7 @@ export class Router {
         /** "u,v" -> edge indices, for reverse-edge lookups */
         this.uvIndex = new Map();
         this.sketchy = new Set();
+        this.construction = new Set();
         this.g = data;
         this.adj = data.nodes.map(() => []);
         this.hillPen = new Float64Array(data.edges.length);
@@ -198,6 +202,8 @@ export class Router {
                 wi += this.hillPen[i];
             if (this.sketchy.has(i))
                 wi *= SKETCHY_MULT;
+            if (this.construction.has(i))
+                wi *= CONSTRUCTION_MULT;
             w[i] = wi;
         });
         return w;
@@ -238,20 +244,28 @@ export class Router {
         }
         return best >= 0 && bestD2 <= maxM ** 2 ? best : null;
     }
-    /** Personal feedback: penalize edges near the given points (both directions). */
-    setSketchyMarks(points) {
-        this.sketchy = new Set();
+    pointsToEdgeSet(points, snapM) {
+        const set = new Set();
         for (const [lon, lat] of points) {
-            const ei = this.nearestEdge(lon, lat, SKETCHY_SNAP_M);
+            const ei = this.nearestEdge(lon, lat, snapM);
             if (ei === null)
                 continue;
-            this.sketchy.add(ei);
+            set.add(ei);
             const e = this.g.edges[ei];
             if (!e)
                 continue;
             for (const rev of this.uvIndex.get(`${e[1]},${e[0]}`) ?? [])
-                this.sketchy.add(rev);
+                set.add(rev);
         }
+        return set;
+    }
+    /** Personal feedback: penalize edges near the given points (both directions). */
+    setSketchyMarks(points) {
+        this.sketchy = this.pointsToEdgeSet(points, SKETCHY_SNAP_M);
+    }
+    /** Active construction: penalize edges near work zones / street permits. */
+    setConstructionPoints(points) {
+        this.construction = this.pointsToEdgeSet(points, CONSTRUCTION_SNAP_M);
     }
     // -- shortest path & flood fill -------------------------------------------
     dijkstra(from, to, w, extra, budget = Infinity) {
