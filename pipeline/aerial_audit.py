@@ -40,7 +40,10 @@ GREEN_DELTA: Final[float] = 0.040
 WHITE_DELTA: Final[float] = 0.220
 # crops darker than this (deep building shadow) can't be assessed
 MIN_BRIGHTNESS: Final[float] = 0.18
-MAX_CROPS: Final[int] = 150
+# white ratios above this are snow / overexposure, not markings (2023 flights
+# caught snow patches) — such crops can't be assessed
+MAX_WHITE_PLAUSIBLE: Final[float] = 0.45
+MAX_CROPS: Final[int] = 250
 
 
 def collect_sites(max_sites: int) -> list[dict[str, Any]]:
@@ -109,9 +112,12 @@ def audit_site(
         (out.get("v2023") or 0) >= MIN_BRIGHTNESS and (out.get("v2025") or 0) >= MIN_BRIGHTNESS
     )
     if g23 is not None and g25 is not None and w23 is not None and w25 is not None:
-        if not bright:
-            verdict = "unclear"  # deep shadow — can't assess markings
-        elif abs(g25 - g23) >= GREEN_DELTA or abs(w25 - w23) >= WHITE_DELTA:
+        # green deltas are meaningless on off-street paths: no green paint
+        # there, but plenty of bright vegetation alongside
+        green_changed = site["cls"] in PAINTED_CLASSES and abs(g25 - g23) >= GREEN_DELTA
+        if not bright or w23 >= MAX_WHITE_PLAUSIBLE or w25 >= MAX_WHITE_PLAUSIBLE:
+            verdict = "unclear"  # deep shadow or snow/overexposure
+        elif green_changed or abs(w25 - w23) >= WHITE_DELTA:
             verdict = "changed"
         elif site["cls"] in PAINTED_CLASSES and g25 < GREEN_PRESENT and w25 < WHITE_PRESENT:
             verdict = "no_markings"
