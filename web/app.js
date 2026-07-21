@@ -30,6 +30,23 @@ const CLASS_COLORS = {
     moderate_street: "#f46d43",
     busy_street: "#d73027",
 };
+/** What each class means for riding with kids, in plain words. */
+const CLASS_SAFETY = {
+    path: "off-street — no car traffic at all",
+    separated: "physically protected from car traffic",
+    buffered: "painted buffer only — no physical protection",
+    quiet_street: "low-traffic residential street, riding with cars",
+    service: "alley / service way, occasional vehicles",
+    lane: "paint only, directly beside moving traffic",
+    sharrow: "shared with car traffic, marking only",
+    moderate_street: "no bike facility, moderate traffic",
+    busy_street: "no protection on a busy street",
+};
+/** Segment grade on the same kid-stress scale used for whole routes. */
+function classGrade(cls) {
+    const m = PROFILES.young_kids.mult[cls];
+    return m <= 1.6 ? "A" : m <= 2.4 ? "B" : m <= 4 ? "C" : m <= 8 ? "D" : "F";
+}
 const GRADE_COLORS = {
     A: "#1a9850",
     B: "#66bd63",
@@ -1014,7 +1031,11 @@ map.on("load", () => {
             "fill-extrusion-height": ["*", ["coalesce", ["get", "elev"], 0], 4],
         },
     });
-    map.addSource("network", { type: "geojson", data: "data/network.geojson" });
+    map.addSource("network", {
+        type: "geojson",
+        data: "data/network.geojson",
+        generateId: true,
+    });
     // dark halo under the network lines — only over aerial imagery, where
     // colored lines otherwise vanish against bright pavement
     map.addLayer({
@@ -1059,6 +1080,31 @@ map.on("load", () => {
             "line-width": ["interpolate", ["linear"], ["zoom"], 12, 1.2, 16, 3.5],
             "line-opacity": 0.75,
             "line-dasharray": [2, 1.4],
+        },
+    });
+    // hover highlight: bright halo + boosted core for the segment under the cursor
+    map.addLayer({
+        id: "network-hover-halo",
+        type: "line",
+        source: "network",
+        filter: ["==", ["id"], -1],
+        layout: { "line-cap": "round" },
+        paint: {
+            "line-color": "#ffffff",
+            "line-width": ["interpolate", ["linear"], ["zoom"], 12, 7, 16, 12],
+            "line-opacity": 0.9,
+        },
+    });
+    map.addLayer({
+        id: "network-hover-core",
+        type: "line",
+        source: "network",
+        filter: ["==", ["id"], -1],
+        layout: { "line-cap": "round" },
+        paint: {
+            "line-color": ["get", "color"],
+            "line-width": ["interpolate", ["linear"], ["zoom"], 12, 4, 16, 7],
+            "line-opacity": 1,
         },
     });
     map.addSource("shed", { type: "geojson", data: emptyFC() });
@@ -1303,31 +1349,52 @@ map.on("load", () => {
             .setHTML(hoverHtml["gateways"]?.({}) ?? "")
             .addTo(map);
     });
-    // hover inspection on the network and the planned route
+    // hover inspection on the network and the planned route: highlight the
+    // segment and show a safety card
+    const setHoverFilter = (id) => {
+        const filter = ["==", ["id"], id ?? -1];
+        map.setFilter("network-hover-halo", filter);
+        map.setFilter("network-hover-core", filter);
+    };
     for (const layer of ["network", "network-unconfirmed", "route"]) {
         map.on("mousemove", layer, (e) => {
             map.getCanvas().style.cursor = "crosshair";
             const f = e.features?.[0];
             if (!f)
                 return;
+            if (layer !== "route")
+                setHoverFilter(f.id);
             const props = f.properties;
             const cls = props.cls;
             const label = cls !== undefined ? CLASS_LABELS[cls] ?? cls : "?";
+            const grade = cls !== undefined ? classGrade(cls) : null;
+            const badge = grade !== null
+                ? `<span style="background:${GRADE_COLORS[grade]};color:#fff;border-radius:5px;` +
+                    `padding:0 6px;font-weight:700">${grade}</span> `
+                : "";
+            const meaning = cls !== undefined ? `<br>${CLASS_SAFETY[cls]}` : "";
+            const mult = cls !== undefined ? PROFILES.young_kids.mult[cls] : null;
+            const stress = mult !== null
+                ? `<br><small>kid-stress ×${mult} — young kids would detour up to ` +
+                    `${mult}× the distance to avoid ${mult > 1.6 ? "this" : "worse"}</small>`
+                : "";
             const crashes = props.crashes !== undefined && props.crashes > 0
-                ? `<br>bike crashes nearby (2021-26): ${props.crashes}`
+                ? `<br><small>⚠ ${props.crashes} bike crash${props.crashes > 1 ? "es" : ""} ` +
+                    `recorded nearby (2021–26)</small>`
                 : "";
             const unconfirmed = props.source === "osm" && cls !== undefined && FACILITY_CLASSES.includes(cls)
-                ? "<br><i>facility per OSM only (not in official layers yet)</i>"
+                ? "<br><small><i>facility per OSM only (not in official layers yet)</i></small>"
                 : "";
             hoverPopup?.remove();
             hoverPopup = new maplibregl.Popup({ closeButton: false, closeOnClick: false })
                 .setLngLat(e.lngLat)
-                .setHTML(`<b>${props.name ?? "unnamed"}</b><br>${label}${crashes}${unconfirmed}` +
-                `<br><small>right-click to mark as sketchy</small>`)
+                .setHTML(`${badge}<b>${props.name ?? "unnamed"}</b><br>${label}${meaning}${stress}` +
+                `${crashes}${unconfirmed}<br><small>right-click to mark as sketchy</small>`)
                 .addTo(map);
         });
         map.on("mouseleave", layer, () => {
             map.getCanvas().style.cursor = "";
+            setHoverFilter(undefined);
             hoverPopup?.remove();
             hoverPopup = null;
         });
