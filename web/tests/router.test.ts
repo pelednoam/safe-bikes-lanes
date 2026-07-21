@@ -354,7 +354,7 @@ describe("ok-to-walk mode", () => {
     const riding = r.routeOptions(from, to, "young_kids")[0];
     expect(riding?.payload.summary.meters).toBe(2000); // busy ×25 = 3750 > quiet 2800
     const walking = r.routeOptions(
-      from, to, "young_kids", false, undefined, undefined, true,
+      from, to, "young_kids", false, undefined, undefined, 500,
     )[0];
     expect(walking?.payload.summary.meters).toBe(150);
     expect(walking?.payload.summary.walk_m).toBe(150);
@@ -368,8 +368,24 @@ describe("ok-to-walk mode", () => {
   it("does not walk when riding is already fine", () => {
     const r = walkRouter();
     const res = r.routeOptions(
-      [-71.1, 42.38], [-71.0995, 42.389], "young_kids", false, undefined, undefined, true,
+      [-71.1, 42.38], [-71.0995, 42.389], "young_kids", false, undefined, undefined, 500,
     )[0];
     expect(res?.payload.summary.walk_m).toBeUndefined(); // quiet direct: just ride
+  });
+
+  it("respects the walking budget", () => {
+    const r = walkRouter();
+    // the useful walk is 150 m; a 100 m budget forbids it -> ride the long way
+    const capped = r.routeOptions(
+      from, to, "young_kids", false, undefined, undefined, 100,
+    )[0];
+    expect(capped?.payload.summary.walk_m).toBeUndefined();
+    expect(capped?.payload.summary.meters).toBe(2000);
+    // a 200 m budget allows it
+    const roomy = r.routeOptions(
+      from, to, "young_kids", false, undefined, undefined, 200,
+    )[0];
+    expect(roomy?.payload.summary.walk_m).toBe(150);
+    expect(roomy?.payload.summary.explanation?.join(" ")).toMatch(/200 m walking budget/);
   });
 });

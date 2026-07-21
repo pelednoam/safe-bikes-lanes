@@ -218,7 +218,7 @@ let poiMarker: Marker | null = null;
 let shedMarker: Marker | null = null;
 let profileId: ProfileId = "young_kids";
 let preferFlat = false;
-let walkOk = false;
+let walkMaxM = 0;
 const AVOIDABLE: [ProtectionClass, string][] = [
   ["lane", "painted lanes"],
   ["buffered", "buffered lanes"],
@@ -381,7 +381,7 @@ async function requestRoute(): Promise<void> {
       preferFlat,
       undefined,
       avoidTypes,
-      walkOk,
+      walkMaxM,
     );
     const fallback = options[0];
     if (!fallback) throw new Error("no route found");
@@ -843,9 +843,10 @@ function parseHash(): void {
     preferFlat = true;
     el<HTMLInputElement>("prefer-flat").checked = true;
   }
-  if (params.get("wk") === "1") {
-    walkOk = true;
-    el<HTMLInputElement>("walk-ok").checked = true;
+  const wk = params.get("wk");
+  if (wk !== null) {
+    walkMaxM = wk === "1" ? 500 : Math.max(0, Math.min(2000, Number(wk) || 0));
+    el<HTMLSelectElement>("walk-max").value = String(walkMaxM);
   }
   const x = params.get("x");
   if (x !== null) {
@@ -855,6 +856,8 @@ function parseHash(): void {
       el<HTMLInputElement>(`avoid-${cls}`).checked = avoidTypes.has(cls);
     }
     syncAvoidSummary();
+walkMaxM = Number(localStorage.getItem("walkMaxM") ?? "0") || 0;
+el<HTMLSelectElement>("walk-max").value = String(walkMaxM);
   }
   const o = params.get("o");
   if (o === "safest" || o === "balanced" || o === "direct") pendingSelect = o;
@@ -1869,8 +1872,9 @@ el<HTMLInputElement>("prefer-flat").addEventListener("change", (e: Event) => {
   void computeShed();
 });
 
-el<HTMLInputElement>("walk-ok").addEventListener("change", (e: Event) => {
-  walkOk = (e.target as HTMLInputElement).checked;
+el<HTMLSelectElement>("walk-max").addEventListener("change", (e: Event) => {
+  walkMaxM = Number((e.target as HTMLSelectElement).value);
+  localStorage.setItem("walkMaxM", String(walkMaxM));
   void requestRoute();
 });
 

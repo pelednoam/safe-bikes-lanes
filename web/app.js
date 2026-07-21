@@ -130,7 +130,7 @@ let poiMarker = null;
 let shedMarker = null;
 let profileId = "young_kids";
 let preferFlat = false;
-let walkOk = false;
+let walkMaxM = 0;
 const AVOIDABLE = [
     ["lane", "painted lanes"],
     ["buffered", "buffered lanes"],
@@ -279,7 +279,7 @@ async function requestRoute() {
         poiMarker?.remove();
         poiMarker = null;
         loopParams = null;
-        options = router.routeOptions([s.lng, s.lat], [d.lng, d.lat], profileId, preferFlat, undefined, avoidTypes, walkOk);
+        options = router.routeOptions([s.lng, s.lat], [d.lng, d.lat], profileId, preferFlat, undefined, avoidTypes, walkMaxM);
         const fallback = options[0];
         if (!fallback)
             throw new Error("no route found");
@@ -716,9 +716,10 @@ function parseHash() {
         preferFlat = true;
         el("prefer-flat").checked = true;
     }
-    if (params.get("wk") === "1") {
-        walkOk = true;
-        el("walk-ok").checked = true;
+    const wk = params.get("wk");
+    if (wk !== null) {
+        walkMaxM = wk === "1" ? 500 : Math.max(0, Math.min(2000, Number(wk) || 0));
+        el("walk-max").value = String(walkMaxM);
     }
     const x = params.get("x");
     if (x !== null) {
@@ -728,6 +729,8 @@ function parseHash() {
             el(`avoid-${cls}`).checked = avoidTypes.has(cls);
         }
         syncAvoidSummary();
+        walkMaxM = Number(localStorage.getItem("walkMaxM") ?? "0") || 0;
+        el("walk-max").value = String(walkMaxM);
     }
     const o = params.get("o");
     if (o === "safest" || o === "balanced" || o === "direct")
@@ -1702,8 +1705,9 @@ el("prefer-flat").addEventListener("change", (e) => {
     void requestRoute();
     void computeShed();
 });
-el("walk-ok").addEventListener("change", (e) => {
-    walkOk = e.target.checked;
+el("walk-max").addEventListener("change", (e) => {
+    walkMaxM = Number(e.target.value);
+    localStorage.setItem("walkMaxM", String(walkMaxM));
     void requestRoute();
 });
 for (const [cls] of AVOIDABLE) {
