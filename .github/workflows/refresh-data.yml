@@ -15,7 +15,7 @@ permissions:
 jobs:
   refresh:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -34,6 +34,20 @@ jobs:
       - name: Export web data
         working-directory: pipeline
         run: python export_web.py
+      - name: Cache aerial + terrain tiles
+        uses: actions/cache@v4
+        with:
+          path: |
+            data/raw/aerial
+            data/raw/terrain
+          key: tiles-v1-${{ github.run_id }}
+          restore-keys: tiles-v1-
+      - name: Aerial lane audit (full network)
+        working-directory: pipeline
+        run: python aerial_audit.py --max-sites 2767
+      - name: Rebuild review page
+        working-directory: pipeline
+        run: python review_page.py
       - name: Commit if changed
         run: |
           git config user.name "data-refresh-bot"

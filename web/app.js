@@ -1,4 +1,4 @@
-import { isNativeApp, nativeSpeak, startBackgroundWatcher, stopBackgroundWatcher, } from "./native.js";
+import { isNativeApp, isNewerAppVersion, nativeSpeak, openExternal, startBackgroundWatcher, stopBackgroundWatcher, } from "./native.js";
 import { bearingDeg, buildAlerts, buildManeuvers, buildTrack, distM, snapToTrack, sunsetTime, trackBearing, } from "./nav.js";
 import { addHazard, buildReportText, downscalePhoto, getHazardPhoto, HAZARD_LABELS, listHazards, removeHazard, } from "./hazards.js";
 import { clearRecent, deletePlace, emojiFor, listPlaces, listRecent, pushRecent, savePlace, } from "./places.js";
@@ -2706,6 +2706,41 @@ el("show-constr").addEventListener("change", (e) => {
 });
 renderPlacesAndRecent();
 window._map = map;
+// ---------------------------------------------------------------------------
+// in-app update check (native app only): compare the bundled build version
+// against the latest release published next to the mirrored APK
+// ---------------------------------------------------------------------------
+const APK_URL = "https://pelednoam.github.io/safe-bikes-lanes/app/family-bike-router.apk";
+async function checkAppUpdate() {
+    if (!isNativeApp())
+        return;
+    try {
+        const bundled = (await (await fetch("version.json")).json());
+        const resp = await fetch("https://pelednoam.github.io/safe-bikes-lanes/app/version.json", { cache: "no-store" });
+        if (!resp.ok)
+            return;
+        const latest = (await resp.json());
+        if (bundled.version === undefined ||
+            latest.version === undefined ||
+            !isNewerAppVersion(bundled.version, latest.version)) {
+            return;
+        }
+        const banner = el("update-banner");
+        el("update-text").textContent =
+            `Update available: ${bundled.version} → ${latest.version}`;
+        banner.style.display = "flex";
+        el("update-get").addEventListener("click", () => {
+            void openExternal(APK_URL);
+        });
+        el("update-dismiss").addEventListener("click", () => {
+            banner.style.display = "none";
+        });
+    }
+    catch {
+        // offline or first launch — try again next time
+    }
+}
+void checkAppUpdate();
 // offline support (PWA)
 if ("serviceWorker" in navigator) {
     void navigator.serviceWorker.register("sw.js");

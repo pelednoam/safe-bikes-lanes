@@ -119,6 +119,12 @@
   #rides td button { margin: 0 2px 0 0; padding: 1px 7px; font-size: 11px; }
   #about-close, #rides-close, #hazard-close { position: absolute; top: 10px; right: 12px; margin: 0; }
   #about ol { padding-left: 18px; } #about li { margin: 4px 0; }
+  #update-banner {
+    position: absolute; top: 10px; right: 10px; z-index: 7; gap: 8px;
+    align-items: center; background: var(--sel-bg); color: var(--fg);
+    border: 1px solid #6f8fe8; border-radius: 10px; padding: 8px 12px;
+    box-shadow: 0 2px 10px rgba(0,0,0,.25); font-size: 13px;
+  }
   #nav-banner {
     display: none; position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
     z-index: 6; background: var(--bg); color: var(--fg); border-radius: 12px;
@@ -143,6 +149,11 @@
 </head>
 <body>
 <div id="map"></div>
+<div id="update-banner" style="display:none">
+  <span id="update-text"></span>
+  <button id="update-get" style="margin:0">⬇ install</button>
+  <button id="update-dismiss" style="margin:0">later</button>
+</div>
 <div id="nav-banner">
   <div id="nav-main">
     <span id="nav-icon">⬆</span>

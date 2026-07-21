@@ -71,6 +71,30 @@ export async function stopBackgroundWatcher(id) {
         return;
     await plugin.removeWatcher({ id }).catch(() => undefined);
 }
+/** Open a URL in the system browser (Chrome Custom Tab) — needed for APK
+ * downloads, which the WebView itself won't handle. False when unavailable. */
+export async function openExternal(url) {
+    const cap = window.Capacitor;
+    if (!cap || !cap.isNativePlatform())
+        return false;
+    try {
+        await cap.registerPlugin("Browser").open({ url });
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
+/** True when `latest` is a newer app-vN tag than `current`. */
+export function isNewerAppVersion(current, latest) {
+    const num = (v) => {
+        const m = /^app-v(\d+)$/.exec(v.trim());
+        return m ? Number(m[1]) : null;
+    };
+    const c = num(current);
+    const l = num(latest);
+    return c !== null && l !== null && l > c;
+}
 /** Native text-to-speech (works with the screen off, unlike the WebView's
  * speechSynthesis). Returns false when unavailable so callers can fall back. */
 export async function nativeSpeak(text) {
