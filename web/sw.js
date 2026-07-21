@@ -3,7 +3,7 @@
 // single tsconfig project; this file is small, boilerplate, and stable.
 "use strict";
 
-const CACHE = "family-bike-router-v5";
+const CACHE = "family-bike-router-v6";
 const ASSETS = [
   ".",
   "index.html",
@@ -14,6 +14,7 @@ const ASSETS = [
   "data/graph.json",
   "data/network.geojson",
   "data/heatmap.geojson",
+  "data/lanemap.geojson",
   "data/elevation.geojson",
   "data/pois.geojson",
   "data/gateways.geojson",
