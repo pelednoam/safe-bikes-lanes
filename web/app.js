@@ -1213,6 +1213,78 @@ map.on("load", () => {
             "circle-stroke-width": 1.5,
         },
     });
+    // hover tooltips on every dot layer (clicks keep their richer popups)
+    const hoverHtml = {
+        pois: (p) => {
+            const kind = typeof p["kind"] === "string" ? p["kind"] : "";
+            const meta = POI_META[kind];
+            const name = typeof p["name"] === "string" && p["name"] !== "" ? p["name"] : null;
+            return `${meta?.emoji ?? "📍"} <b>${name ?? meta?.label ?? "stop"}</b>` +
+                (name ? `<br><small>${meta?.label ?? ""}</small>` : "");
+        },
+        gateways: () => "🚦 <b>safe crossing</b><br><small>signalized crossing of a busy street</small>",
+        hazardpts: (p) => {
+            const cat = typeof p["category"] === "string" ? p["category"] : null;
+            const note = typeof p["note"] === "string" && p["note"] !== "" ? `<br>${p["note"]}` : "";
+            const when = typeof p["t"] === "number"
+                ? `<br><small>${new Date(p["t"]).toLocaleDateString()} · click to remove</small>`
+                : "";
+            // photo placeholder — filled asynchronously from IndexedDB below
+            const photo = p["hasPhoto"] === true || p["hasPhoto"] === "true"
+                ? `<img data-hazard-photo="${String(p["id"] ?? "")}" alt=""
+               style="max-width:180px;display:block;border-radius:6px;margin-top:4px">`
+                : "";
+            return `⚠ <b>${cat !== null ? HAZARD_LABELS[cat] : "hazard"}</b>${note}${photo}${when}`;
+        },
+        "construction-pts": (p) => {
+            const name = typeof p["name"] === "string" && p["name"] !== "" ? p["name"] : "construction";
+            const kind = typeof p["kind"] === "string" ? `<br><small>${p["kind"]}</small>` : "";
+            const dates = typeof p["start"] === "string" && typeof p["end"] === "string"
+                ? `<br><small>${p["start"]} → ${p["end"]}</small>`
+                : "";
+            return `🚧 <b>${name}</b>${kind}${dates}`;
+        },
+    };
+    for (const [layer, html] of Object.entries(hoverHtml)) {
+        map.on("mousemove", layer, (e) => {
+            map.getCanvas().style.cursor = "pointer";
+            const f = e.features?.[0];
+            if (!f)
+                return;
+            hoverPopup?.remove();
+            hoverPopup = new maplibregl.Popup({
+                closeButton: false,
+                closeOnClick: false,
+                offset: 10,
+            })
+                .setLngLat(e.lngLat)
+                .setHTML(html(f.properties))
+                .addTo(map);
+            // hazard photos live in IndexedDB — fill the placeholder if present
+            const slot = hoverPopup
+                .getElement()
+                ?.querySelector("img[data-hazard-photo]");
+            const photoId = slot?.dataset["hazardPhoto"];
+            if (slot && photoId !== undefined && photoId !== "") {
+                void getHazardPhoto(photoId).then((blob) => {
+                    if (blob && slot.isConnected)
+                        slot.src = URL.createObjectURL(blob);
+                });
+            }
+        });
+        map.on("mouseleave", layer, () => {
+            map.getCanvas().style.cursor = "";
+            hoverPopup?.remove();
+            hoverPopup = null;
+        });
+    }
+    // gateways have no click popup of their own — give phones (no hover) one
+    map.on("click", "gateways", (e) => {
+        new maplibregl.Popup({ offset: 10 })
+            .setLngLat(e.lngLat)
+            .setHTML(hoverHtml["gateways"]?.({}) ?? "")
+            .addTo(map);
+    });
     // hover inspection on the network and the planned route
     for (const layer of ["network", "network-unconfirmed", "route"]) {
         map.on("mousemove", layer, (e) => {
