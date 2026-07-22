@@ -1448,28 +1448,29 @@ map.on("load", () => {
     },
   });
   // hover highlight: bright halo + boosted core for the segment under the cursor
+  // hover highlight driven by feature-state (GPU-side, no per-move re-filter):
+  // opacity is 0 for every segment except the one with {hover:true}
+  const hoverOn = ["case", ["boolean", ["feature-state", "hover"], false], 1, 0];
   map.addLayer({
     id: "network-hover-halo",
     type: "line",
     source: "network",
-    filter: ["==", ["id"], -1],
     layout: { "line-cap": "round" },
     paint: {
       "line-color": "#ffffff",
       "line-width": ["interpolate", ["linear"], ["zoom"], 12, 7, 16, 12],
-      "line-opacity": 0.9,
+      "line-opacity": ["*", hoverOn, 0.9] as unknown as number,
     },
   });
   map.addLayer({
     id: "network-hover-core",
     type: "line",
     source: "network",
-    filter: ["==", ["id"], -1],
     layout: { "line-cap": "round" },
     paint: {
       "line-color": ["get", "color"],
       "line-width": ["interpolate", ["linear"], ["zoom"], 12, 4, 16, 7],
-      "line-opacity": 1,
+      "line-opacity": hoverOn as unknown as number,
     },
   });
   map.addSource("shed", { type: "geojson", data: emptyFC() });
@@ -1491,7 +1492,7 @@ map.on("load", () => {
       "line-opacity": 0.7,
     },
   });
-  map.addSource("route", { type: "geojson", data: emptyFC() });
+  map.addSource("route", { type: "geojson", data: emptyFC(), generateId: true });
   map.addLayer({
     id: "route-casing",
     type: "line",
@@ -1743,17 +1744,33 @@ map.on("load", () => {
 
   // hover inspection on the network and the planned route: highlight the
   // segment and show a safety card
-  const setHoverFilter = (id: number | string | undefined): void => {
-    const filter: unknown = ["==", ["id"], id ?? -1];
-    map.setFilter("network-hover-halo", filter as never);
-    map.setFilter("network-hover-core", filter as never);
+  let hoverStateId: number | string | null = null;
+  let lastHoverKey: string | null = null;
+  const clearHoverState = (): void => {
+    if (hoverStateId !== null) {
+      map.setFeatureState({ source: "network", id: hoverStateId }, { hover: false });
+      hoverStateId = null;
+    }
+  };
+  const setHoverState = (id: number | string | undefined): void => {
+    if (id === hoverStateId) return;
+    clearHoverState();
+    if (id !== undefined) {
+      map.setFeatureState({ source: "network", id }, { hover: true });
+      hoverStateId = id;
+    }
   };
   for (const layer of ["network-hit", "route"]) {
     map.on("mousemove", layer, (e: MapLayerMouseEvent) => {
       map.getCanvas().style.cursor = "crosshair";
       const f = e.features?.[0];
       if (!f) return;
-      if (layer !== "route") setHoverFilter(f.id as number | string | undefined);
+      // only rebuild when the segment under the cursor actually changes
+      const key = `${layer}:${String(f.id)}`;
+      if (key === lastHoverKey) return;
+      lastHoverKey = key;
+      if (layer !== "route") setHoverState(f.id as number | string | undefined);
+      else clearHoverState();
       const props = f.properties as {
         cls?: ProtectionClass;
         name?: string;
@@ -1785,15 +1802,15 @@ map.on("load", () => {
           ? "<br><small><i>facility per OSM only (not in official layers yet)</i></small>"
           : "";
       const photoSlot = mapillaryToken !== "" ? `<div data-seg-photo></div>` : "";
-      hoverPopup?.remove();
-      hoverPopup = new maplibregl.Popup({ closeButton: false, closeOnClick: false })
-        .setLngLat(e.lngLat)
-        .setHTML(
-          `${badge}<b>${props.name ?? "unnamed"}</b><br>${label}${meaning}${stress}` +
-            `${crashes}${unconfirmed}${photoSlot}` +
-            `<br><small>right-click to mark as sketchy</small>`,
-        )
-        .addTo(map);
+      const html =
+        `${badge}<b>${props.name ?? "unnamed"}</b><br>${label}${meaning}${stress}` +
+        `${crashes}${unconfirmed}${photoSlot}` +
+        `<br><small>right-click to mark as sketchy</small>`;
+      if (!hoverPopup) {
+        hoverPopup = new maplibregl.Popup({ closeButton: false, closeOnClick: false });
+        hoverPopup.addTo(map);
+      }
+      hoverPopup.setLngLat(e.lngLat).setHTML(html);
       if (mapillaryToken !== "") {
         window.clearTimeout(segPhotoTimer);
         const popup = hoverPopup;
@@ -1806,7 +1823,8 @@ map.on("load", () => {
     });
     map.on("mouseleave", layer, () => {
       map.getCanvas().style.cursor = "";
-      setHoverFilter(undefined);
+      clearHoverState();
+      lastHoverKey = null;
       hoverPopup?.remove();
       hoverPopup = null;
     });
