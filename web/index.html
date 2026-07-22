@@ -44,16 +44,23 @@
   }
   .opt-chip.sel { border-color: #fff; outline: 2px solid #1440a0; }
   #layers-btn {
-    position: absolute; top: 132px; right: 10px; z-index: 5; width: 40px; height: 40px;
-    margin: 0; padding: 0; font-size: 18px; border-radius: 8px; background: var(--bg);
-    color: var(--fg); box-shadow: 0 1px 6px rgba(0,0,0,.3);
+    position: absolute; z-index: 5; right: 10px; bottom: 30px; margin: 0;
+    padding: 9px 14px; font-size: 13px; font-weight: 600; border-radius: 20px;
+    background: var(--bg); color: var(--fg); border: 1px solid var(--border);
+    box-shadow: 0 2px 8px rgba(0,0,0,.35);
   }
   #layers-panel {
-    position: absolute; top: 132px; right: 58px; z-index: 6; display: none; width: 220px;
-    max-height: 72vh; overflow: auto; background: var(--bg); color: var(--fg);
+    position: absolute; z-index: 6; right: 10px; bottom: 76px; display: none; width: 224px;
+    max-height: 60vh; overflow: auto; background: var(--bg); color: var(--fg);
     border-radius: 10px; box-shadow: 0 2px 12px rgba(0,0,0,.35); padding: 10px 12px;
   }
   #layers-panel.open { display: block; }
+  /* mobile: bottom is the sheet, so float the Layers button top-right,
+     just below the map's zoom/locate controls */
+  @media (max-width: 760px), (max-height: 500px) {
+    #layers-btn { bottom: auto; top: 108px; }
+    #layers-panel { bottom: auto; top: 150px; }
+  }
   #sheet-handle { display: none; }
   /* phones + small tablets: the panel is a draggable bottom sheet */
   @media (max-width: 760px), (max-height: 500px) {
@@ -200,8 +207,9 @@
 </head>
 <body>
 <div id="map"></div>
-<button id="layers-btn" title="Map layers">⧉</button>
+<button id="layers-btn" title="Map layers & overlays">▧ Layers</button>
 <div id="layers-panel">
+<div class="pref-head" style="margin-top:0">Map layers &amp; overlays</div>
     <label class="toggle"><input type="checkbox" id="show-net" checked> safety network
       <small>(dashed = OSM-only facility)</small></label>
     <label class="toggle" title="~100 m cells: average stress of the streets inside — green safe, yellow moderate, red unsafe">
