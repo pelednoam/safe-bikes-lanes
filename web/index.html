@@ -43,24 +43,6 @@
     box-shadow: 0 1px 4px rgba(0,0,0,.45); border: 2px solid transparent;
   }
   .opt-chip.sel { border-color: #fff; outline: 2px solid #1440a0; }
-  #layers-btn {
-    position: absolute; z-index: 5; right: 10px; bottom: 30px; margin: 0;
-    padding: 9px 14px; font-size: 13px; font-weight: 600; border-radius: 20px;
-    background: var(--bg); color: var(--fg); border: 1px solid var(--border);
-    box-shadow: 0 2px 8px rgba(0,0,0,.35);
-  }
-  #layers-panel {
-    position: absolute; z-index: 6; right: 10px; bottom: 76px; display: none; width: 224px;
-    max-height: 60vh; overflow: auto; background: var(--bg); color: var(--fg);
-    border-radius: 10px; box-shadow: 0 2px 12px rgba(0,0,0,.35); padding: 10px 12px;
-  }
-  #layers-panel.open { display: block; }
-  /* mobile: bottom is the sheet, so float the Layers button top-right,
-     just below the map's zoom/locate controls */
-  @media (max-width: 760px), (max-height: 500px) {
-    #layers-btn { bottom: auto; top: 108px; }
-    #layers-panel { bottom: auto; top: 150px; }
-  }
   #sheet-handle { display: none; }
   /* phones + small tablets: the panel is a draggable bottom sheet */
   @media (max-width: 760px), (max-height: 500px) {
@@ -207,31 +189,6 @@
 </head>
 <body>
 <div id="map"></div>
-<button id="layers-btn" title="Map layers & overlays">▧ Layers</button>
-<div id="layers-panel">
-<div class="pref-head" style="margin-top:0">Map layers &amp; overlays</div>
-    <label class="toggle"><input type="checkbox" id="show-net" checked> safety network
-      <small>(dashed = OSM-only facility)</small></label>
-    <label class="toggle" title="~100 m cells: average stress of the streets inside — green safe, yellow moderate, red unsafe">
-      <input type="checkbox" id="show-heat"> safety heatmap</label>
-    <label class="toggle" title="Terrain elevation: blue low → red high; hover for meters">
-      <input type="checkbox" id="show-elev"> elevation map</label>
-    <label class="toggle" title="Where bike infrastructure is dense vs missing: greener = more lane/path meters per block; hover for numbers">
-      <input type="checkbox" id="show-lanes"> 🚴 lane coverage</label>
-    <label class="toggle" title="Tilt the map with 3D terrain; heatmaps extrude — taller = more stress / higher ground. Drag with two fingers (or right-drag) to rotate">
-      <input type="checkbox" id="show-3d"> 3D view</label>
-    <label class="toggle" title="Dark basemap and UI for night rides (remembered; defaults to your system setting)">
-      <input type="checkbox" id="dark-mode"> 🌙 dark mode</label>
-    <label class="toggle" title="MassGIS 15 cm aerial imagery (2023) — sharp enough to see lane paint and flexposts">
-      <input type="checkbox" id="show-aerial"> 🛰 aerial view</label>
-    <label class="toggle" title="Active work zones and street permits (MassDOT + Cambridge); routes automatically avoid them">
-      <input type="checkbox" id="show-constr" checked> 🚧 construction</label>
-    <label class="toggle" title="Playgrounds, ice cream, libraries, water fountains, restrooms">
-      <input type="checkbox" id="show-pois"> kid stops</label>
-    <label class="toggle" title="Signalized crossings of busy streets — the safe ways through barriers">
-      <input type="checkbox" id="show-gates"> safe crossings</label>
-    <div class="legend" id="legend"></div>
-</div>
 <div id="data-update" style="display:none">⬇ Updating map data…</div>
 <div id="update-banner" style="display:none">
   <span id="update-text"></span>
@@ -358,6 +315,31 @@
   </details>
 
 
+
+  <details class="section">
+    <summary>🗺 Map layers</summary>
+    <label class="toggle"><input type="checkbox" id="show-net" checked> safety network
+      <small>(dashed = OSM-only facility)</small></label>
+    <label class="toggle" title="~100 m cells: average stress of the streets inside — green safe, yellow moderate, red unsafe">
+      <input type="checkbox" id="show-heat"> safety heatmap</label>
+    <label class="toggle" title="Terrain elevation: blue low → red high; hover for meters">
+      <input type="checkbox" id="show-elev"> elevation map</label>
+    <label class="toggle" title="Where bike infrastructure is dense vs missing: greener = more lane/path meters per block; hover for numbers">
+      <input type="checkbox" id="show-lanes"> 🚴 lane coverage</label>
+    <label class="toggle" title="Tilt the map with 3D terrain; heatmaps extrude — taller = more stress / higher ground. Drag with two fingers (or right-drag) to rotate">
+      <input type="checkbox" id="show-3d"> 3D view</label>
+    <label class="toggle" title="Dark basemap and UI for night rides (remembered; defaults to your system setting)">
+      <input type="checkbox" id="dark-mode"> 🌙 dark mode</label>
+    <label class="toggle" title="MassGIS 15 cm aerial imagery (2023) — sharp enough to see lane paint and flexposts">
+      <input type="checkbox" id="show-aerial"> 🛰 aerial view</label>
+    <label class="toggle" title="Active work zones and street permits (MassDOT + Cambridge); routes automatically avoid them">
+      <input type="checkbox" id="show-constr" checked> 🚧 construction</label>
+    <label class="toggle" title="Playgrounds, ice cream, libraries, water fountains, restrooms">
+      <input type="checkbox" id="show-pois"> kid stops</label>
+    <label class="toggle" title="Signalized crossings of busy streets — the safe ways through barriers">
+      <input type="checkbox" id="show-gates"> safe crossings</label>
+    <div class="legend" id="legend"></div>
+  </details>
 
   <div class="footer">
     <button id="about-btn">ℹ How safety is decided</button>

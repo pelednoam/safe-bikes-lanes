@@ -51,7 +51,7 @@ test("walk budget selector persists into the permalink", async ({ page }) => {
 
 test("dark mode, aerial view, and 3D toggles drive the map", async ({ page }) => {
   await boot(page);
-  await page.locator("#layers-btn").click();
+  await openSection(page, "Map layers");
   await page.locator("#dark-mode").check();
   await expect(page.locator("body")).toHaveClass(/dark/);
   expect(await vis(page, "osm-dark")).toBe("visible");
