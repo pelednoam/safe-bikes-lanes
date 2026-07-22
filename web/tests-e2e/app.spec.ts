@@ -50,7 +50,7 @@ test("boots cleanly and network layers render", async ({ page }) => {
 
 test("safety network toggle hides and restores the layers", async ({ page }) => {
   const errors = await boot(page);
-  await openSection(page, "Map layers");
+  await page.locator("#layers-btn").click();
   await page.locator("#show-net").click();
   expect(await vis(page, "network")).toBe("none");
   expect(await vis(page, "network-unconfirmed")).toBe("none");
@@ -71,7 +71,7 @@ test("safety network toggle hides and restores the layers", async ({ page }) => 
 
 test("area overlays are mutually exclusive and render", async ({ page }) => {
   await boot(page);
-  await openSection(page, "Map layers");
+  await page.locator("#layers-btn").click();
   await page.locator("#show-lanes").click();
   expect(await vis(page, "lanemap")).toBe("visible");
   await page.locator("#show-heat").click();
@@ -89,6 +89,7 @@ test("route planning end to end on the real graph", async ({ page }) => {
   await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
   const cards = await page.locator(".option-card").count();
   expect(cards).toBeGreaterThanOrEqual(2);
+  await expect(page.locator(".opt-chip").first()).toBeVisible();
   await expect(page.locator("#s-dist")).toContainText("km");
   await expect(page.locator("#why-list li").first()).toBeVisible();
 });

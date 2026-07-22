@@ -51,7 +51,7 @@ test("walk budget selector persists into the permalink", async ({ page }) => {
 
 test("dark mode, aerial view, and 3D toggles drive the map", async ({ page }) => {
   await boot(page);
-  await openSection(page, "Map layers");
+  await page.locator("#layers-btn").click();
   await page.locator("#dark-mode").check();
   await expect(page.locator("body")).toHaveClass(/dark/);
   expect(await vis(page, "osm-dark")).toBe("visible");
@@ -196,7 +196,8 @@ test("about and rides dialogs open with live content", async ({ page }) => {
 test("phone layout collapses the panel to a bottom sheet", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await boot(page);
-  await expect(page.locator("#panel-collapse")).toBeVisible();
-  await page.locator("#panel-collapse").click();
-  await expect(page.locator("#panel")).toHaveClass(/collapsed/);
+  await expect(page.locator("#sheet-handle")).toBeVisible();
+  await expect(page.locator("#panel")).toHaveClass(/half/); // default sheet state
+  await page.locator("#sheet-handle").click(); // tap cycles half -> full
+  await expect(page.locator("#panel")).toHaveClass(/full/);
 });
