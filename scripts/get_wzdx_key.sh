@@ -67,8 +67,50 @@ else:
   printf 'key=%s\n' "$KEY" >> "$CRED_FILE"
   echo "done — key stored (also kept in $CRED_FILE). Masked: ${KEY:0:6}…${KEY: -4}"
   ;;
+reset)
+  # complete a password reset from the emailed link, then fetch the API key:
+  #   reset '<full reset-password URL from the email>'
+  URL="${2:?usage: reset '<reset link url>'}"
+  read -r EMAIL TOKEN <<< "$(python3 - "$URL" <<'PYEOF'
+import sys
+from urllib.parse import urlsplit, parse_qs, unquote
+q = parse_qs(urlsplit(sys.argv[1]).query)
+print(unquote(q["email"][0]), q["token"][0])
+PYEOF
+)"
+  PW="Wz!$(python3 -c 'import secrets,string; print("".join(secrets.choice(string.ascii_letters+string.digits) for _ in range(18)))')"
+  mkdir -p "$(dirname "$CRED_FILE")"
+  printf 'email=%s\npassword=%s\n' "$EMAIL" "$PW" > "$CRED_FILE"
+  chmod 600 "$CRED_FILE"
+  echo "resetting password for $EMAIL ..."
+  python3 - "$EMAIL" "$TOKEN" "$PW" <<'PYEOF' > /tmp/reset_body.json
+import json, sys
+print(json.dumps({"Email": sys.argv[1], "ResetCode": sys.argv[2], "NewPassword": sys.argv[3]}))
+PYEOF
+  post "Account/ResetPassword" "$(cat /tmp/reset_body.json)"; rm -f /tmp/reset_body.json
+  echo "logging in ..."
+  post "Account/LogIn" "{\"email\":\"$EMAIL\",\"password\":\"$PW\"}" >/dev/null ||
+    post "Account/LogIn" "{\"Email\":\"$EMAIL\",\"Password\":\"$PW\"}" >/dev/null
+  echo "requesting API key ..."
+  RESP="$(post "ApiKey/RequestApiKey" "{}")"
+  KEY="$(printf '%s' "$RESP" | python3 -c "
+import json,sys
+d = json.load(sys.stdin)
+if isinstance(d, str):
+    print(d)
+else:
+    print(d.get('key') or d.get('apiKey') or d.get('value') or '')
+")"
+  if [ -z "$KEY" ]; then
+    echo "could not parse key from response:"; echo "$RESP"; exit 1
+  fi
+  echo "storing as GitHub secret MASSDOT_WZDX_API_KEY ..."
+  printf '%s' "$KEY" | gh secret set MASSDOT_WZDX_API_KEY --repo pelednoam/safe-bikes-lanes
+  printf 'key=%s\n' "$KEY" >> "$CRED_FILE"
+  echo "done — key stored (also kept in $CRED_FILE). Masked: ${KEY:0:6}…${KEY: -4}"
+  ;;
 *)
-  echo "usage: $0 register <email> \"<full name>\" | finish <email> <userId> <code>"
+  echo "usage: $0 register <email> \"<full name>\" | finish <email> <userId> <code> | reset '<url>'"
   exit 1
   ;;
 esac
