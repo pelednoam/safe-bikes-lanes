@@ -9,7 +9,8 @@
     "test": "vitest run",
     "build:app": "bash scripts/assemble.sh",
     "app:sync": "npm run build:app && npx cap sync android",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "e2e:native": "playwright test -c playwright.native.config.ts"
   },
   "devDependencies": {
     "@capacitor/cli": "^8.4.2",

@@ -123,7 +123,8 @@ tiles cache under `data/raw/aerial/`).
 .venv/bin/ruff check pipeline server tests
 .venv/bin/python -m pytest   # unit + end-to-end routing tests
 cd web && npm run check      # strict TypeScript
-cd web && npm run e2e        # Playwright browser tests (real app + graph)
+cd web && npm run e2e         # Playwright browser tests (real app + graph)
+cd web && npm run e2e:native  # emulated Capacitor WebView (native-only paths)
 ```
 
 ## Data licenses
