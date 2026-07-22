@@ -48,9 +48,14 @@ jobs:
       - name: Mirror latest APK + version manifest
         run: |
           mkdir -p _site/app
-          curl -sL --fail -o _site/app/family-bike-router.apk \
-            https://github.com/${{ github.repository }}/releases/latest/download/family-bike-router.apk \
-            || echo "no release yet — skipping APK mirror"
+          for i in 1 2 3 4 5; do
+            curl -sL --fail -o _site/app/family-bike-router.apk \
+              https://github.com/${{ github.repository }}/releases/latest/download/family-bike-router.apk \
+              && break
+            echo "APK not available yet (attempt $i) — retrying in 20s"
+            sleep 20
+          done
+          [ -f _site/app/family-bike-router.apk ] || echo "no release yet — skipping APK mirror"
           TAG=$(curl -s https://api.github.com/repos/${{ github.repository }}/releases/latest | jq -r .tag_name)
           if [ "$TAG" != "null" ] && [ -n "$TAG" ]; then
             printf '{"version": "%s"}\n' "$TAG" > _site/app/version.json
