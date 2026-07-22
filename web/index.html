@@ -154,6 +154,22 @@
     border: 3px solid #fff; box-shadow: 0 0 8px rgba(43,110,242,.9);
   }
   body.navigating #panel { display: none; }
+  /* progressive disclosure: essentials on top, the rest in collapsed sections */
+  .section { margin-top: 8px; border-top: 1px solid var(--border); padding-top: 6px; }
+  .section > summary { cursor: pointer; font-weight: 600; padding: 3px 0; list-style: none; }
+  .section > summary::-webkit-details-marker { display: none; }
+  .section > summary::before { content: "\25b8  "; color: var(--muted); }
+  .section[open] > summary::before { content: "\25be  "; }
+  .pref { display: block; margin: 4px 0; cursor: pointer; }
+  .pref-head { font-weight: 600; margin-top: 10px; }
+  .row { display: flex; gap: 6px; }
+  .footer { margin-top: 10px; display: flex; gap: 6px; flex-wrap: wrap; }
+  .footer button { font-size: 12px; }
+  button.primary {
+    display: block; width: 100%; margin: 10px 0 2px; padding: 11px; font-size: 15px;
+    font-weight: 700; color: #fff; background: #1a9850; border-color: #1a9850;
+  }
+  button.primary:hover { background: #178a45; }
 </style>
 </head>
 <body>
@@ -191,9 +207,7 @@
 <div id="panel">
   <button id="panel-collapse" title="collapse panel">▾</button>
   <h1>Family Bike Router</h1>
-  <div class="hint">Cambridge + Somerville, safety first.<br>
-    Tap the map (or search) to set <b>start</b> and <b>end</b>; drag markers to adjust.
-    Right-click (or long-press) any street to mark it sketchy.</div>
+  <div class="hint">Cambridge + Somerville, safety first — set a start &amp; end.</div>
   <input id="search" type="search" placeholder="search address or place…" autocomplete="off">
   <div id="search-results"></div>
   <div id="places-list" title="Saved places — add via the ☆ in search results or right-click the map"></div>
@@ -202,47 +216,6 @@
     <label><input type="radio" name="profile" value="young_kids" checked> young kids</label>
     <label><input type="radio" name="profile" value="older_kids"> older kids</label>
     <label><input type="radio" name="profile" value="solo"> solo</label>
-    <label title="Adds a cost for every meter of climb (extra on >4% grades)">
-      <input type="checkbox" id="prefer-flat"> prefer flat</label>
-    <label title="Bridge safe segments with short bike-walking stretches (sidewalk pace) instead of long ride-arounds — capped by this total budget; shown dashed white, announced in navigation">
-      🚶 walk up to
-      <select id="walk-max">
-        <option value="0" selected>0 m</option>
-        <option value="100">100 m</option>
-        <option value="250">250 m</option>
-        <option value="500">500 m</option>
-        <option value="1000">1 km</option>
-      </select></label>
-  </div>
-  <details id="avoid-box">
-    <summary id="avoid-summary">🛡 avoid lane types</summary>
-    <div class="hint">route around these as much as possible (never a hard ban —
-    unavoidable stretches are called out):</div>
-    <label><input type="checkbox" id="avoid-lane"> painted lanes</label>
-    <label><input type="checkbox" id="avoid-buffered"> buffered lanes</label>
-    <label><input type="checkbox" id="avoid-sharrow"> sharrows</label>
-    <label><input type="checkbox" id="avoid-moderate_street"> moderate streets</label>
-    <label><input type="checkbox" id="avoid-busy_street"> busy streets</label>
-  </details>
-  <div class="tool-row">
-    <button id="shed-btn" style="margin:0" title="Show everything reachable from a point at your comfort level">🗺 Reach map</button>
-    <select id="loop-dist" title="loop length">
-      <option value="3">3 km</option><option value="5" selected>5 km</option>
-      <option value="8">8 km</option><option value="12">12 km</option>
-    </select>
-    <select id="loop-stop" title="loop stop">
-      <option value="playground">🛝 playground</option>
-      <option value="ice_cream">🍦 ice cream</option>
-      <option value="library">📚 library</option>
-      <option value="any">any stop</option>
-    </select>
-    <button id="loop-btn" style="margin:0" title="Round trip from the start marker with a stop halfway">↻ Loop</button>
-    <button id="record-btn" style="margin:0" title="Record a free ride (no planned route); saved to your ride history">● Record</button>
-  </div>
-  <div id="shed-panel">
-    <label>comfort budget <input type="range" id="shed-budget" min="1" max="8" step="0.5" value="3">
-      <span id="shed-budget-label">3 km</span></label>
-    <div id="shed-info"></div>
   </div>
   <div id="loading">routing…</div>
   <div id="options" style="display:none"></div>
@@ -259,42 +232,99 @@
       <summary>Why this route?</summary>
       <ul id="why-list"></ul>
     </details>
-    <button id="gpx" title="Download GPX for your phone or bike computer">⬇ GPX</button>
-    <button id="print-cues" title="Printable cue sheet">🖨 Cue sheet</button>
     <div id="sunset" class="caution" style="display:none"></div>
-    <button id="share" title="Copy a link that opens exactly this route">🔗 Share</button>
-    <button id="nav-btn" title="Turn-by-turn navigation following your location (voice + screen stays on)">▶ Navigate</button>
-    <button id="offline-btn" title="Pre-download the map tiles along this route so it works with no signal">⬇ Offline map</button>
-  </div>
-  <div id="sketchy-section">
-    <b>Your sketchy marks</b> (routes avoid these)
-    <div id="sketchy-list"></div>
+    <button id="nav-btn" class="primary" title="Turn-by-turn navigation following your location (voice + screen stays on)">▶ Navigate</button>
+    <details class="section">
+      <summary>⬇ Export &amp; offline</summary>
+      <button id="gpx" title="Download GPX for your phone or bike computer">⬇ GPX</button>
+      <button id="print-cues" title="Printable cue sheet">🖨 Cue sheet</button>
+      <button id="share" title="Copy a link that opens exactly this route">🔗 Share</button>
+      <button id="offline-btn" title="Pre-download the map tiles along this route so it works with no signal">⬇ Offline map</button>
+    </details>
   </div>
   <div id="error"></div>
-  <button id="reset">Reset</button><button id="swap">⇄ Swap A/B</button>
-  <label class="toggle"><input type="checkbox" id="show-net" checked> safety network
-    <small>(dashed = OSM-only facility)</small></label>
-  <label class="toggle" title="~100 m cells: average stress of the streets inside — green safe, yellow moderate, red unsafe">
-    <input type="checkbox" id="show-heat"> safety heatmap</label>
-  <label class="toggle" title="Terrain elevation: blue low → red high; hover for meters">
-    <input type="checkbox" id="show-elev"> elevation map</label>
-  <label class="toggle" title="Where bike infrastructure is dense vs missing: greener = more lane/path meters per block; hover for numbers">
-    <input type="checkbox" id="show-lanes"> 🚴 lane coverage</label>
-  <label class="toggle" title="Tilt the map with 3D terrain; heatmaps extrude — taller = more stress / higher ground. Drag with two fingers (or right-drag) to rotate">
-    <input type="checkbox" id="show-3d"> 3D view</label>
-  <label class="toggle" title="Dark basemap and UI for night rides (remembered; defaults to your system setting)">
-    <input type="checkbox" id="dark-mode"> 🌙 dark mode</label>
-  <label class="toggle" title="MassGIS 15 cm aerial imagery (2023) — sharp enough to see lane paint and flexposts">
-    <input type="checkbox" id="show-aerial"> 🛰 aerial view</label>
-  <label class="toggle" title="Active work zones and street permits (MassDOT + Cambridge); routes automatically avoid them">
-    <input type="checkbox" id="show-constr" checked> 🚧 construction</label>
-  <label class="toggle" title="Playgrounds, ice cream, libraries, water fountains, restrooms">
-    <input type="checkbox" id="show-pois"> kid stops</label>
-  <label class="toggle" title="Signalized crossings of busy streets — the safe ways through barriers">
-    <input type="checkbox" id="show-gates"> safe crossings</label>
-  <div class="legend" id="legend"></div>
-  <button id="about-btn" style="margin-top:10px">ℹ How safety is decided</button>
-  <button id="rides-btn" style="margin-top:10px" title="Your ride history and stats (stored on this device only)">📊 Rides</button>
+  <div class="row"><button id="reset">Reset</button><button id="swap">⇄ Swap A/B</button></div>
+
+  <details class="section">
+    <summary>⚙ Preferences</summary>
+    <label class="pref" title="Adds a cost for every meter of climb (extra on >4% grades)">
+      <input type="checkbox" id="prefer-flat"> prefer flat</label>
+    <label class="pref" title="Bridge safe segments with short bike-walking stretches (sidewalk pace) instead of long ride-arounds — capped by this total budget; shown dashed white, announced in navigation">
+      🚶 walk up to
+      <select id="walk-max">
+        <option value="0" selected>0 m</option>
+        <option value="100">100 m</option>
+        <option value="250">250 m</option>
+        <option value="500">500 m</option>
+        <option value="1000">1 km</option>
+      </select></label>
+    <div id="avoid-summary" class="pref-head">🛡 avoid lane types</div>
+    <div class="hint">route around these as much as possible (never a hard ban —
+    unavoidable stretches are called out):</div>
+    <label class="pref"><input type="checkbox" id="avoid-lane"> painted lanes</label>
+    <label class="pref"><input type="checkbox" id="avoid-buffered"> buffered lanes</label>
+    <label class="pref"><input type="checkbox" id="avoid-sharrow"> sharrows</label>
+    <label class="pref"><input type="checkbox" id="avoid-moderate_street"> moderate streets</label>
+    <label class="pref"><input type="checkbox" id="avoid-busy_street"> busy streets</label>
+    <div id="sketchy-section">
+      <b>Your sketchy marks</b> (routes avoid these)
+      <div id="sketchy-list"></div>
+    </div>
+  </details>
+
+  <details class="section">
+    <summary>🧭 Other trip types</summary>
+    <div class="tool-row">
+      <button id="shed-btn" style="margin:0" title="Show everything reachable from a point at your comfort level">🗺 Reach map</button>
+      <select id="loop-dist" title="loop length">
+        <option value="3">3 km</option><option value="5" selected>5 km</option>
+        <option value="8">8 km</option><option value="12">12 km</option>
+      </select>
+      <select id="loop-stop" title="loop stop">
+        <option value="playground">🛝 playground</option>
+        <option value="ice_cream">🍦 ice cream</option>
+        <option value="library">📚 library</option>
+        <option value="any">any stop</option>
+      </select>
+      <button id="loop-btn" style="margin:0" title="Round trip from the start marker with a stop halfway">↻ Loop</button>
+      <button id="record-btn" style="margin:0" title="Record a free ride (no planned route); saved to your ride history">● Record</button>
+    </div>
+    <div id="shed-panel">
+      <label>comfort budget <input type="range" id="shed-budget" min="1" max="8" step="0.5" value="3">
+        <span id="shed-budget-label">3 km</span></label>
+      <div id="shed-info"></div>
+    </div>
+  </details>
+
+  <details class="section">
+    <summary>🗺 Map layers</summary>
+    <label class="toggle"><input type="checkbox" id="show-net" checked> safety network
+      <small>(dashed = OSM-only facility)</small></label>
+    <label class="toggle" title="~100 m cells: average stress of the streets inside — green safe, yellow moderate, red unsafe">
+      <input type="checkbox" id="show-heat"> safety heatmap</label>
+    <label class="toggle" title="Terrain elevation: blue low → red high; hover for meters">
+      <input type="checkbox" id="show-elev"> elevation map</label>
+    <label class="toggle" title="Where bike infrastructure is dense vs missing: greener = more lane/path meters per block; hover for numbers">
+      <input type="checkbox" id="show-lanes"> 🚴 lane coverage</label>
+    <label class="toggle" title="Tilt the map with 3D terrain; heatmaps extrude — taller = more stress / higher ground. Drag with two fingers (or right-drag) to rotate">
+      <input type="checkbox" id="show-3d"> 3D view</label>
+    <label class="toggle" title="Dark basemap and UI for night rides (remembered; defaults to your system setting)">
+      <input type="checkbox" id="dark-mode"> 🌙 dark mode</label>
+    <label class="toggle" title="MassGIS 15 cm aerial imagery (2023) — sharp enough to see lane paint and flexposts">
+      <input type="checkbox" id="show-aerial"> 🛰 aerial view</label>
+    <label class="toggle" title="Active work zones and street permits (MassDOT + Cambridge); routes automatically avoid them">
+      <input type="checkbox" id="show-constr" checked> 🚧 construction</label>
+    <label class="toggle" title="Playgrounds, ice cream, libraries, water fountains, restrooms">
+      <input type="checkbox" id="show-pois"> kid stops</label>
+    <label class="toggle" title="Signalized crossings of busy streets — the safe ways through barriers">
+      <input type="checkbox" id="show-gates"> safe crossings</label>
+    <div class="legend" id="legend"></div>
+  </details>
+
+  <div class="footer">
+    <button id="about-btn">ℹ How safety is decided</button>
+    <button id="rides-btn" title="Your ride history and stats (stored on this device only)">📊 Rides</button>
+  </div>
 </div>
 <dialog id="rides">
   <button id="rides-close" title="close">✕</button>

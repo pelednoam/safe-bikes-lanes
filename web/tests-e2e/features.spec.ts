@@ -24,6 +24,13 @@ function vis(page: Page, layer: string): Promise<string> {
   );
 }
 
+async function openSection(page: Page, label: string): Promise<void> {
+  const sum = page.locator("summary", { hasText: label }).first();
+  const isOpen = await sum.evaluate((el) => (el.parentElement as HTMLDetailsElement).open);
+  if (!isOpen) await sum.click();
+}
+
+
 const DAVIS_KENDALL = "#s=-71.122258,42.396748&e=-71.086705,42.362552&m=young_kids";
 
 test("avoid lane types shapes the route and the explanation", async ({ page }) => {
@@ -37,12 +44,14 @@ test("avoid lane types shapes the route and the explanation", async ({ page }) =
 test("walk budget selector persists into the permalink", async ({ page }) => {
   await boot(page, DAVIS_KENDALL);
   await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
+  await openSection(page, "Preferences");
   await page.locator("#walk-max").selectOption("500");
   await expect.poll(() => page.url(), { timeout: 30_000 }).toContain("wk=500");
 });
 
 test("dark mode, aerial view, and 3D toggles drive the map", async ({ page }) => {
   await boot(page);
+  await openSection(page, "Map layers");
   await page.locator("#dark-mode").check();
   await expect(page.locator("body")).toHaveClass(/dark/);
   expect(await vis(page, "osm-dark")).toBe("visible");
@@ -103,6 +112,7 @@ test("recent routes appear and replan on tap", async ({ page }) => {
 
 test("loop planner builds a round trip from a start point", async ({ page }) => {
   await boot(page, "#s=-71.122258,42.396748");
+  await openSection(page, "Other trip types");
   await page.locator("#loop-btn").click();
   await expect(page.locator(".option-card", { hasText: "Loop via" })).toBeVisible({
     timeout: 30_000,
@@ -112,6 +122,7 @@ test("loop planner builds a round trip from a start point", async ({ page }) => 
 
 test("reach map floods from a clicked point", async ({ page }) => {
   await boot(page);
+  await openSection(page, "Other trip types");
   await page.locator("#shed-btn").click();
   await page.mouse.click(700, 400);
   await expect(page.locator("#shed-info")).toContainText(/reachable/, { timeout: 30_000 });
@@ -164,6 +175,7 @@ test("hovering a street shows the safety card with a grade", async ({ page }) =>
 test("GPX download produces a track file", async ({ page }) => {
   await boot(page, DAVIS_KENDALL);
   await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
+  await openSection(page, "Export");
   const downloadP = page.waitForEvent("download");
   await page.locator("#gpx").click();
   const download = await downloadP;
