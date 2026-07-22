@@ -174,10 +174,9 @@ def fetch_workzones() -> GeoJSON:
             f"{config.WZDX_KEY_ENV} not set — register (free) at the MassDOT "
             "Work Zones portal to enable statewide work-zone data"
         )
-    # auth style varies by portal deployment; send the key in the common spots
-    url = config.WZDX_FEED_URL + "?" + urllib.parse.urlencode({"key": key})
+    # verified 2026-07-22: the feed authenticates with a Bearer token
     req = urllib.request.Request(
-        url, headers={**UA, "X-API-Key": key, "Ocp-Apim-Subscription-Key": key}
+        config.WZDX_FEED_URL, headers={**UA, "Authorization": f"Bearer {key}"}
     )
     with urllib.request.urlopen(req, timeout=120) as r:
         feed: GeoJSON = json.load(r)
