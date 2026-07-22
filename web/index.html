@@ -37,28 +37,54 @@
   body.dark .maplibregl-popup-content { background: var(--bg); color: var(--fg); }
   body.dark .maplibregl-popup-tip { border-top-color: var(--bg) !important;
                                     border-bottom-color: var(--bg) !important; }
-  #panel-collapse { display: none; }
-  /* phones + small tablets: panel becomes a collapsible bottom sheet */
+  .opt-chip {
+    background: var(--g); color: #fff; font-size: 11px; font-weight: 700;
+    padding: 2px 8px; border-radius: 11px; white-space: nowrap; cursor: pointer;
+    box-shadow: 0 1px 4px rgba(0,0,0,.45); border: 2px solid transparent;
+  }
+  .opt-chip.sel { border-color: #fff; outline: 2px solid #1440a0; }
+  #layers-btn {
+    position: absolute; top: 132px; right: 10px; z-index: 5; width: 40px; height: 40px;
+    margin: 0; padding: 0; font-size: 18px; border-radius: 8px; background: var(--bg);
+    color: var(--fg); box-shadow: 0 1px 6px rgba(0,0,0,.3);
+  }
+  #layers-panel {
+    position: absolute; top: 132px; right: 58px; z-index: 6; display: none; width: 220px;
+    max-height: 72vh; overflow: auto; background: var(--bg); color: var(--fg);
+    border-radius: 10px; box-shadow: 0 2px 12px rgba(0,0,0,.35); padding: 10px 12px;
+  }
+  #layers-panel.open { display: block; }
+  #sheet-handle { display: none; }
+  /* phones + small tablets: the panel is a draggable bottom sheet */
   @media (max-width: 760px), (max-height: 500px) {
     #panel {
-      top: auto; bottom: 0; left: 0; right: 0; width: auto; max-height: 48%;
-      border-radius: 14px 14px 0 0; font-size: 13px;
-      padding-bottom: calc(12px + env(safe-area-inset-bottom));
+      top: auto; bottom: 0; left: 0; right: 0; width: auto; max-height: 52%;
+      border-radius: 16px 16px 0 0; font-size: 13px;
+      padding-top: 4px; padding-bottom: calc(12px + env(safe-area-inset-bottom));
+      transition: max-height .18s ease;
     }
-    #panel.collapsed { max-height: 88px; overflow: hidden; }
-    #panel-collapse {
-      display: block; position: absolute; top: 6px; right: 10px; margin: 0;
-      padding: 2px 12px; font-size: 15px; border-radius: 10px;
+    #panel.peek { max-height: 132px; overflow: hidden; }
+    #panel.half { max-height: 52%; }
+    #panel.full { max-height: 88%; }
+    #sheet-handle {
+      display: block; width: 44px; height: 5px; border-radius: 3px;
+      background: var(--border); margin: 2px auto 8px; touch-action: none; cursor: grab;
     }
-    button, select, input[type="search"] { min-height: 36px; }
+    button, select, input[type="search"] { min-height: 38px; }
     label.toggle, #modes label { padding: 3px 0; display: inline-block; }
     .option-card { padding: 9px 8px; }
   }
   button, input, select, label { touch-action: manipulation; }
   #panel h1 { font-size: 15px; margin: 0 0 4px; }
   #panel .hint { color: var(--muted); margin: 4px 0 8px; }
-  #search { width: 100%; box-sizing: border-box; padding: 5px 8px; border: 1px solid var(--border); background: var(--bg); color: var(--fg);
-            border-radius: 6px; }
+  #search { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--border); background: var(--bg); color: var(--fg);
+            border-radius: 8px; font-size: 14px; }
+  #od { display: flex; flex-direction: column; gap: 5px; margin-bottom: 6px; }
+  #from-field { margin: 0; width: 100%; text-align: left; padding: 8px 10px; border-radius: 8px;
+                background: var(--btn-bg); font-size: 14px; }
+  #from-field.custom { border-color: #2b83ba; }
+  #from-field.picking { border-color: #2b6ef2; color: #2b6ef2; font-weight: 600; }
+  #from-field .od-ico { opacity: .8; }
   .search-row { display: flex; gap: 4px; align-items: center; margin: 3px 0; }
   .search-row span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .search-row button { margin: 0; padding: 2px 7px; font-size: 11px; }
@@ -174,6 +200,30 @@
 </head>
 <body>
 <div id="map"></div>
+<button id="layers-btn" title="Map layers">⧉</button>
+<div id="layers-panel">
+    <label class="toggle"><input type="checkbox" id="show-net" checked> safety network
+      <small>(dashed = OSM-only facility)</small></label>
+    <label class="toggle" title="~100 m cells: average stress of the streets inside — green safe, yellow moderate, red unsafe">
+      <input type="checkbox" id="show-heat"> safety heatmap</label>
+    <label class="toggle" title="Terrain elevation: blue low → red high; hover for meters">
+      <input type="checkbox" id="show-elev"> elevation map</label>
+    <label class="toggle" title="Where bike infrastructure is dense vs missing: greener = more lane/path meters per block; hover for numbers">
+      <input type="checkbox" id="show-lanes"> 🚴 lane coverage</label>
+    <label class="toggle" title="Tilt the map with 3D terrain; heatmaps extrude — taller = more stress / higher ground. Drag with two fingers (or right-drag) to rotate">
+      <input type="checkbox" id="show-3d"> 3D view</label>
+    <label class="toggle" title="Dark basemap and UI for night rides (remembered; defaults to your system setting)">
+      <input type="checkbox" id="dark-mode"> 🌙 dark mode</label>
+    <label class="toggle" title="MassGIS 15 cm aerial imagery (2023) — sharp enough to see lane paint and flexposts">
+      <input type="checkbox" id="show-aerial"> 🛰 aerial view</label>
+    <label class="toggle" title="Active work zones and street permits (MassDOT + Cambridge); routes automatically avoid them">
+      <input type="checkbox" id="show-constr" checked> 🚧 construction</label>
+    <label class="toggle" title="Playgrounds, ice cream, libraries, water fountains, restrooms">
+      <input type="checkbox" id="show-pois"> kid stops</label>
+    <label class="toggle" title="Signalized crossings of busy streets — the safe ways through barriers">
+      <input type="checkbox" id="show-gates"> safe crossings</label>
+    <div class="legend" id="legend"></div>
+</div>
 <div id="data-update" style="display:none">⬇ Updating map data…</div>
 <div id="update-banner" style="display:none">
   <span id="update-text"></span>
@@ -205,10 +255,13 @@
   </div>
 </div>
 <div id="panel">
-  <button id="panel-collapse" title="collapse panel">▾</button>
+  <div id="sheet-handle" title="drag to resize"></div>
   <h1>Family Bike Router</h1>
-  <div class="hint">Cambridge + Somerville, safety first — set a start &amp; end.</div>
-  <input id="search" type="search" placeholder="search address or place…" autocomplete="off">
+  <div class="hint">Cambridge + Somerville, safety first. Search or tap the map for where you\u2019re headed — routes start from your location.</div>
+  <div id="od">
+    <button id="from-field" type="button" title="Start point — defaults to your current location; tap to set a custom start"><span class="od-ico">📍</span> <span id="from-label">Your location</span></button>
+    <input id="search" type="search" placeholder="Where to?" autocomplete="off">
+  </div>
   <div id="search-results"></div>
   <div id="places-list" title="Saved places — add via the ☆ in search results or right-click the map"></div>
   <div id="recent-list"></div>
@@ -296,30 +349,7 @@
     </div>
   </details>
 
-  <details class="section">
-    <summary>🗺 Map layers</summary>
-    <label class="toggle"><input type="checkbox" id="show-net" checked> safety network
-      <small>(dashed = OSM-only facility)</small></label>
-    <label class="toggle" title="~100 m cells: average stress of the streets inside — green safe, yellow moderate, red unsafe">
-      <input type="checkbox" id="show-heat"> safety heatmap</label>
-    <label class="toggle" title="Terrain elevation: blue low → red high; hover for meters">
-      <input type="checkbox" id="show-elev"> elevation map</label>
-    <label class="toggle" title="Where bike infrastructure is dense vs missing: greener = more lane/path meters per block; hover for numbers">
-      <input type="checkbox" id="show-lanes"> 🚴 lane coverage</label>
-    <label class="toggle" title="Tilt the map with 3D terrain; heatmaps extrude — taller = more stress / higher ground. Drag with two fingers (or right-drag) to rotate">
-      <input type="checkbox" id="show-3d"> 3D view</label>
-    <label class="toggle" title="Dark basemap and UI for night rides (remembered; defaults to your system setting)">
-      <input type="checkbox" id="dark-mode"> 🌙 dark mode</label>
-    <label class="toggle" title="MassGIS 15 cm aerial imagery (2023) — sharp enough to see lane paint and flexposts">
-      <input type="checkbox" id="show-aerial"> 🛰 aerial view</label>
-    <label class="toggle" title="Active work zones and street permits (MassDOT + Cambridge); routes automatically avoid them">
-      <input type="checkbox" id="show-constr" checked> 🚧 construction</label>
-    <label class="toggle" title="Playgrounds, ice cream, libraries, water fountains, restrooms">
-      <input type="checkbox" id="show-pois"> kid stops</label>
-    <label class="toggle" title="Signalized crossings of busy streets — the safe ways through barriers">
-      <input type="checkbox" id="show-gates"> safe crossings</label>
-    <div class="legend" id="legend"></div>
-  </details>
+
 
   <div class="footer">
     <button id="about-btn">ℹ How safety is decided</button>

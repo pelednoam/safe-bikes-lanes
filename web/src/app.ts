@@ -218,6 +218,10 @@ map.addControl(new maplibregl.ScaleControl({}), "bottom-left");
 let router: Router | null = null;
 let start: Marker | null = null;
 let end: Marker | null = null;
+// Google-Maps-style flow: origin defaults to the current location; the next
+// map tap fills the destination unless the user is explicitly picking a start.
+let fromCurrent = true;
+let activeField: "start" | "end" = "end";
 let poiMarker: Marker | null = null;
 let shedMarker: Marker | null = null;
 let profileId: ProfileId = "young_kids";
@@ -365,6 +369,28 @@ function getSource(id: string): GeoJSONSource {
   return src as GeoJSONSource;
 }
 
+function currentPosition(): Promise<[number, number]> {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) {
+      reject(new Error("no geolocation"));
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (p) => resolve([p.coords.longitude, p.coords.latitude]),
+      (err) => reject(err instanceof Error ? err : new Error(String(err.message))),
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 30_000 },
+    );
+  });
+}
+
+/** Reflect the origin state in the From field. */
+function syncOD(): void {
+  const f = el<HTMLButtonElement>("from-field");
+  if (f.classList.contains("picking")) return;
+  el<HTMLElement>("from-label").textContent = fromCurrent ? "Your location" : "Custom start";
+  f.classList.toggle("custom", !fromCurrent);
+}
+
 function makeMarker(lngLat: LngLat | [number, number], color: string, label: string): Marker {
   const m = new maplibregl.Marker({ color, draggable: true });
   m.setLngLat(lngLat).addTo(map);
@@ -377,12 +403,15 @@ function makeMarker(lngLat: LngLat | [number, number], color: string, label: str
 
 function setPoint(kind: "start" | "end", lngLat: LngLat | [number, number]): void {
   if (kind === "start") {
+    fromCurrent = false;
+    el<HTMLButtonElement>("from-field").classList.remove("picking");
     if (start) start.setLngLat(lngLat);
     else start = makeMarker(lngLat, "#2b83ba", "start");
   } else {
     if (end) end.setLngLat(lngLat);
     else end = makeMarker(lngLat, "#d7191c", "end");
   }
+  syncOD();
   void requestRoute();
 }
 
@@ -391,12 +420,27 @@ function setPoint(kind: "start" | "end", lngLat: LngLat | [number, number]): voi
 // ---------------------------------------------------------------------------
 
 async function requestRoute(): Promise<void> {
-  if (!start || !end) return;
+  if (!end) return;
   await routerReady;
   if (!router) return;
   const errBox = el<HTMLDivElement>("error");
   errBox.style.display = "none";
   const loading = el<HTMLDivElement>("loading");
+  if (!start) {
+    if (!fromCurrent) return;
+    loading.textContent = "finding your location…";
+    loading.style.display = "block";
+    try {
+      start = makeMarker(await currentPosition(), "#2b83ba", "start");
+      syncOD();
+    } catch {
+      loading.style.display = "none";
+      errBox.textContent =
+        "Couldn't get your location — tap \u201c\ud83d\udccd From\u201d to set a start, or enable location access.";
+      errBox.style.display = "block";
+      return;
+    }
+  }
   loading.textContent = "routing…";
   loading.style.display = "block";
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -421,10 +465,12 @@ async function requestRoute(): Promise<void> {
     pendingSelect = null;
     selectOption(wanted !== null && options.some((o) => o.id === wanted) ? wanted : fallback.id);
     recordRecentRoute([s.lng, s.lat], [d.lng, d.lat]);
+    revealSheet();
   } catch (err) {
     options = [];
     selectedId = null;
     renderOptions();
+    clearOptionChips();
     errBox.textContent = err instanceof Error ? err.message : String(err);
     errBox.style.display = "block";
   } finally {
@@ -478,6 +524,38 @@ async function requestLoop(): Promise<void> {
   }
 }
 
+let optionChips: Marker[] = [];
+function clearOptionChips(): void {
+  for (const c of optionChips) c.remove();
+  optionChips = [];
+}
+
+/** Selectable grade·time chips on the map, one per alternative (Google-style,
+ * but the lead label is the safety grade, not the ETA). */
+function renderOptionChips(): void {
+  clearOptionChips();
+  if (options.length < 2) return; // no choice to make
+  options.forEach((o, i) => {
+    const coords = o.payload.geojson.features.flatMap((f) => f.geometry.coordinates);
+    if (coords.length === 0) return;
+    const frac = Math.min(0.9, 0.35 + i * 0.2);
+    const pt = coords[Math.floor(coords.length * frac)] ?? coords[coords.length - 1];
+    if (!pt) return;
+    const chip = document.createElement("div");
+    chip.className = "opt-chip" + (o.id === selectedId ? " sel" : "");
+    chip.style.setProperty("--g", GRADE_COLORS[o.grade]);
+    chip.textContent = `${o.grade} · ${o.payload.summary.minutes}m`;
+    chip.title = `${o.label}: ${o.gradeReason}`;
+    chip.addEventListener("click", (ev: Event) => {
+      ev.stopPropagation();
+      selectOption(o.id);
+    });
+    optionChips.push(
+      new maplibregl.Marker({ element: chip }).setLngLat(pt as [number, number]).addTo(map),
+    );
+  });
+}
+
 function selectOption(id: RouteOption["id"]): void {
   const chosen = options.find((o) => o.id === id);
   if (!chosen) return;
@@ -491,6 +569,7 @@ function selectOption(id: RouteOption["id"]): void {
     features: altFeatures,
   } as GeoJSON.GeoJSON);
   renderOptions();
+  renderOptionChips();
   showSummary(chosen);
   updateHash();
 }
@@ -964,6 +1043,8 @@ function recordRecentRoute(s: [number, number], e: [number, number]): void {
 }
 
 function planBetween(s: [number, number], e: [number, number]): void {
+  fromCurrent = false;
+  syncOD();
   if (start) start.setLngLat(s);
   else start = makeMarker(s, "#2b83ba", "start");
   if (end) end.setLngLat(e);
@@ -1822,8 +1903,12 @@ map.on("click", (e: MapMouseEvent) => {
     void computeShed();
     return;
   }
-  if (!start) setPoint("start", e.lngLat);
-  else if (!end) setPoint("end", e.lngLat);
+  if (activeField === "start") {
+    setPoint("start", e.lngLat);
+    activeField = "end";
+  } else {
+    setPoint("end", e.lngLat);
+  }
 });
 
 // touch devices have no right-click: a long-press on a street opens the
@@ -1882,11 +1967,82 @@ for (const evt of ["touchend", "touchmove", "touchcancel"] as const) {
   });
 }
 
-// collapsible panel for small screens
-el<HTMLButtonElement>("panel-collapse").addEventListener("click", () => {
+// draggable bottom-sheet (mobile): peek / half / full snap states
+const SHEET_STATES = ["peek", "half", "full"] as const;
+type SheetState = (typeof SHEET_STATES)[number];
+function setSheet(state: SheetState): void {
   const panel = el<HTMLDivElement>("panel");
-  const collapsed = panel.classList.toggle("collapsed");
-  el<HTMLButtonElement>("panel-collapse").textContent = collapsed ? "▴" : "▾";
+  panel.style.maxHeight = "";
+  panel.classList.remove("peek", "half", "full");
+  panel.classList.add(state);
+}
+function currentSheet(): SheetState {
+  const panel = el<HTMLDivElement>("panel");
+  return SHEET_STATES.find((s) => panel.classList.contains(s)) ?? "half";
+}
+(function initSheet(): void {
+  const panel = el<HTMLDivElement>("panel");
+  const handle = el<HTMLDivElement>("sheet-handle");
+  if (window.matchMedia("(max-width: 760px), (max-height: 500px)").matches) setSheet("half");
+  let dragging = false;
+  let startY = 0;
+  let startH = 0;
+  let moved = 0;
+  handle.addEventListener("pointerdown", (e: PointerEvent) => {
+    dragging = true;
+    startY = e.clientY;
+    startH = panel.getBoundingClientRect().height;
+    moved = 0;
+    handle.setPointerCapture(e.pointerId);
+  });
+  handle.addEventListener("pointermove", (e: PointerEvent) => {
+    if (!dragging) return;
+    const dy = startY - e.clientY;
+    moved = Math.max(moved, Math.abs(dy));
+    const h = Math.min(window.innerHeight * 0.88, Math.max(70, startH + dy));
+    panel.classList.remove("peek", "half", "full");
+    panel.style.maxHeight = `${h}px`;
+  });
+  const end = (): void => {
+    if (!dragging) return;
+    dragging = false;
+    const h = panel.getBoundingClientRect().height;
+    panel.style.maxHeight = "";
+    if (moved < 6) {
+      // a tap cycles peek -> half -> full -> peek
+      const next = SHEET_STATES[(SHEET_STATES.indexOf(currentSheet()) + 1) % 3];
+      setSheet(next ?? "half");
+      return;
+    }
+    const vh = window.innerHeight;
+    setSheet(h < vh * 0.25 ? "peek" : h < vh * 0.68 ? "half" : "full");
+  };
+  handle.addEventListener("pointerup", end);
+  handle.addEventListener("pointercancel", end);
+})();
+
+/** After a route computes, make sure the sheet is at least half-open (mobile). */
+function revealSheet(): void {
+  if (currentSheet() === "peek") setSheet("half");
+}
+
+el<HTMLButtonElement>("from-field").addEventListener("click", () => {
+  const f = el<HTMLButtonElement>("from-field");
+  if (!fromCurrent && start) {
+    // revert to using the current location as the origin
+    start.remove();
+    start = null;
+    fromCurrent = true;
+    activeField = "end";
+    f.classList.remove("picking");
+    syncOD();
+    void requestRoute();
+  } else {
+    // pick a custom start: the next map tap / place / search fills it
+    activeField = "start";
+    f.classList.add("picking");
+    el<HTMLElement>("from-label").textContent = "tap the map or a place…";
+  }
 });
 
 el<HTMLButtonElement>("reset").addEventListener("click", () => {
@@ -1894,6 +2050,11 @@ el<HTMLButtonElement>("reset").addEventListener("click", () => {
   end?.remove();
   poiMarker?.remove();
   start = end = poiMarker = null;
+  clearOptionChips();
+  fromCurrent = true;
+  activeField = "end";
+  el<HTMLButtonElement>("from-field").classList.remove("picking");
+  syncOD();
   options = [];
   selectedId = null;
   renderOptions();
@@ -1929,6 +2090,12 @@ for (const [checkboxId, layers] of [
     }
   });
 }
+
+el<HTMLButtonElement>("layers-btn").addEventListener("click", (e: Event) => {
+  e.stopPropagation();
+  el<HTMLDivElement>("layers-panel").classList.toggle("open");
+});
+map.on("click", () => el<HTMLDivElement>("layers-panel").classList.remove("open"));
 
 el<HTMLInputElement>("prefer-flat").addEventListener("change", (e: Event) => {
   preferFlat = (e.target as HTMLInputElement).checked;

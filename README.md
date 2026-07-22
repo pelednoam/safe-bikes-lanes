@@ -25,7 +25,11 @@ routing runs in your browser (GitHub Pages, deployed by CI on every push).
    (`pipeline/export_web.py`); a **TypeScript Dijkstra router** (`web/src/router.ts`)
    computes safest + shortest routes entirely in the browser (~40 ms), so the
    whole app hosts as a static site.
-4. The **MapLibre + TypeScript** frontend (`web/`) shows the network colored by
+4. The **MapLibre + TypeScript** frontend (`web/`) uses a Google-Maps-style
+   flow — search or tap for *where to*, routing from your current location by
+   default; a peek/half/full draggable bottom sheet on phones; map layers
+   behind a floating button; and tappable route-alternative chips (labeled by
+   safety **grade**, not ETA — safety stays the hero). It shows the network colored by
    safety class (dashed where a facility is known from OSM only); click or
    search to set start/end, drag markers to explore. Three **rider profiles**
    (young kids / older kids / solo) are computed client-side from raw edge
