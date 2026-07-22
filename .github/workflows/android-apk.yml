@@ -32,6 +32,12 @@ jobs:
       - name: Check + test
         run: npm run check && npm test
         working-directory: web
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+        working-directory: web
+      - name: Native app-layer E2E (emulated Capacitor WebView)
+        run: npm run e2e:native
+        working-directory: web
       - name: Bundle the freshest live data
         # overlay the currently-deployed data onto the repo copies so a
         # freshly built APK matches the website and skips the redundant
