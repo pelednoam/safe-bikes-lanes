@@ -2091,12 +2091,6 @@ for (const [checkboxId, layers] of [
   });
 }
 
-el<HTMLButtonElement>("layers-btn").addEventListener("click", (e: Event) => {
-  e.stopPropagation();
-  el<HTMLDivElement>("layers-panel").classList.toggle("open");
-});
-map.on("click", () => el<HTMLDivElement>("layers-panel").classList.remove("open"));
-
 el<HTMLInputElement>("prefer-flat").addEventListener("change", (e: Event) => {
   preferFlat = (e.target as HTMLInputElement).checked;
   void requestRoute();

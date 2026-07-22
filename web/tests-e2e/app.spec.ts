@@ -50,7 +50,7 @@ test("boots cleanly and network layers render", async ({ page }) => {
 
 test("safety network toggle hides and restores the layers", async ({ page }) => {
   const errors = await boot(page);
-  await page.locator("#layers-btn").click();
+  await openSection(page, "Map layers");
   await page.locator("#show-net").click();
   expect(await vis(page, "network")).toBe("none");
   expect(await vis(page, "network-unconfirmed")).toBe("none");
@@ -71,7 +71,7 @@ test("safety network toggle hides and restores the layers", async ({ page }) => 
 
 test("area overlays are mutually exclusive and render", async ({ page }) => {
   await boot(page);
-  await page.locator("#layers-btn").click();
+  await openSection(page, "Map layers");
   await page.locator("#show-lanes").click();
   expect(await vis(page, "lanemap")).toBe("visible");
   await page.locator("#show-heat").click();
