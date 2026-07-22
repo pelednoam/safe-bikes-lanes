@@ -104,8 +104,12 @@ test("save a place via right-click and use it as start", async ({ page }) => {
 test("recent routes appear and replan on tap", async ({ page }) => {
   await boot(page, DAVIS_KENDALL);
   await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
-  await expect(page.locator("#recent-list")).toContainText("recent routes");
+  // recent routes are collapsed by default — the section appears once there is history
+  await expect(page.locator("#recent-box")).toBeVisible();
+  await openSection(page, "Recent routes");
+  await expect(page.locator("#recent-list")).toContainText("→");
   await page.locator("#reset").click();
+  await openSection(page, "Recent routes");
   await page.locator("#recent-list span").first().click();
   await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
 });
