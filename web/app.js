@@ -982,22 +982,20 @@ function renderPlacesAndRecent() {
     const recentBox = el("recent-list");
     recentBox.innerHTML = "";
     const recent = listRecent();
+    // collapsed by default; the whole section is hidden when there's no history
+    el("recent-box").style.display = recent.length > 0 ? "block" : "none";
     if (recent.length > 0) {
-        const head = document.createElement("div");
-        head.className = "options-head";
-        head.textContent = "recent routes";
+        for (const route of recent.slice(0, 5))
+            recentBox.appendChild(recentRow(route));
         const clear = document.createElement("button");
-        clear.textContent = "✕";
+        clear.textContent = "clear history";
         clear.title = "clear recent routes";
-        clear.style.cssText = "margin:0 0 0 6px;padding:0 6px;font-size:11px";
+        clear.style.cssText = "margin-top:4px;padding:1px 8px;font-size:11px";
         clear.addEventListener("click", () => {
             clearRecent();
             renderPlacesAndRecent();
         });
-        head.appendChild(clear);
-        recentBox.appendChild(head);
-        for (const route of recent.slice(0, 5))
-            recentBox.appendChild(recentRow(route));
+        recentBox.appendChild(clear);
     }
 }
 // ---------------------------------------------------------------------------
