@@ -291,6 +291,28 @@ let pendingSelect: RouteOption["id"] | null = null;
 
 const dataReady: Promise<void> = initDataSource();
 
+// first launch after a website data refresh downloads layers from the site;
+// surface that as progress (native only — bundled loads are instant)
+const DATA_STEPS = 8; // graph + 6 map layers + construction
+let dataDone = 0;
+function dataProgress(): void {
+  if (usingRemoteData() === null) return;
+  dataDone += 1;
+  const box = el<HTMLDivElement>("data-update");
+  if (dataDone >= DATA_STEPS) box.style.display = "none";
+  else {
+    box.textContent = `\u2b07 Updating map data\u2026 ${dataDone}/${DATA_STEPS}`;
+    box.style.display = "block";
+  }
+}
+void dataReady.then(() => {
+  if (usingRemoteData() !== null) {
+    const box = el<HTMLDivElement>("data-update");
+    box.textContent = "\u2b07 Updating map data\u2026";
+    box.style.display = "block";
+  }
+});
+
 const routerReady: Promise<void> = dataReady
   .then(() => loadJson<GraphData>("graph.json"))
   .then((data) => {
@@ -305,11 +327,13 @@ const routerReady: Promise<void> = dataReady
       }
     });
     el<HTMLDivElement>("loading").style.display = "none";
+    dataProgress();
   })
   .catch((err: unknown) => {
     const errBox = el<HTMLDivElement>("error");
     errBox.textContent = `failed to load routing graph: ${String(err)}`;
     errBox.style.display = "block";
+    dataProgress();
   });
 el<HTMLDivElement>("loading").textContent = "loading routing graph…";
 el<HTMLDivElement>("loading").style.display = "block";
@@ -1776,15 +1800,18 @@ map.on("load", () => {
       .then((d) => {
         (map.getSource(id) as GeoJSONSource).setData(d);
       })
-      .catch(() => undefined);
+      .catch(() => undefined)
+      .finally(() => dataProgress());
   }
-  void constructionReady.then(() => {
-    if (constructionFC) {
-      (map.getSource("construction") as GeoJSONSource).setData(
-        constructionFC as unknown as GeoJSON.GeoJSON,
-      );
-    }
-  });
+  void constructionReady
+    .then(() => {
+      if (constructionFC) {
+        (map.getSource("construction") as GeoJSONSource).setData(
+          constructionFC as unknown as GeoJSON.GeoJSON,
+        );
+      }
+    })
+    .finally(() => dataProgress());
 
   parseHash();
 });
@@ -3029,7 +3056,35 @@ async function checkAppUpdate(): Promise<void> {
 }
 void checkAppUpdate();
 
-// offline support (PWA)
+// service worker: register only on the website (PWA offline). In the native
+// app Capacitor already bundles everything offline, and a persistent SW would
+// serve a STALE app shell across APK updates (its origin outlives installs) —
+// so unregister any existing one, clear the cached shell, and reload once to
+// drop the stale shell immediately.
 if ("serviceWorker" in navigator) {
-  void navigator.serviceWorker.register("sw.js");
+  if (isNativeApp()) {
+    void (async () => {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      let had = false;
+      for (const r of regs) {
+        had = true;
+        await r.unregister();
+      }
+      try {
+        for (const k of await caches.keys()) {
+          if (k.startsWith("family-bike-router") || k.startsWith("bike-tiles")) {
+            await caches.delete(k);
+          }
+        }
+      } catch {
+        // caches API unavailable in this webview — nothing to clear
+      }
+      if (had && navigator.serviceWorker.controller && !sessionStorage.getItem("swCleared")) {
+        sessionStorage.setItem("swCleared", "1");
+        location.reload();
+      }
+    })();
+  } else {
+    void navigator.serviceWorker.register("sw.js");
+  }
 }
