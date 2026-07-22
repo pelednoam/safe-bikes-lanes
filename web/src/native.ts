@@ -138,10 +138,17 @@ export async function stopBackgroundWatcher(id: string): Promise<void> {
  * downloads, which the WebView itself won't handle. False when unavailable. */
 export async function openExternal(url: string): Promise<boolean> {
   const cap = window.Capacitor;
-  if (!cap || !cap.isNativePlatform()) return false;
+  if (cap && cap.isNativePlatform()) {
+    try {
+      await cap.registerPlugin<BrowserPlugin>("Browser").open({ url });
+      return true;
+    } catch {
+      // fall through to window.open (Capacitor routes external links to the
+      // system browser, which downloads the APK)
+    }
+  }
   try {
-    await cap.registerPlugin<BrowserPlugin>("Browser").open({ url });
-    return true;
+    return window.open(url, "_blank") !== null;
   } catch {
     return false;
   }
