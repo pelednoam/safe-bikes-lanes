@@ -2950,8 +2950,20 @@ async function checkAppUpdate() {
         el("update-text").textContent =
             `Update available: ${bundled.version} → ${latest.version}`;
         banner.style.display = "flex";
-        el("update-get").addEventListener("click", () => {
-            void openExternal(APK_URL);
+        const getBtn = el("update-get");
+        getBtn.href = APK_URL; // static fallback so a tap works even without JS
+        const text = el("update-text");
+        const label = `Update available: ${bundled.version} → ${latest.version}`;
+        getBtn.addEventListener("click", (ev) => {
+            ev.preventDefault();
+            text.textContent = "opening download… (check your notifications)";
+            void openExternal(APK_URL).then((ok) => {
+                if (!ok) {
+                    text.innerHTML =
+                        `${label} — <a href="${APK_URL}" style="color:inherit;text-decoration:underline">` +
+                            `tap here to download</a>`;
+                }
+            });
         });
         el("update-dismiss").addEventListener("click", () => {
             banner.style.display = "none";

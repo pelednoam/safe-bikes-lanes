@@ -3211,8 +3211,20 @@ async function checkAppUpdate(): Promise<void> {
     el<HTMLElement>("update-text").textContent =
       `Update available: ${bundled.version} → ${latest.version}`;
     banner.style.display = "flex";
-    el<HTMLButtonElement>("update-get").addEventListener("click", () => {
-      void openExternal(APK_URL);
+    const getBtn = el<HTMLAnchorElement>("update-get");
+    getBtn.href = APK_URL; // static fallback so a tap works even without JS
+    const text = el<HTMLElement>("update-text");
+    const label = `Update available: ${bundled.version} → ${latest.version}`;
+    getBtn.addEventListener("click", (ev: Event) => {
+      ev.preventDefault();
+      text.textContent = "opening download… (check your notifications)";
+      void openExternal(APK_URL).then((ok) => {
+        if (!ok) {
+          text.innerHTML =
+            `${label} — <a href="${APK_URL}" style="color:inherit;text-decoration:underline">` +
+            `tap here to download</a>`;
+        }
+      });
     });
     el<HTMLButtonElement>("update-dismiss").addEventListener("click", () => {
       banner.style.display = "none";
