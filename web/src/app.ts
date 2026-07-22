@@ -59,6 +59,8 @@ import {
   rideTotals,
   saveRide,
 } from "./rides.js";
+import { initDataSource, loadJson, usingRemoteData } from "./data.js";
+import type { GraphData } from "./router.js";
 import { buildCues, PROFILES, Router, toGPX } from "./router.js";
 import { drawRideCard, drawTotalsCard, rideShareText, totalsShareText } from "./sharecard.js";
 import type {
@@ -287,8 +289,12 @@ function applyAvoidPoints(): void {
 let loopParams: { km: number; kind: string } | null = null;
 let pendingSelect: RouteOption["id"] | null = null;
 
-const routerReady: Promise<void> = Router.load("data/graph.json")
-  .then((r) => {
+const dataReady: Promise<void> = initDataSource();
+
+const routerReady: Promise<void> = dataReady
+  .then(() => loadJson<GraphData>("graph.json"))
+  .then((data) => {
+    const r = new Router(data);
     router = r;
     applyAvoidPoints();
     renderSketchy();
@@ -308,23 +314,23 @@ const routerReady: Promise<void> = Router.load("data/graph.json")
 el<HTMLDivElement>("loading").textContent = "loading routing graph…";
 el<HTMLDivElement>("loading").style.display = "block";
 
-void fetch("data/keys.json")
-  .then((r) => (r.ok ? r.json() : {}))
-  .then((keys: { mapillary?: string }) => {
+void dataReady
+  .then(() => loadJson<{ mapillary?: string }>("keys.json"))
+  .then((keys) => {
     mapillaryToken = localStorage.getItem("mapillaryToken") ?? keys.mapillary ?? "";
   })
   .catch(() => undefined);
 
-const constructionReady: Promise<void> = fetch("data/construction.geojson")
-  .then((r) => (r.ok ? r.json() : null))
-  .then((fc: ConstructionFC | null) => {
+const constructionReady: Promise<void> = dataReady
+  .then(() => loadJson<ConstructionFC>("construction.geojson"))
+  .then((fc) => {
     constructionFC = fc;
   })
   .catch(() => undefined);
 
-const poisReady: Promise<void> = fetch("data/pois.geojson")
-  .then((r) => (r.ok ? r.json() : { features: [] }))
-  .then((fc: { features: PoiFeature[] }) => {
+const poisReady: Promise<void> = dataReady
+  .then(() => loadJson<{ features: PoiFeature[] }>("pois.geojson"))
+  .then((fc) => {
     pois = fc.features;
   })
   .catch(() => undefined);
@@ -1201,7 +1207,7 @@ map.on("load", () => {
   });
   // area overlays (hidden until toggled) sit under the street/route lines;
   // each has a flat (2D) and an extruded (3D) variant
-  map.addSource("heatmap", { type: "geojson", data: "data/heatmap.geojson" });
+  map.addSource("heatmap", { type: "geojson", data: emptyFC() });
   map.addLayer({
     id: "heatmap",
     type: "fill",
@@ -1225,7 +1231,7 @@ map.on("load", () => {
       "fill-extrusion-height": ["*", ["coalesce", ["get", "stress"], 1], 25],
     },
   });
-  map.addSource("lanemap", { type: "geojson", data: "data/lanemap.geojson" });
+  map.addSource("lanemap", { type: "geojson", data: emptyFC() });
   map.addLayer({
     id: "lanemap",
     type: "fill",
@@ -1249,7 +1255,7 @@ map.on("load", () => {
       "fill-extrusion-height": ["*", ["coalesce", ["get", "fac_m"], 0], 0.4],
     },
   });
-  map.addSource("elevmap", { type: "geojson", data: "data/elevation.geojson" });
+  map.addSource("elevmap", { type: "geojson", data: emptyFC() });
   map.addLayer({
     id: "elevmap",
     type: "fill",
@@ -1275,7 +1281,7 @@ map.on("load", () => {
   });
   map.addSource("network", {
     type: "geojson",
-    data: "data/network.geojson",
+    data: emptyFC(),
     generateId: true,
   });
   // dark halo under the network lines — only over aerial imagery, where
@@ -1403,7 +1409,7 @@ map.on("load", () => {
     filter: ["==", ["get", "walk"], true],
     paint: { "line-color": "#ffffff", "line-width": 2.5, "line-dasharray": [1.5, 1.5] },
   });
-  map.addSource("construction", { type: "geojson", data: "data/construction.geojson" });
+  map.addSource("construction", { type: "geojson", data: emptyFC() });
   map.addLayer({
     id: "construction-lines",
     type: "line",
@@ -1510,7 +1516,7 @@ map.on("load", () => {
     layout: { "line-cap": "round", "line-join": "round" },
     paint: { "line-color": "#8b5cf6", "line-width": 4, "line-opacity": 0.8 },
   });
-  map.addSource("gateways", { type: "geojson", data: "data/gateways.geojson" });
+  map.addSource("gateways", { type: "geojson", data: emptyFC() });
   map.addLayer({
     id: "gateways",
     type: "circle",
@@ -1523,7 +1529,7 @@ map.on("load", () => {
       "circle-stroke-width": 2.5,
     },
   });
-  map.addSource("pois", { type: "geojson", data: "data/pois.geojson" });
+  map.addSource("pois", { type: "geojson", data: emptyFC() });
   map.addLayer({
     id: "pois",
     type: "circle",
@@ -1753,6 +1759,33 @@ map.on("load", () => {
   });
 
   void refreshHazards();
+
+  // data layers come through the resolver: bundled on the web, freshest of
+  // bundle-vs-website in the app (cached per build)
+  const layerFiles: [string, string][] = [
+    ["network", "network.geojson"],
+    ["heatmap", "heatmap.geojson"],
+    ["lanemap", "lanemap.geojson"],
+    ["elevmap", "elevation.geojson"],
+    ["pois", "pois.geojson"],
+    ["gateways", "gateways.geojson"],
+  ];
+  for (const [id, file] of layerFiles) {
+    void dataReady
+      .then(() => loadJson<GeoJSON.GeoJSON>(file))
+      .then((d) => {
+        (map.getSource(id) as GeoJSONSource).setData(d);
+      })
+      .catch(() => undefined);
+  }
+  void constructionReady.then(() => {
+    if (constructionFC) {
+      (map.getSource("construction") as GeoJSONSource).setData(
+        constructionFC as unknown as GeoJSON.GeoJSON,
+      );
+    }
+  });
+
   parseHash();
 });
 
@@ -2020,11 +2053,13 @@ function fillAbout(): void {
     `<tr><td>buffered lane on a busy road</td><td>×${yk.busyBuffered}</td></tr>`,
   );
   multTable.innerHTML = `<tr><th>street type</th><th>cost</th></tr>${rows.join("")}`;
-  void fetch("data/meta.json")
-    .then((r) => (r.ok ? r.json() : null))
+  void dataReady
+    .then(() => loadJson<DataMeta>("meta.json"))
     .then((meta: DataMeta | null) => {
       if (!meta) return;
-      el<HTMLElement>("built-date").textContent = meta.built;
+      const remote = usingRemoteData();
+      el<HTMLElement>("built-date").textContent =
+        meta.built + (remote !== null ? " (live from the website)" : "");
       const table = el<HTMLTableElement>("freshness-table");
       for (const s of meta.sources) {
         const tr = table.insertRow();

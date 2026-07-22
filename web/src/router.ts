@@ -21,7 +21,7 @@ import type {
 
 /** Raw shape of graph.json v2.
  * edges: [u, v, len_m, clsIdx, nameIdx, geomIdx, crashFactor, pen_m, climb_m, busy01] */
-interface GraphData {
+export interface GraphData {
   nodes: [number, number, number][];
   names: string[];
   classes: ProtectionClass[];

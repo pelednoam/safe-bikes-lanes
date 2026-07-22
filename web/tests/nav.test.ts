@@ -199,3 +199,14 @@ describe("app version compare", () => {
     expect(isNewerAppVersion("app-v14", "main")).toBe(false);
   });
 });
+
+describe("data build compare", () => {
+  it("orders build dates and rejects garbage", async () => {
+    const { isNewerBuild } = await import("../src/data.js");
+    expect(isNewerBuild("2026-07-21", "2026-07-22")).toBe(true);
+    expect(isNewerBuild("2026-07-22", "2026-07-22")).toBe(false);
+    expect(isNewerBuild("2026-07-22", "2026-07-21")).toBe(false);
+    expect(isNewerBuild("dev", "2026-07-22")).toBe(false);
+    expect(isNewerBuild("2026-07-21", "")).toBe(false);
+  });
+});
