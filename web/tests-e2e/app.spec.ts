@@ -28,6 +28,16 @@ function vis(page: import("@playwright/test").Page, layer: string): Promise<stri
   );
 }
 
+async function openSection(
+  page: import("@playwright/test").Page,
+  label: string,
+): Promise<void> {
+  const sum = page.locator("summary", { hasText: label }).first();
+  const isOpen = await sum.evaluate((el) => (el.parentElement as HTMLDetailsElement).open);
+  if (!isOpen) await sum.click();
+}
+
+
 test("boots cleanly and network layers render", async ({ page }) => {
   const errors = await boot(page);
   expect(errors).toEqual([]);
@@ -40,6 +50,7 @@ test("boots cleanly and network layers render", async ({ page }) => {
 
 test("safety network toggle hides and restores the layers", async ({ page }) => {
   const errors = await boot(page);
+  await openSection(page, "Map layers");
   await page.locator("#show-net").click();
   expect(await vis(page, "network")).toBe("none");
   expect(await vis(page, "network-unconfirmed")).toBe("none");
@@ -60,6 +71,7 @@ test("safety network toggle hides and restores the layers", async ({ page }) => 
 
 test("area overlays are mutually exclusive and render", async ({ page }) => {
   await boot(page);
+  await openSection(page, "Map layers");
   await page.locator("#show-lanes").click();
   expect(await vis(page, "lanemap")).toBe("visible");
   await page.locator("#show-heat").click();
