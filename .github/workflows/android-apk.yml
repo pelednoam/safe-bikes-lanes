@@ -32,6 +32,19 @@ jobs:
       - name: Check + test
         run: npm run check && npm test
         working-directory: web
+      - name: Bundle the freshest live data
+        # overlay the currently-deployed data onto the repo copies so a
+        # freshly built APK matches the website and skips the redundant
+        # first-launch re-download (the website-fetch still covers later drift)
+        run: |
+          cd web/data
+          for f in graph.json network.geojson heatmap.geojson lanemap.geojson \
+                   elevation.geojson pois.geojson gateways.geojson \
+                   construction.geojson meta.json keys.json; do
+            curl -sL --fail -o "$f.new" \
+              "https://pelednoam.github.io/safe-bikes-lanes/data/$f" \
+              && mv "$f.new" "$f" || { rm -f "$f.new"; echo "kept repo copy of $f"; }
+          done
       - name: Assemble web bundle + sync
         env:
           APP_VERSION: ${{ github.ref_name }}
