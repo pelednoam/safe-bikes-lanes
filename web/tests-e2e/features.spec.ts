@@ -30,6 +30,39 @@ async function openSection(page: Page, label: string): Promise<void> {
   if (!isOpen) await sum.click();
 }
 
+/** On-screen (clear of the panel) points sampled along rendered streets.
+ * Polls until the network layer has actually painted — on slow CI the source
+ * can be loaded a frame or two before queryRenderedFeatures returns anything,
+ * so a one-shot read flakes. */
+async function streetPointsOnScreen(page: Page): Promise<{ x: number; y: number }[]> {
+  let pts: { x: number; y: number }[] = [];
+  await expect
+    .poll(
+      async () => {
+        pts = await page.evaluate(() => {
+          const map = window._map;
+          if (!map) return [];
+          const all = map.queryRenderedFeatures(undefined, { layers: ["network-hit"] });
+          // qRF returns tile order (west first, behind the panel) — stride across
+          const stride = Math.max(1, Math.floor(all.length / 60));
+          return all
+            .filter((_, i) => i % stride === 0)
+            .flatMap((f) => {
+              if (f.geometry.type !== "LineString") return [];
+              // any on-screen vertex clear of the panel will do
+              return f.geometry.coordinates
+                .map((c) => map.project(c as [number, number]))
+                .filter((p) => p.x > 380 && p.x < 1150 && p.y > 60 && p.y < 750)
+                .map((p) => ({ x: p.x, y: p.y }));
+            });
+        });
+        return pts.length;
+      },
+      { timeout: 30_000 },
+    )
+    .toBeGreaterThan(0);
+  return pts;
+}
 
 const DAVIS_KENDALL = "#s=-71.122258,42.396748&e=-71.086705,42.362552&m=young_kids";
 
@@ -79,22 +112,9 @@ test("construction layer is on by default with real permits", async ({ page }) =
 test("save a place via right-click and use it as start", async ({ page }) => {
   await boot(page);
   page.once("dialog", (d) => void d.accept("Test Home"));
-  await page.waitForFunction(() => window._map?.isSourceLoaded("network") === true, null, {
-    timeout: 30_000,
-  });
-  // right-click on a street: project a rendered network feature to screen
-  const pt = await page.evaluate(() => {
-    const map = window._map;
-    if (!map) return null;
-    for (const f of map.queryRenderedFeatures(undefined, { layers: ["network-hit"] })) {
-      if (f.geometry.type !== "LineString") continue;
-      const [lon, lat] = f.geometry.coordinates[0] as [number, number];
-      const p = map.project([lon, lat]);
-      if (p.x > 380 && p.x < 1150 && p.y > 60 && p.y < 750) return { x: p.x, y: p.y };
-    }
-    return null;
-  });
-  expect(pt).not.toBeNull();
+  // right-click on a street (clear of the panel), waiting for it to paint
+  const [pt] = await streetPointsOnScreen(page);
+  expect(pt).not.toBeUndefined();
   if (!pt) return;
   await page.mouse.click(pt.x, pt.y, { button: "right" });
   await page.getByText("☆ save place…").click();
@@ -149,29 +169,7 @@ test("reach map floods from a clicked point", async ({ page }) => {
 
 test("hovering a street shows the safety card with a grade", async ({ page }) => {
   await boot(page);
-  // the larger graph can still be streaming on slow CI — wait for the source
-  await page.waitForFunction(
-    () => window._map?.isSourceLoaded("network") === true,
-    null,
-    { timeout: 30_000 },
-  );
-  const pts = await page.evaluate(() => {
-    const map = window._map;
-    if (!map) return [];
-    const all = map.queryRenderedFeatures(undefined, { layers: ["network-hit"] });
-    // qRF returns tile order (west first, behind the panel) — stride across
-    const stride = Math.max(1, Math.floor(all.length / 60));
-    return all
-      .filter((_, i) => i % stride === 0)
-      .flatMap((f) => {
-        if (f.geometry.type !== "LineString") return [];
-        // any on-screen vertex clear of the panel will do
-        return f.geometry.coordinates
-          .map((c) => map.project(c as [number, number]))
-          .filter((p) => p.x > 380 && p.x < 1150 && p.y > 60 && p.y < 750)
-          .map((p) => ({ x: p.x, y: p.y }));
-      });
-  });
+  const pts = await streetPointsOnScreen(page);
   expect(pts.length).toBeGreaterThan(0);
   let shown = false;
   for (const pt of pts) {
