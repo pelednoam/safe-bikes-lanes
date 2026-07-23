@@ -210,9 +210,7 @@ def fetch_all(refresh: bool = False) -> None:
         "cambridge_bike_facilities.geojson": lambda: json.loads(
             _get(config.CAMBRIDGE_FACILITIES_URL)
         ),
-        "boston_bike_facilities.geojson": lambda: json.loads(
-            _get(config.BOSTON_FACILITIES_URL, browser=True)
-        ),
+        "boston_bike_facilities.geojson": lambda: arcgis_query(config.BOSTON_FACILITIES_URL),
         "massdot_bike_inventory.geojson": lambda: arcgis_query(config.MASSDOT_BIKE_INVENTORY),
         "massdot_lts.geojson": lambda: arcgis_query(config.MASSDOT_LTS),
         "somerville_high_crash_intersections.geojson": lambda: arcgis_query(
