@@ -21,8 +21,14 @@ UA: Final[dict[str, str]] = {"User-Agent": "family-bike-router/1.0 (personal pro
 GeoJSON = dict[str, Any]
 
 
-def _get(url: str, timeout: int = 120) -> bytes:
-    req = urllib.request.Request(url, headers=UA)
+BROWSER_UA: Final[dict[str, str]] = {
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+}
+
+
+def _get(url: str, timeout: int = 120, browser: bool = False) -> bytes:
+    req = urllib.request.Request(url, headers=BROWSER_UA if browser else UA)
     with urllib.request.urlopen(req, timeout=timeout) as r:
         data: bytes = r.read()
     return data
@@ -96,13 +102,29 @@ def fetch_pois() -> GeoJSON:
   nwr["amenity"="toilets"]({bbox});
 );
 out center tags;"""
-    req = urllib.request.Request(
+    # public Overpass instances 504 under load — try mirrors with retry
+    endpoints = [
         "https://overpass-api.de/api/interpreter",
-        data=urllib.parse.urlencode({"data": query}).encode(),
-        headers=UA,
-    )
-    with urllib.request.urlopen(req, timeout=180) as r:
-        raw = json.load(r)
+        "https://overpass.kumi.systems/api/interpreter",
+        "https://lz4.overpass-api.de/api/interpreter",
+    ]
+    body = urllib.parse.urlencode({"data": query}).encode()
+    raw = None
+    last_err: Exception | None = None
+    for _attempt in range(2):
+        for ep in endpoints:
+            try:
+                req = urllib.request.Request(ep, data=body, headers=UA)
+                with urllib.request.urlopen(req, timeout=180) as r:
+                    raw = json.load(r)
+                break
+            except (OSError, ValueError) as e:  # HTTP/timeout/JSON
+                last_err = e
+                continue
+        if raw is not None:
+            break
+    if raw is None:
+        raise RuntimeError(f"all Overpass endpoints failed: {last_err}")
     features: list[dict[str, Any]] = []
     for el in raw.get("elements", []):
         tags: dict[str, str] = el.get("tags", {})
@@ -187,6 +209,9 @@ def fetch_all(refresh: bool = False) -> None:
     jobs: dict[str, Callable[[], GeoJSON]] = {
         "cambridge_bike_facilities.geojson": lambda: json.loads(
             _get(config.CAMBRIDGE_FACILITIES_URL)
+        ),
+        "boston_bike_facilities.geojson": lambda: json.loads(
+            _get(config.BOSTON_FACILITIES_URL, browser=True)
         ),
         "massdot_bike_inventory.geojson": lambda: arcgis_query(config.MASSDOT_BIKE_INVENTORY),
         "massdot_lts.geojson": lambda: arcgis_query(config.MASSDOT_LTS),
