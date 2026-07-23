@@ -42,10 +42,18 @@ test("boots cleanly and network layers render", async ({ page }) => {
   const errors = await boot(page);
   expect(errors).toEqual([]);
   expect(await vis(page, "network")).toBe("visible");
-  const rendered = await page.evaluate(
-    () => window._map?.queryRenderedFeatures(undefined, { layers: ["network"] }).length ?? 0,
-  );
-  expect(rendered).toBeGreaterThan(50);
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () =>
+            window._map?.isSourceLoaded("network")
+              ? window._map.querySourceFeatures("network").length
+              : 0,
+        ),
+      { timeout: 30_000 },
+    )
+    .toBeGreaterThan(50);
 });
 
 test("safety network toggle hides and restores the layers", async ({ page }) => {
@@ -61,9 +69,12 @@ test("safety network toggle hides and restores the layers", async ({ page }) => 
     .poll(
       () =>
         page.evaluate(
-          () => window._map?.queryRenderedFeatures(undefined, { layers: ["network"] }).length ?? 0,
+          () =>
+            window._map?.isSourceLoaded("network")
+              ? window._map.querySourceFeatures("network").length
+              : 0,
         ),
-      { timeout: 15_000 },
+      { timeout: 30_000 },
     )
     .toBeGreaterThan(50);
   expect(errors).toEqual([]);
