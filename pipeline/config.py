@@ -15,10 +15,13 @@ RAW_DIR: Final[Path] = DATA_DIR / "raw"
 # Belmont, Watertown) + Brookline + Newton + Boston (north of ~42.30). The
 # neighbors ride the statewide stack; Boston adds its own facility-typed bike
 # network below.
-BBOX_WEST: Final[float] = -71.25
-BBOX_SOUTH: Final[float] = 42.30
-BBOX_EAST: Final[float] = -71.03
-BBOX_NORTH: Final[float] = 42.455
+# Expanded July 2026 to the next ring of towns beyond the inner ring:
+# W adds Waltham/Lexington/Wellesley, N adds Winchester/Stoneham/Melrose,
+# E adds Chelsea/Revere/Winthrop, S adds Milton/Quincy/Dedham/Needham.
+BBOX_WEST: Final[float] = -71.32
+BBOX_SOUTH: Final[float] = 42.20
+BBOX_EAST: Final[float] = -70.93
+BBOX_NORTH: Final[float] = 42.51
 
 # Routing-graph tiling: the browser loads only the tiles covering a route's
 # corridor instead of the whole graph, so coverage can grow toward all of MA
@@ -60,6 +63,10 @@ IMPACT_CRASH_SERVICE_YEAR: Final[dict[int, str]] = {2023: "2023v"}
 IMPACT_CRASH_CITIES: Final[tuple[str, ...]] = (
     "CAMBRIDGE", "SOMERVILLE", "ARLINGTON", "MEDFORD", "EVERETT", "BELMONT",
     "WATERTOWN", "BOSTON", "BROOKLINE", "NEWTON",
+    # next ring (July 2026)
+    "WALTHAM", "LEXINGTON", "WINCHESTER", "STONEHAM", "MELROSE", "MALDEN",
+    "CHELSEA", "REVERE", "WINTHROP", "MILTON", "QUINCY", "DEDHAM",
+    "NEEDHAM", "WELLESLEY",
 )
 IMPACT_CRASH_WHERE: Final[str] = (
     "CITY_TOWN_NAME IN ("
@@ -144,6 +151,47 @@ CAMBRIDGE_FACILITY_CLASS: Final[dict[str, str]] = {
     "Bus/Bike Lane": "lane",
     "Shared Street": "quiet_street",
     "Shared Lane Pavement Marking": "sharrow",
+}
+
+# Newton publishes its own facility-typed layer (Existing/Programmed/Planned;
+# we keep only Existing). FacilityType -> protection class.
+NEWTON_FACILITIES_URL: Final[str] = (
+    "https://services2.arcgis.com/tzEm6xoZwL8UEMn8/arcgis/rest/services/"
+    "BikeFacs_040823/FeatureServer/0"
+)
+NEWTON_FACILITY_CLASS: Final[dict[str, str]] = {
+    "Bicycle Lane": "lane",
+    "Separated Bicycle Lane": "separated",
+    "Contraflow Bicycle Lane": "lane",
+    "Bike Boulevard": "quiet_street",
+    "Shared Use Path": "path",
+}
+
+# Everett's "Bike Facilities" inventory (FeatureServer layer 1). TYPE -> class.
+EVERETT_FACILITIES_URL: Final[str] = (
+    "https://services2.arcgis.com/xJ0MjVdyImL1ajyn/arcgis/rest/services/"
+    "Everett_Bike_Facilities/FeatureServer/1"
+)
+EVERETT_FACILITY_CLASS: Final[dict[str, str]] = {
+    "Cycle Track": "separated",
+    "Raised Bike Lane": "separated",
+    "Unprotected Bike Lane": "lane",
+    "Bus-Bike Lane": "lane",
+    "Trail": "path",
+}
+
+# MAPC regional LandLine/AllTrails network — one source that enriches every
+# town beyond the MassDOT inventory. Only the EXISTING (built) typed layers are
+# used; planned/proposed and pedestrian-only footway layers are skipped so we
+# never route bikes onto a facility that isn't there yet or isn't for bikes.
+MAPC_ALLTRAILS_URL: Final[str] = (
+    "https://geo.mapc.org/server/rest/services/Transportation/AllTrails/FeatureServer"
+)
+MAPC_ALLTRAILS_LAYERS: Final[dict[int, str]] = {
+    0: "separated",  # Existing Protected Bike Lanes
+    2: "lane",  # Existing Bike Lanes
+    8: "path",  # Existing Paved Shared Use Paths
+    11: "path",  # Existing Unimproved Shared Use Paths
 }
 
 # Boston 'ExisFacil' facility code -> protection class (data dictionary /

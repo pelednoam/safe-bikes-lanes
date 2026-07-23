@@ -201,6 +201,36 @@ def boston_overlay() -> gpd.GeoDataFrame | None:
     return gdf[gdf["cls"].notna()][["geometry", "cls"]]
 
 
+def newton_overlay() -> gpd.GeoDataFrame | None:
+    gdf = load_geojson("newton_bike_facilities.geojson")
+    if gdf is None:
+        return None
+    if "Status" in gdf:
+        gdf = gdf[gdf["Status"] == "Existing"]  # skip Planned/Programmed
+    gdf = gdf.copy()
+    gdf["cls"] = gdf["FacilityType"].map(config.NEWTON_FACILITY_CLASS)
+    return gdf[gdf["cls"].notna()][["geometry", "cls"]]
+
+
+def everett_overlay() -> gpd.GeoDataFrame | None:
+    gdf = load_geojson("everett_bike_facilities.geojson")
+    if gdf is None:
+        return None
+    gdf = gdf.copy()
+    gdf["cls"] = gdf["TYPE"].map(config.EVERETT_FACILITY_CLASS)
+    return gdf[gdf["cls"].notna()][["geometry", "cls"]]
+
+
+def mapc_overlay() -> gpd.GeoDataFrame | None:
+    """Regional existing-facility network; class carried in `mapc_cls`."""
+    gdf = load_geojson("mapc_bike_network.geojson")
+    if gdf is None or "mapc_cls" not in gdf:
+        return None
+    gdf = gdf.copy()
+    gdf["cls"] = gdf["mapc_cls"]
+    return gdf[gdf["cls"].notna()][["geometry", "cls"]]
+
+
 MASSDOT_FAC_CLASS: Final[dict[int, str]] = {
     1: "lane", 2: "separated", 3: "sharrow", 4: "lane", 5: "path",
     7: "quiet_street", 8: "lane", 9: "sharrow",
@@ -278,8 +308,11 @@ def build() -> None:
     # official overlays, in increasing precedence
     for name, overlay, radius in [
         ("massdot", massdot_overlay(), config.FACILITY_JOIN_RADIUS_M),
+        ("mapc", mapc_overlay(), config.FACILITY_JOIN_RADIUS_M),
         ("cambridge", cambridge_overlay(), config.FACILITY_JOIN_RADIUS_M),
         ("boston", boston_overlay(), config.FACILITY_JOIN_RADIUS_M),
+        ("newton", newton_overlay(), config.FACILITY_JOIN_RADIUS_M),
+        ("everett", everett_overlay(), config.FACILITY_JOIN_RADIUS_M),
     ]:
         if overlay is None or overlay.empty:
             continue

@@ -474,20 +474,11 @@ def export() -> None:
             ]
         )
 
-    out: dict[str, Any] = {
-        "nodes": nodes,
-        "names": names,
-        "classes": classes,
-        "edges": edges,
-        "geoms": geoms,
-    }
+    # Routing is fully tiled (export_tiles); the monolithic graph.json is no
+    # longer fetched by web or native, so we don't emit it — the browser loads
+    # data/tiles/*.json per route corridor instead.
     WEB_DATA.mkdir(parents=True, exist_ok=True)
-    path = WEB_DATA / "graph.json"
-    path.write_text(json.dumps(out, separators=(",", ":")))
-    print(
-        f"wrote {path} ({path.stat().st_size / 1e6:.1f} MB): "
-        f"{len(nodes)} nodes, {len(edges)} edges, {len(geoms)} geometries"
-    )
+    print(f"graph: {len(nodes)} nodes, {len(edges)} edges, {len(geoms)} geometries")
     export_tiles(nodes, names, edges, geoms)
     export_network_tiles()
     pois = config.RAW_DIR / "pois.geojson"
