@@ -20,6 +20,15 @@ BBOX_SOUTH: Final[float] = 42.30
 BBOX_EAST: Final[float] = -71.03
 BBOX_NORTH: Final[float] = 42.455
 
+# Routing-graph tiling: the browser loads only the tiles covering a route's
+# corridor instead of the whole graph, so coverage can grow toward all of MA
+# without an unbounded download. The origin is a FIXED point SW of MA so tile
+# keys stay stable as the bbox widens — expanding coverage only adds tiles, it
+# never renumbers existing ones. ~0.02° ≈ 2.2 km lat / 1.6 km lon at 42°N.
+TILE_ORIGIN_LON: Final[float] = -73.6
+TILE_ORIGIN_LAT: Final[float] = 41.1
+TILE_DEG: Final[float] = 0.02
+
 CAMBRIDGE_FACILITIES_URL: Final[str] = (
     "https://raw.githubusercontent.com/cambridgegis/cambridgegis_data/main/"
     "Recreation/Bike_Facilities/RECREATION_BikeFacilities.geojson"

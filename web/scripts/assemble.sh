@@ -10,6 +10,8 @@ mkdir -p dist
 cp index.html ./*.js dist/
 cp manifest.json icon-192.png icon-512.png dist/
 cp -r data dist/data
+# routing is tiled now (data/tiles/*.json); the monolithic graph is unused
+rm -f dist/data/graph.json
 cp node_modules/maplibre-gl/dist/maplibre-gl.js dist/
 cp node_modules/maplibre-gl/dist/maplibre-gl.css dist/
 # point the app build at the bundled MapLibre instead of unpkg

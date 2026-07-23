@@ -245,6 +245,137 @@ def export_gateways(graph: nx.MultiDiGraph) -> None:
     print(f"wrote {path} ({len(feats)} signalized busy crossings)")
 
 
+def _tile_key(lon: float, lat: float) -> tuple[int, int]:
+    col = math.floor((lon - config.TILE_ORIGIN_LON) / config.TILE_DEG)
+    row = math.floor((lat - config.TILE_ORIGIN_LAT) / config.TILE_DEG)
+    return col, row
+
+
+def _build_tile(
+    edge_ids: list[int],
+    nodes: list[list[float]],
+    names: list[str],
+    edges: list[list[float]],
+    geoms: list[list[float]],
+) -> dict[str, Any]:
+    """Build one tile's self-contained sub-graph: localize the nodes, names and
+    geoms its edges reference, keeping global node ids for cross-tile merging."""
+    local_node: dict[int, int] = {}
+    t_nodes: list[list[float]] = []
+    t_node_ids: list[int] = []
+    local_name: dict[int, int] = {}
+    t_names: list[str] = []
+    t_geoms: list[list[float]] = []
+    t_edges: list[list[float]] = []
+
+    def node_ref(g: int) -> int:
+        li = local_node.get(g)
+        if li is None:
+            li = len(t_nodes)
+            local_node[g] = li
+            t_nodes.append(nodes[g])
+            t_node_ids.append(g)
+        return li
+
+    def name_ref(g: int) -> int:
+        li = local_name.get(g)
+        if li is None:
+            li = len(t_names)
+            local_name[g] = li
+            t_names.append(names[g])
+        return li
+
+    for ei in edge_ids:
+        e = edges[ei]
+        gi = int(e[5])
+        g_idx = -1
+        if gi >= 0:
+            g_idx = len(t_geoms)
+            t_geoms.append(geoms[gi])
+        t_edges.append(
+            [
+                node_ref(int(e[0])),
+                node_ref(int(e[1])),
+                e[2],
+                int(e[3]),  # class index stays global (shared table)
+                name_ref(int(e[4])),
+                g_idx,
+                e[6],
+                e[7],
+                e[8],
+                int(e[9]),
+            ]
+        )
+    return {
+        "nodes": t_nodes,
+        "nodeIds": t_node_ids,
+        "names": t_names,
+        "edges": t_edges,
+        "geoms": t_geoms,
+    }
+
+
+def export_tiles(
+    nodes: list[list[float]],
+    names: list[str],
+    edges: list[list[float]],
+    geoms: list[list[float]],
+) -> None:
+    """Split the routing graph into a grid of self-contained sub-graphs so the
+    browser can load only the tiles covering a route's corridor.
+
+    Each edge is assigned to exactly one tile (by its geometric midpoint), so
+    concatenating tiles never double-counts an edge. A node on a tile boundary
+    is written into every tile whose edges touch it, tagged with its GLOBAL
+    node index — the browser merges by that id, stitching tiles together. The
+    small shared class table lives in the manifest (identical for every tile),
+    so clsIdx stays global; names and geoms are localized per tile to keep each
+    file small.
+    """
+    # bucket global edge indices by their midpoint's tile
+    buckets: dict[tuple[int, int], list[int]] = defaultdict(list)
+    for ei, e in enumerate(edges):
+        gi = int(e[5])
+        if gi >= 0:
+            flat = geoms[gi]
+            mid = len(flat) // 4 * 2  # middle coordinate pair
+            lon, lat = flat[mid], flat[mid + 1]
+        else:
+            u, v = int(e[0]), int(e[1])
+            lon = (nodes[u][0] + nodes[v][0]) / 2
+            lat = (nodes[u][1] + nodes[v][1]) / 2
+        buckets[_tile_key(lon, lat)].append(ei)
+
+    tiles_dir = WEB_DATA / "tiles"
+    tiles_dir.mkdir(parents=True, exist_ok=True)
+    for old in tiles_dir.glob("*.json"):
+        old.unlink()
+
+    keys: list[str] = []
+    total_bytes = 0
+    for (col, row), edge_ids in sorted(buckets.items()):
+        payload = _build_tile(edge_ids, nodes, names, edges, geoms)
+        key = f"{col}_{row}"
+        keys.append(key)
+        data = json.dumps(payload, separators=(",", ":"))
+        total_bytes += len(data)
+        (tiles_dir / f"{key}.json").write_text(data)
+
+    classes: list[str] = sorted(config.CLASS_MULTIPLIER)
+    manifest = {
+        "originLon": config.TILE_ORIGIN_LON,
+        "originLat": config.TILE_ORIGIN_LAT,
+        "tileDeg": config.TILE_DEG,
+        "classes": classes,
+        "tiles": sorted(keys),
+    }
+    (tiles_dir / "manifest.json").write_text(json.dumps(manifest, separators=(",", ":")))
+    print(
+        f"wrote {len(keys)} tiles ({total_bytes / 1e6:.1f} MB total) "
+        f"to {tiles_dir}"
+    )
+
+
 def export() -> None:
     with open(config.DATA_DIR / "graph.pkl", "rb") as f:
         graph: nx.MultiDiGraph = pickle.load(f)
@@ -318,6 +449,7 @@ def export() -> None:
         f"wrote {path} ({path.stat().st_size / 1e6:.1f} MB): "
         f"{len(nodes)} nodes, {len(edges)} edges, {len(geoms)} geometries"
     )
+    export_tiles(nodes, names, edges, geoms)
     pois = config.RAW_DIR / "pois.geojson"
     if pois.exists():
         shutil.copy(pois, WEB_DATA / "pois.geojson")

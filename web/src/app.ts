@@ -60,8 +60,8 @@ import {
   saveRide,
 } from "./rides.js";
 import { initDataSource, loadJson, usingRemoteData } from "./data.js";
-import type { GraphData } from "./router.js";
 import { buildCues, PROFILES, Router, toGPX } from "./router.js";
+import { bboxOf, TileStore } from "./tiles.js";
 import { drawRideCard, drawTotalsCard, rideShareText, totalsShareText } from "./sharecard.js";
 import type {
   PoiFeature,
@@ -297,7 +297,7 @@ const dataReady: Promise<void> = initDataSource();
 
 // first launch after a website data refresh downloads layers from the site;
 // surface that as progress (native only — bundled loads are instant)
-const DATA_STEPS = 8; // graph + 6 map layers + construction
+const DATA_STEPS = 4; // tile manifest + network + pois + construction (overlays are lazy)
 let dataDone = 0;
 function dataProgress(): void {
   if (usingRemoteData() === null) return;
@@ -317,29 +317,48 @@ void dataReady.then(() => {
   }
 });
 
-const routerReady: Promise<void> = dataReady
-  .then(() => loadJson<GraphData>("graph.json"))
-  .then((data) => {
-    const r = new Router(data);
-    router = r;
+// Routing graph is tiled (pipeline/export_web.py): the browser loads only the
+// tiles covering a route's corridor, so coverage can scale toward all of MA
+// without a giant download. The Router is (re)built over whatever tiles are
+// loaded; ensureRouter fetches the ones a given area needs first.
+const tiles = new TileStore(loadJson);
+let builtTileCount = -1;
+
+/** Fetch the tiles covering `points` (± padM metres, plus a margin), then
+ * return a Router built over the current tile set — rebuilt only when the
+ * loaded set actually grew. Null if the area has no mapped tiles. */
+async function ensureRouter(
+  points: [number, number][],
+  padM: number,
+  margin = 1,
+): Promise<Router | null> {
+  await manifestReady;
+  await tiles.ensure(bboxOf(points, padM), margin);
+  if (tiles.loadedCount === 0) return null;
+  if (router === null || builtTileCount !== tiles.loadedCount) {
+    router = new Router(tiles.assemble());
+    builtTileCount = tiles.loadedCount;
     applyAvoidPoints();
+    if (constructionFC) router.setConstructionPoints(constructionAvoidPoints(constructionFC));
     renderSketchy();
+  }
+  return router;
+}
+
+const manifestReady: Promise<void> = dataReady
+  .then(() => tiles.loadManifest())
+  .then(() => {
     void refreshHazards();
-    void constructionReady.then(() => {
-      if (router && constructionFC) {
-        router.setConstructionPoints(constructionAvoidPoints(constructionFC));
-      }
-    });
     el<HTMLDivElement>("loading").style.display = "none";
     dataProgress();
   })
   .catch((err: unknown) => {
     const errBox = el<HTMLDivElement>("error");
-    errBox.textContent = `failed to load routing graph: ${String(err)}`;
+    errBox.textContent = `failed to load routing tiles: ${String(err)}`;
     errBox.style.display = "block";
     dataProgress();
   });
-el<HTMLDivElement>("loading").textContent = "loading routing graph…";
+el<HTMLDivElement>("loading").textContent = "loading map…";
 el<HTMLDivElement>("loading").style.display = "block";
 
 void dataReady
@@ -356,6 +375,13 @@ const constructionReady: Promise<void> = dataReady
   })
   .catch(() => undefined);
 
+// apply construction avoidance to the live Router as soon as the zones load
+void constructionReady.then(() => {
+  if (router && constructionFC) {
+    router.setConstructionPoints(constructionAvoidPoints(constructionFC));
+  }
+});
+
 const poisReady: Promise<void> = dataReady
   .then(() => loadJson<{ features: PoiFeature[] }>("pois.geojson"))
   .then((fc) => {
@@ -367,6 +393,30 @@ function getSource(id: string): GeoJSONSource {
   const src = map.getSource(id);
   if (src === undefined) throw new Error(`missing source ${id}`);
   return src as GeoJSONSource;
+}
+
+// Heavy overlays load their data the first time they're shown, not at startup.
+const LAZY_LAYER_FILES: Record<string, string> = {
+  heatmap: "heatmap.geojson",
+  lanemap: "lanemap.geojson",
+  elevmap: "elevation.geojson",
+  gateways: "gateways.geojson",
+};
+const lazyLoaded = new Set<string>();
+
+/** Fetch an overlay's data once, the first time its toggle is turned on. */
+function ensureLayer(id: string): void {
+  const file = LAZY_LAYER_FILES[id];
+  if (file === undefined || lazyLoaded.has(id)) return;
+  lazyLoaded.add(id);
+  void dataReady
+    .then(() => loadJson<GeoJSON.GeoJSON>(file))
+    .then((d) => {
+      (map.getSource(id) as GeoJSONSource).setData(d);
+    })
+    .catch(() => {
+      lazyLoaded.delete(id); // let a later toggle retry
+    });
 }
 
 function currentPosition(): Promise<[number, number]> {
@@ -421,8 +471,7 @@ function setPoint(kind: "start" | "end", lngLat: LngLat | [number, number]): voi
 
 async function requestRoute(): Promise<void> {
   if (!end) return;
-  await routerReady;
-  if (!router) return;
+  await manifestReady;
   const errBox = el<HTMLDivElement>("error");
   errBox.style.display = "none";
   const loading = el<HTMLDivElement>("loading");
@@ -447,18 +496,26 @@ async function requestRoute(): Promise<void> {
   try {
     const s = start.getLngLat();
     const d = end.getLngLat();
+    const a: [number, number] = [s.lng, s.lat];
+    const b: [number, number] = [d.lng, d.lat];
     poiMarker?.remove();
     poiMarker = null;
     loopParams = null;
-    options = router.routeOptions(
-      [s.lng, s.lat],
-      [d.lng, d.lat],
-      profileId,
-      preferFlat,
-      undefined,
-      avoidTypes,
-      walkMaxM,
-    );
+    // load the tiles along the corridor, then route; a safe route can detour
+    // well outside the straight A–B box, so widen the loaded area once if the
+    // first attempt finds nothing.
+    const route = (r: Router): RouteOption[] =>
+      r.routeOptions(a, b, profileId, preferFlat, undefined, avoidTypes, walkMaxM);
+    let r = await ensureRouter([a, b], 1200, 1);
+    try {
+      if (!r) throw new Error("unmapped");
+      options = route(r);
+      if (!options.length) throw new Error("no route");
+    } catch {
+      r = await ensureRouter([a, b], 5000, 2);
+      if (!r) throw new Error("this area isn't mapped for routing yet");
+      options = route(r);
+    }
     const fallback = options[0];
     if (!fallback) throw new Error("no route found");
     const wanted = pendingSelect;
@@ -479,8 +536,7 @@ async function requestRoute(): Promise<void> {
 }
 
 async function requestLoop(): Promise<void> {
-  await routerReady;
-  if (!router) return;
+  await manifestReady;
   const errBox = el<HTMLDivElement>("error");
   errBox.style.display = "none";
   if (!start) {
@@ -498,7 +554,10 @@ async function requestLoop(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
   try {
     const s = start.getLngLat();
-    const { option, poi } = router.loopRoute(
+    // a loop can range out to roughly half its length from the start
+    const r = await ensureRouter([[s.lng, s.lat]], km * 500, 2);
+    if (!r) throw new Error("this area isn't mapped for routing yet");
+    const { option, poi } = r.loopRoute(
       [s.lng, s.lat],
       km * 1000,
       candidates,
@@ -1187,11 +1246,13 @@ function renderSearchResults(results: NominatimResult[]): void {
 
 async function computeShed(): Promise<void> {
   if (!shedCenter) return;
-  await routerReady;
-  if (!router) return;
+  await manifestReady;
   const budgetKm = Number(el<HTMLInputElement>("shed-budget").value);
   el<HTMLSpanElement>("shed-budget-label").textContent = `${budgetKm} km`;
-  const res = router.safeShed(shedCenter, budgetKm * 1000, profileId, preferFlat);
+  // the flood can reach out to the full budget radius from the center
+  const r = await ensureRouter([shedCenter], budgetKm * 1000, 2);
+  if (!r) return;
+  const res = r.safeShed(shedCenter, budgetKm * 1000, profileId, preferFlat);
   getSource("shed").setData(res.geojson as GeoJSON.GeoJSON);
   el<HTMLDivElement>("shed-info").textContent =
     `${res.reachableKm} km of streets reachable (${res.pctReachable}% of the network) ` +
@@ -1882,14 +1943,13 @@ map.on("load", () => {
   void refreshHazards();
 
   // data layers come through the resolver: bundled on the web, freshest of
-  // bundle-vs-website in the app (cached per build)
+  // bundle-vs-website in the app (cached per build). Only the network (shown by
+  // default) and POIs (needed by the loop planner) load eagerly; the heavy
+  // heatmap/elevation/lane overlays load the first time their toggle is turned
+  // on (see ensureLayer), which is most of the first-load weight.
   const layerFiles: [string, string][] = [
     ["network", "network.geojson"],
-    ["heatmap", "heatmap.geojson"],
-    ["lanemap", "lanemap.geojson"],
-    ["elevmap", "elevation.geojson"],
     ["pois", "pois.geojson"],
-    ["gateways", "gateways.geojson"],
   ];
   for (const [id, file] of layerFiles) {
     void dataReady
@@ -2102,6 +2162,7 @@ for (const [checkboxId, layers] of [
   el<HTMLInputElement>(checkboxId).addEventListener("change", (e: Event) => {
     const checked = (e.target as HTMLInputElement).checked;
     for (const layer of layers) {
+      if (checked) ensureLayer(layer);
       map.setLayoutProperty(layer, "visibility", checked ? "visible" : "none");
     }
   });
@@ -2153,9 +2214,10 @@ function syncOverlays(): void {
   }
 }
 
-for (const [checkbox] of AREA_OVERLAYS) {
+for (const [checkbox, layer] of AREA_OVERLAYS) {
   el<HTMLInputElement>(checkbox).addEventListener("change", (e: Event) => {
     if ((e.target as HTMLInputElement).checked) {
+      ensureLayer(layer);
       for (const [other] of AREA_OVERLAYS) {
         if (other !== checkbox) el<HTMLInputElement>(other).checked = false;
       }
@@ -2163,6 +2225,11 @@ for (const [checkbox] of AREA_OVERLAYS) {
     syncOverlays();
   });
 }
+// honor any overlay left enabled by default markup / a restored session
+for (const [checkbox, layer] of AREA_OVERLAYS) {
+  if (el<HTMLInputElement>(checkbox).checked) ensureLayer(layer);
+}
+if (el<HTMLInputElement>("show-gates").checked) ensureLayer("gateways");
 
 el<HTMLInputElement>("show-3d").addEventListener("change", (e: Event) => {
   const on = (e.target as HTMLInputElement).checked;
