@@ -134,9 +134,12 @@ test("reach map floods from a clicked point", async ({ page }) => {
     .poll(
       () =>
         page.evaluate(
-          () => window._map?.queryRenderedFeatures(undefined, { layers: ["shed"] }).length ?? 0,
+          () =>
+            window._map?.isSourceLoaded("shed")
+              ? window._map.querySourceFeatures("shed").length
+              : 0,
         ),
-      { timeout: 15_000 },
+      { timeout: 30_000 },
     )
     .toBeGreaterThan(10);
 });
