@@ -1,0 +1,1 @@
+{"type":"FeatureCollection","features":[{"type":"Feature","geometry":{"type":"LineString","coordinates":[[-71.319487,42.45767],[-71.319697,42.457694],[-71.319918,42.457733],[-71.320215,42.457801],[-71.321009,42.458068],[-71.321755,42.458354],[-71.321974,42.458441]]},"properties":{"cls":"moderate_street","color":"#f46d43","name":"Lexington Road","source":"osm","crashes":0}}]}

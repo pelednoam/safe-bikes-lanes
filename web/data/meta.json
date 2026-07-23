@@ -4,7 +4,7 @@
   {
    "name": "boston_bike_facilities",
    "retrieved": "2026-07-23",
-   "features": 3484
+   "features": 3477
   },
   {
    "name": "cambridge_bike_facilities",
@@ -19,47 +19,62 @@
   {
    "name": "crashes_2021",
    "retrieved": "2026-07-23",
-   "features": 216
+   "features": 323
   },
   {
    "name": "crashes_2022",
    "retrieved": "2026-07-23",
-   "features": 344
+   "features": 471
   },
   {
    "name": "crashes_2023",
    "retrieved": "2026-07-23",
-   "features": 401
+   "features": 529
   },
   {
    "name": "crashes_2024",
    "retrieved": "2026-07-23",
-   "features": 415
+   "features": 556
   },
   {
    "name": "crashes_2025",
    "retrieved": "2026-07-23",
-   "features": 438
+   "features": 541
   },
   {
    "name": "crashes_2026",
    "retrieved": "2026-07-23",
-   "features": 219
+   "features": 262
+  },
+  {
+   "name": "everett_bike_facilities",
+   "retrieved": "2026-07-23",
+   "features": 35
+  },
+  {
+   "name": "mapc_bike_network",
+   "retrieved": "2026-07-23",
+   "features": 2875
   },
   {
    "name": "massdot_bike_inventory",
    "retrieved": "2026-07-23",
-   "features": 991
+   "features": 2997
   },
   {
    "name": "massdot_lts",
    "retrieved": "2026-07-23",
-   "features": 984
+   "features": 997
+  },
+  {
+   "name": "newton_bike_facilities",
+   "retrieved": "2026-07-23",
+   "features": 812
   },
   {
    "name": "pois",
    "retrieved": "2026-07-23",
-   "features": 1477
+   "features": 2315
   },
   {
    "name": "somerville_high_crash_corridors",

@@ -205,12 +205,27 @@ def fetch_workzones() -> GeoJSON:
     return feed
 
 
+def fetch_mapc() -> GeoJSON:
+    """MAPC AllTrails: query each EXISTING typed layer and tag every feature
+    with its mapped protection class in a `mapc_cls` property."""
+    features: list[dict[str, Any]] = []
+    for layer_id, cls in config.MAPC_ALLTRAILS_LAYERS.items():
+        fc = arcgis_query(f"{config.MAPC_ALLTRAILS_URL}/{layer_id}")
+        for f in fc.get("features", []):
+            f.setdefault("properties", {})["mapc_cls"] = cls
+            features.append(f)
+    return {"type": "FeatureCollection", "features": features}
+
+
 def fetch_all(refresh: bool = False) -> None:
     jobs: dict[str, Callable[[], GeoJSON]] = {
         "cambridge_bike_facilities.geojson": lambda: json.loads(
             _get(config.CAMBRIDGE_FACILITIES_URL)
         ),
         "boston_bike_facilities.geojson": lambda: arcgis_query(config.BOSTON_FACILITIES_URL),
+        "newton_bike_facilities.geojson": lambda: arcgis_query(config.NEWTON_FACILITIES_URL),
+        "everett_bike_facilities.geojson": lambda: arcgis_query(config.EVERETT_FACILITIES_URL),
+        "mapc_bike_network.geojson": fetch_mapc,
         "massdot_bike_inventory.geojson": lambda: arcgis_query(config.MASSDOT_BIKE_INVENTORY),
         "massdot_lts.geojson": lambda: arcgis_query(config.MASSDOT_LTS),
         "somerville_high_crash_intersections.geojson": lambda: arcgis_query(
