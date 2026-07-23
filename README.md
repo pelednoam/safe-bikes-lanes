@@ -1,6 +1,6 @@
 # Safe Bike Lanes — family bike router for Cambridge, Somerville & neighbors, MA
 
-Plan the **safest** bike ride from A to B — not the fastest. Covers Cambridge, Somerville, and the inner-ring neighbors (Arlington, Medford, Everett, Belmont, Watertown), with Boston planned next. Built for riding
+Plan the **safest** bike ride from A to B — not the fastest. Covers Cambridge, Somerville, the inner-ring neighbors (Arlington, Medford, Everett, Belmont, Watertown), and riverside Boston (Charlestown, Back Bay, Fenway, Allston/Brighton) — Boston contributes its own facility-typed bike network. Built for riding
 with kids: the router strongly prefers off-street paths, physically separated
 bike lanes, and quiet residential streets, and will happily take a much longer
 route to avoid busy streets without protection.

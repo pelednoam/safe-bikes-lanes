@@ -192,6 +192,15 @@ def cambridge_overlay() -> gpd.GeoDataFrame | None:
     return gdf[gdf["cls"].notna()][["geometry", "cls"]]
 
 
+def boston_overlay() -> gpd.GeoDataFrame | None:
+    gdf = load_geojson("boston_bike_facilities.geojson")
+    if gdf is None:
+        return None
+    gdf = gdf.copy()
+    gdf["cls"] = gdf["ExisFacil"].map(config.BOSTON_FACILITY_CLASS)
+    return gdf[gdf["cls"].notna()][["geometry", "cls"]]
+
+
 MASSDOT_FAC_CLASS: Final[dict[int, str]] = {
     1: "lane", 2: "separated", 3: "sharrow", 4: "lane", 5: "path",
     7: "quiet_street", 8: "lane", 9: "sharrow",
@@ -270,6 +279,7 @@ def build() -> None:
     for name, overlay, radius in [
         ("massdot", massdot_overlay(), config.FACILITY_JOIN_RADIUS_M),
         ("cambridge", cambridge_overlay(), config.FACILITY_JOIN_RADIUS_M),
+        ("boston", boston_overlay(), config.FACILITY_JOIN_RADIUS_M),
     ]:
         if overlay is None or overlay.empty:
             continue

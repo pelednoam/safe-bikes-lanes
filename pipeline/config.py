@@ -12,16 +12,21 @@ DATA_DIR: Final[Path] = Path(__file__).resolve().parent.parent / "data"
 RAW_DIR: Final[Path] = DATA_DIR / "raw"
 
 # Cambridge + Somerville + inner-ring neighbors (Arlington, Medford, Everett,
-# Belmont, Watertown). These towns have no municipal bike GIS, but the
-# statewide MassDOT/LTS/crash + OSM stack covers them uniformly.
+# Belmont, Watertown) + riverside Boston (Charlestown, Back Bay, Fenway,
+# Allston/Brighton). The neighbors ride the statewide stack; Boston adds its
+# own facility-typed bike network below.
 BBOX_WEST: Final[float] = -71.22
-BBOX_SOUTH: Final[float] = 42.35
+BBOX_SOUTH: Final[float] = 42.335
 BBOX_EAST: Final[float] = -71.03
 BBOX_NORTH: Final[float] = 42.455
 
 CAMBRIDGE_FACILITIES_URL: Final[str] = (
     "https://raw.githubusercontent.com/cambridgegis/cambridgegis_data/main/"
     "Recreation/Bike_Facilities/RECREATION_BikeFacilities.geojson"
+)
+BOSTON_FACILITIES_URL: Final[str] = (
+    "https://data.boston.gov/dataset/55e84e3d-c795-42bb-94dd-28222ad04543/resource/"
+    "687847db-3296-41a7-aada-0419416ea59b/download/existing_bike_network_2024.geojson"
 )
 
 # ArcGIS REST endpoints (all verified live 2026-07-20).
@@ -42,7 +47,8 @@ IMPACT_CRASH_URL: Final[str] = (
 # Some years deviate from the pattern (2023 service is named "...2023v").
 IMPACT_CRASH_SERVICE_YEAR: Final[dict[int, str]] = {2023: "2023v"}
 IMPACT_CRASH_CITIES: Final[tuple[str, ...]] = (
-    "CAMBRIDGE", "SOMERVILLE", "ARLINGTON", "MEDFORD", "EVERETT", "BELMONT", "WATERTOWN",
+    "CAMBRIDGE", "SOMERVILLE", "ARLINGTON", "MEDFORD", "EVERETT", "BELMONT",
+    "WATERTOWN", "BOSTON",
 )
 IMPACT_CRASH_WHERE: Final[str] = (
     "CITY_TOWN_NAME IN ("
@@ -127,6 +133,18 @@ CAMBRIDGE_FACILITY_CLASS: Final[dict[str, str]] = {
     "Bus/Bike Lane": "lane",
     "Shared Street": "quiet_street",
     "Shared Lane Pavement Marking": "sharrow",
+}
+
+# Boston 'ExisFacil' facility code -> protection class (data dictionary /
+# standard MassDOT abbreviations). Unknown codes are skipped (edge keeps its
+# OSM/MassDOT class). SBL=separated, BFBL=buffered, BL=bike lane,
+# SLM=shared-lane markings (sharrow), SUP=shared-use path, CFBL=contraflow.
+BOSTON_FACILITY_CLASS: Final[dict[str, str]] = {
+    "SBL": "separated", "SBLBL": "separated", "SBLSL": "separated",
+    "BFBL": "buffered", "BFBLSL": "buffered", "BLBFBL": "buffered",
+    "BL": "lane", "BLSL": "lane", "CFBL": "lane", "BL-PEAKBUS": "lane",
+    "SLM": "sharrow", "SLMTC": "sharrow", "SLMSUP": "sharrow",
+    "SUP": "path", "SUPM": "path", "SUPN": "path",
 }
 
 # Display colors (also used by the frontend legend).
