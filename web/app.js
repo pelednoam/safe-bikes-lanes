@@ -62,7 +62,7 @@ const POI_META = {
     water: { emoji: "🚰", label: "water fountain", color: "#2980b9" },
     restroom: { emoji: "🚻", label: "restroom", color: "#7f8c8d" },
 };
-const BBOX = { west: -71.18, south: 42.34, east: -71.05, north: 42.43 };
+const BBOX = { west: -71.22, south: 42.35, east: -71.03, north: 42.455 };
 const SKETCHY_KEY = "sketchyMarks";
 const DARK_KEY = "darkMode";
 // ---------------------------------------------------------------------------
@@ -1014,7 +1014,7 @@ function renderSearchResults(results) {
     const box = el("search-results");
     box.innerHTML = "";
     if (results.length === 0) {
-        box.textContent = "no results in Cambridge/Somerville";
+        box.textContent = "no results in this area";
         return;
     }
     for (const r of results) {

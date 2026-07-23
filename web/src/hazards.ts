@@ -96,7 +96,7 @@ export function buildReportText(report: HazardReport): string {
     (note ? ` ${note}.` : "") +
     ` Location: https://maps.google.com/?q=${report.lat.toFixed(6)},${report.lon.toFixed(6)}` +
     ` (${report.lat.toFixed(5)}, ${report.lon.toFixed(5)}), reported ${when}.` +
-    ` Sent from the Family Bike Router (Cambridge/Somerville).`
+    ` Sent from the Family Bike Router (Greater Cambridge/Somerville).`
   );
 }
 
