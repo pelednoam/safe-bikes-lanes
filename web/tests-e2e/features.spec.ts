@@ -112,12 +112,27 @@ test("construction layer is on by default with real permits", async ({ page }) =
 test("save a place via right-click and use it as start", async ({ page }) => {
   await boot(page);
   page.once("dialog", (d) => void d.accept("Test Home"));
-  // right-click on a street (clear of the panel), waiting for it to paint
-  const [pt] = await streetPointsOnScreen(page);
-  expect(pt).not.toBeUndefined();
-  if (!pt) return;
-  await page.mouse.click(pt.x, pt.y, { button: "right" });
-  await page.getByText("☆ save place…").click();
+  // right-click on a street (clear of the panel), waiting for it to paint;
+  // try successive points until the context menu actually opens (a given
+  // pixel can miss the map's contextmenu target on a slow CI frame)
+  const pts = await streetPointsOnScreen(page);
+  let opened = false;
+  for (const pt of pts) {
+    // clear any popup left by a previous miss so the text matches at most once
+    await page.evaluate(() =>
+      document.querySelectorAll(".maplibregl-popup").forEach((n) => n.remove()),
+    );
+    await page.mouse.click(pt.x, pt.y, { button: "right" });
+    const saveItem = page.getByText("☆ save place…");
+    try {
+      await saveItem.click({ timeout: 2000 });
+      opened = true;
+      break;
+    } catch {
+      // right-click missed the hit layer at this pixel — try the next point
+    }
+  }
+  expect(opened).toBe(true);
   await expect(page.locator("#places-list")).toContainText("🏠 Test Home");
   await page.locator("#places-list button", { hasText: "start" }).first().click();
   // a start marker appears (permalinks only form once start AND end exist)
