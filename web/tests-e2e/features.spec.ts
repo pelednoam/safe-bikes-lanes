@@ -79,6 +79,9 @@ test("construction layer is on by default with real permits", async ({ page }) =
 test("save a place via right-click and use it as start", async ({ page }) => {
   await boot(page);
   page.once("dialog", (d) => void d.accept("Test Home"));
+  await page.waitForFunction(() => window._map?.isSourceLoaded("network") === true, null, {
+    timeout: 30_000,
+  });
   // right-click on a street: project a rendered network feature to screen
   const pt = await page.evaluate(() => {
     const map = window._map;
