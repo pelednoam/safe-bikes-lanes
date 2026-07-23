@@ -146,6 +146,12 @@ test("reach map floods from a clicked point", async ({ page }) => {
 
 test("hovering a street shows the safety card with a grade", async ({ page }) => {
   await boot(page);
+  // the larger graph can still be streaming on slow CI — wait for the source
+  await page.waitForFunction(
+    () => window._map?.isSourceLoaded("network") === true,
+    null,
+    { timeout: 30_000 },
+  );
   const pts = await page.evaluate(() => {
     const map = window._map;
     if (!map) return [];
