@@ -1,9 +1,10 @@
-// Service worker: cache-first offline support for the app shell + data layers.
+// Service worker: offline support for the app shell + data layers, engineered
+// so returning visitors get the newest build without a hard refresh.
 // Plain JS (not built from TS): the DOM and WebWorker type libs conflict in a
 // single tsconfig project; this file is small, boilerplate, and stable.
 "use strict";
 
-const CACHE = "family-bike-router-v6";
+const CACHE = "family-bike-router-v7";
 const ASSETS = [
   ".",
   "index.html",
@@ -24,28 +25,45 @@ const ASSETS = [
 ];
 
 self.addEventListener("install", (event) => {
-  event.waitUntil(
-    caches.open(CACHE).then((cache) => cache.addAll(ASSETS)),
-  );
+  // activate this build immediately instead of waiting for all tabs to close
+  self.skipWaiting();
+  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(ASSETS)));
 });
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches
       .keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))),
+      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+      // take control of open pages so the update reaches them at once
+      .then(() => self.clients.claim()),
   );
 });
 
 const TILE_CACHE = "bike-tiles-v1";
 const TILE_HOSTS = ["tile.openstreetmap.org", "basemaps.cartocdn.com"];
 
+/** The app shell must never be served stale: bypass the HTTP cache so the
+ * SW's network fetch can't return a CDN-cached old app.js/index.html. */
+function isShell(url) {
+  return (
+    url.pathname.endsWith("/") ||
+    url.pathname.endsWith(".html") ||
+    url.pathname.endsWith(".js") ||
+    url.pathname.endsWith("manifest.json")
+  );
+}
+
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   if (url.origin === self.location.origin) {
-    // network-first: always prefer fresh app/data, fall back to cache offline
+    const req =
+      event.request.mode === "navigate" || isShell(url)
+        ? new Request(event.request, { cache: "reload" }) // skip HTTP cache
+        : event.request;
+    // network-first: freshest app/data, fall back to cache offline
     event.respondWith(
-      fetch(event.request)
+      fetch(req)
         .then((resp) => {
           if (resp.ok) {
             const clone = resp.clone();

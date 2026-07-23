@@ -3020,6 +3020,23 @@ if ("serviceWorker" in navigator) {
         })();
     }
     else {
-        void navigator.serviceWorker.register("sw.js");
+        // web PWA: auto-update to the newest build without a hard refresh.
+        // Reload once when a NEW service worker takes control — but only if one
+        // was already controlling at load (i.e. a genuine update, not first visit,
+        // so we never reload-loop on initial install/clients.claim).
+        if (navigator.serviceWorker.controller) {
+            let reloaded = false;
+            navigator.serviceWorker.addEventListener("controllerchange", () => {
+                if (reloaded)
+                    return;
+                reloaded = true;
+                location.reload();
+            });
+        }
+        // updateViaCache:"none" — always fetch sw.js fresh so updates are detected
+        void navigator.serviceWorker
+            .register("sw.js", { updateViaCache: "none" })
+            .then((reg) => reg.update())
+            .catch(() => undefined);
     }
 }
