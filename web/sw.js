@@ -4,11 +4,12 @@
 // single tsconfig project; this file is small, boilerplate, and stable.
 "use strict";
 
-const CACHE = "family-bike-router-v8";
-// Precache the shell + the layers loaded eagerly at startup. The routing graph
-// is now tiled (data/tiles/*.json) and the heavy overlays (heatmap/elevation/
-// lane) load on demand — both are cached opportunistically by the fetch
-// handler as they're requested, so offline still works after a first visit.
+const CACHE = "family-bike-router-v9";
+// Precache the shell + the tile manifests + eager POIs. The routing graph
+// (data/tiles/*.json), the display network (data/nettiles/*.json), and the
+// heavy overlays (heatmap/elevation/lane) all load on demand — cached
+// opportunistically by the fetch handler as requested, so offline works after
+// the areas you've visited have been seen once.
 const ASSETS = [
   ".",
   "index.html",
@@ -18,7 +19,7 @@ const ASSETS = [
   "tiles.js",
   "manifest.json",
   "data/tiles/manifest.json",
-  "data/network.geojson",
+  "data/nettiles/manifest.json",
   "data/pois.geojson",
   "data/meta.json",
   "icon-192.png",

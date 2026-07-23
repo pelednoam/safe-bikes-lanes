@@ -37,45 +37,29 @@ interface RawTile {
   geoms: number[][];
 }
 
-export class TileStore {
-  private manifest: Manifest | null = null;
-  private existing = new Set<string>();
-  private readonly loaded = new Map<string, RawTile>();
-  private readonly inflight = new Map<string, Promise<void>>();
-
-  constructor(private readonly fetchJson: <T>(name: string) => Promise<T>) {}
-
-  async loadManifest(): Promise<void> {
-    const m = await this.fetchJson<Manifest>("tiles/manifest.json");
-    this.manifest = m;
-    this.existing = new Set(m.tiles);
+/** The fixed lon/lat grid shared by the routing and network tile sets. */
+class TileGrid {
+  private readonly existing: Set<string>;
+  constructor(
+    private readonly originLon: number,
+    private readonly originLat: number,
+    private readonly tileDeg: number,
+    tiles: string[],
+  ) {
+    this.existing = new Set(tiles);
   }
 
-  get classes(): ProtectionClass[] {
-    return this.manifest?.classes ?? [];
-  }
-
-  /** Number of tiles held in memory — the Router only needs rebuilding when
-   * this grows. */
-  get loadedCount(): number {
-    return this.loaded.size;
-  }
-
-  private keyAt(lon: number, lat: number): [number, number] {
-    const m = this.manifest;
-    if (!m) throw new Error("tile manifest not loaded");
+  private colRow(lon: number, lat: number): [number, number] {
     return [
-      Math.floor((lon - m.originLon) / m.tileDeg),
-      Math.floor((lat - m.originLat) / m.tileDeg),
+      Math.floor((lon - this.originLon) / this.tileDeg),
+      Math.floor((lat - this.originLat) / this.tileDeg),
     ];
   }
 
-  /** Existing tile keys covering the bbox, grown by `margin` tiles on each side
-   * (safe routes often detour outside the straight A–B box). */
-  keysForBBox(box: BBox, margin = 1): string[] {
-    if (!this.manifest) throw new Error("tile manifest not loaded");
-    const [c0, r0] = this.keyAt(box.west, box.south);
-    const [c1, r1] = this.keyAt(box.east, box.north);
+  /** Existing tile keys covering the bbox, grown by `margin` cells each side. */
+  keysForBBox(box: BBox, margin: number): string[] {
+    const [c0, r0] = this.colRow(box.west, box.south);
+    const [c1, r1] = this.colRow(box.east, box.north);
     const keys: string[] = [];
     for (let c = c0 - margin; c <= c1 + margin; c++) {
       for (let r = r0 - margin; r <= r1 + margin; r++) {
@@ -84,6 +68,38 @@ export class TileStore {
       }
     }
     return keys;
+  }
+}
+
+export class TileStore {
+  private grid: TileGrid | null = null;
+  private classList: ProtectionClass[] = [];
+  private readonly loaded = new Map<string, RawTile>();
+  private readonly inflight = new Map<string, Promise<void>>();
+
+  constructor(private readonly fetchJson: <T>(name: string) => Promise<T>) {}
+
+  async loadManifest(): Promise<void> {
+    const m = await this.fetchJson<Manifest>("tiles/manifest.json");
+    this.grid = new TileGrid(m.originLon, m.originLat, m.tileDeg, m.tiles);
+    this.classList = m.classes;
+  }
+
+  get classes(): ProtectionClass[] {
+    return this.classList;
+  }
+
+  /** Number of tiles held in memory — the Router only needs rebuilding when
+   * this grows. */
+  get loadedCount(): number {
+    return this.loaded.size;
+  }
+
+  /** Existing tile keys covering the bbox, grown by `margin` tiles on each side
+   * (safe routes often detour outside the straight A–B box). */
+  keysForBBox(box: BBox, margin = 1): string[] {
+    if (!this.grid) throw new Error("tile manifest not loaded");
+    return this.grid.keysForBBox(box, margin);
   }
 
   /** Fetch every not-yet-loaded tile covering the bbox. Returns true when at
@@ -163,6 +179,64 @@ export class TileStore {
       }
     }
     return { nodes, names, classes, edges, geoms };
+  }
+}
+
+interface NetManifest {
+  originLon: number;
+  originLat: number;
+  tileDeg: number;
+  tiles: string[];
+}
+
+/** A GeoJSON LineString feature of the display network (pipeline emits these
+ * in nettiles/{col}_{row}.json). Kept loose — the map only reads the props. */
+type NetFeature = GeoJSON.Feature<GeoJSON.LineString>;
+
+/** Viewport loader for the display network. Unlike the routing tiles (loaded
+ * along a route's corridor), these load for whatever the map is showing, so
+ * the coloured safety network only downloads the streets currently on screen.
+ * Tiles fetched once stay cached; visibleFeatures returns just the tiles the
+ * viewport covers, bounding what the GL source has to render. */
+export class NetworkTiles {
+  private grid: TileGrid | null = null;
+  private readonly loaded = new Map<string, NetFeature[]>();
+  private readonly inflight = new Map<string, Promise<void>>();
+
+  constructor(private readonly fetchJson: <T>(name: string) => Promise<T>) {}
+
+  async loadManifest(): Promise<void> {
+    const m = await this.fetchJson<NetManifest>("nettiles/manifest.json");
+    this.grid = new TileGrid(m.originLon, m.originLat, m.tileDeg, m.tiles);
+  }
+
+  private async fetchTile(key: string): Promise<void> {
+    if (this.loaded.has(key)) return;
+    const pending = this.inflight.get(key);
+    if (pending) return pending;
+    const p = this.fetchJson<{ features: NetFeature[] }>(`nettiles/${key}.json`)
+      .then((fc) => {
+        this.loaded.set(key, fc.features);
+      })
+      .finally(() => {
+        this.inflight.delete(key);
+      });
+    this.inflight.set(key, p);
+    return p;
+  }
+
+  /** Fetch the tiles the bbox covers (± margin) and return their features —
+   * only the visible tiles, so the rendered set stays viewport-bounded. */
+  async visibleFeatures(box: BBox, margin = 1): Promise<NetFeature[]> {
+    if (!this.grid) throw new Error("network manifest not loaded");
+    const keys = this.grid.keysForBBox(box, margin);
+    await Promise.all(keys.map((k) => this.fetchTile(k)));
+    const out: NetFeature[] = [];
+    for (const k of keys) {
+      const feats = this.loaded.get(k);
+      if (feats) out.push(...feats);
+    }
+    return out;
   }
 }
 

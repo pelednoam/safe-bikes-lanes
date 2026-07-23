@@ -4,7 +4,7 @@
 import { describe, expect, it } from "vitest";
 
 import { Router } from "../src/router.js";
-import { bboxOf, TileStore } from "../src/tiles.js";
+import { bboxOf, NetworkTiles, TileStore } from "../src/tiles.js";
 
 // Toy world, tileDeg=1 from origin (0,0):
 //   tile 0_0: node g0 (0.2,0.5) --quiet-- node g1 (0.9,0.5)   [boundary node]
@@ -107,6 +107,55 @@ describe("TileStore", () => {
     expect(store.keysForBBox(box, 0)).toEqual(["0_0"]);
     // margin 1 reaches into the neighbor cell, but only existing tiles return
     expect(store.keysForBBox(box, 1).sort()).toEqual(["0_0", "1_0"]);
+  });
+});
+
+describe("NetworkTiles", () => {
+  const NET_MANIFEST = { originLon: 0, originLat: 0, tileDeg: 1, tiles: ["0_0", "1_0"] };
+  const feat = (lon: number): unknown => ({
+    type: "Feature",
+    properties: { cls: "path", color: "#000", name: null, source: "osm", crashes: 0 },
+    geometry: { type: "LineString", coordinates: [[lon, 0.5], [lon + 0.05, 0.5]] },
+  });
+  const netFetch = (fetched: string[]): (<T>(name: string) => Promise<T>) => {
+    const table: Record<string, unknown> = {
+      "nettiles/manifest.json": NET_MANIFEST,
+      "nettiles/0_0.json": { type: "FeatureCollection", features: [feat(0.2), feat(0.6)] },
+      "nettiles/1_0.json": { type: "FeatureCollection", features: [feat(1.4)] },
+    };
+    return <T,>(name: string): Promise<T> => {
+      fetched.push(name);
+      if (table[name] === undefined) throw new Error(`unexpected ${name}`);
+      return Promise.resolve(table[name] as T);
+    };
+  };
+
+  it("returns only the features in the viewport", async () => {
+    const fetched: string[] = [];
+    const net = new NetworkTiles(netFetch(fetched));
+    await net.loadManifest();
+    const feats = await net.visibleFeatures({ west: 0.3, south: 0.4, east: 0.6, north: 0.6 }, 0);
+    expect(feats.length).toBe(2); // both features of tile 0_0
+    expect(fetched).toContain("nettiles/0_0.json");
+    expect(fetched).not.toContain("nettiles/1_0.json");
+  });
+
+  it("caches fetched tiles across calls", async () => {
+    const fetched: string[] = [];
+    const net = new NetworkTiles(netFetch(fetched));
+    await net.loadManifest();
+    const box = { west: 0.3, south: 0.4, east: 0.6, north: 0.6 };
+    await net.visibleFeatures(box, 0);
+    await net.visibleFeatures(box, 0);
+    // manifest + one tile fetch, not two
+    expect(fetched.filter((f) => f === "nettiles/0_0.json").length).toBe(1);
+  });
+
+  it("margin pulls in the neighbouring tile", async () => {
+    const net = new NetworkTiles(netFetch([]));
+    await net.loadManifest();
+    const feats = await net.visibleFeatures({ west: 0.3, south: 0.4, east: 0.6, north: 0.6 }, 1);
+    expect(feats.length).toBe(3); // 0_0 (2) + 1_0 (1)
   });
 });
 

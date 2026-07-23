@@ -5,7 +5,7 @@ import { clearRecent, deletePlace, emojiFor, listPlaces, listRecent, pushRecent,
 import { clearRides, deleteRide, loadRides, RideRecorder, rideTotals, saveRide, } from "./rides.js";
 import { initDataSource, loadJson, usingRemoteData } from "./data.js";
 import { buildCues, PROFILES, Router, toGPX } from "./router.js";
-import { bboxOf, TileStore } from "./tiles.js";
+import { bboxOf, NetworkTiles, TileStore } from "./tiles.js";
 import { drawRideCard, drawTotalsCard, rideShareText, totalsShareText } from "./sharecard.js";
 // ---------------------------------------------------------------------------
 // constants
@@ -259,6 +259,38 @@ const manifestReady = dataReady
 });
 el("loading").textContent = "loading map…";
 el("loading").style.display = "block";
+// The display network also tiles, but loads by VIEWPORT rather than by route
+// corridor (it's shown by default across the whole visible area). Below this
+// zoom individual streets aren't legible and the viewport spans too many
+// tiles, so the layer clears — pan/zoom in and it repopulates.
+const NET_MIN_ZOOM = 12;
+const netTiles = new NetworkTiles(loadJson);
+const networkReady = dataReady.then(() => netTiles.loadManifest());
+let netToken = 0;
+/** Fill the network source with the streets in the current viewport. */
+async function refreshNetworkTiles() {
+    await networkReady;
+    const src = map.getSource("network");
+    if (!src)
+        return;
+    if (map.getZoom() < NET_MIN_ZOOM) {
+        src.setData(emptyFC());
+        return;
+    }
+    const b = map.getBounds();
+    const box = {
+        west: b.getWest(),
+        south: b.getSouth(),
+        east: b.getEast(),
+        north: b.getNorth(),
+    };
+    const token = ++netToken;
+    const features = await netTiles.visibleFeatures(box, 1);
+    if (token !== netToken)
+        return; // a newer move superseded this fetch
+    src.setData({ type: "FeatureCollection", features });
+}
+map.on("moveend", () => void refreshNetworkTiles());
 void dataReady
     .then(() => loadJson("keys.json"))
     .then((keys) => {
@@ -1782,23 +1814,18 @@ map.on("load", () => {
     });
     void refreshHazards();
     // data layers come through the resolver: bundled on the web, freshest of
-    // bundle-vs-website in the app (cached per build). Only the network (shown by
-    // default) and POIs (needed by the loop planner) load eagerly; the heavy
-    // heatmap/elevation/lane overlays load the first time their toggle is turned
-    // on (see ensureLayer), which is most of the first-load weight.
-    const layerFiles = [
-        ["network", "network.geojson"],
-        ["pois", "pois.geojson"],
-    ];
-    for (const [id, file] of layerFiles) {
-        void dataReady
-            .then(() => loadJson(file))
-            .then((d) => {
-            map.getSource(id).setData(d);
-        })
-            .catch(() => undefined)
-            .finally(() => dataProgress());
-    }
+    // bundle-vs-website in the app (cached per build). The display network loads
+    // by viewport (see refreshNetworkTiles); only POIs (needed by the loop
+    // planner) load eagerly here; the heavy heatmap/elevation/lane overlays load
+    // the first time their toggle is turned on (see ensureLayer).
+    void dataReady
+        .then(() => loadJson("pois.geojson"))
+        .then((d) => {
+        map.getSource("pois").setData(d);
+    })
+        .catch(() => undefined)
+        .finally(() => dataProgress());
+    void networkReady.then(() => refreshNetworkTiles()).finally(() => dataProgress());
     void constructionReady
         .then(() => {
         if (constructionFC) {

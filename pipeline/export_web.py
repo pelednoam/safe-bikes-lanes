@@ -376,6 +376,46 @@ def export_tiles(
     )
 
 
+def export_network_tiles() -> None:
+    """Split the display network (network.geojson) into per-cell GeoJSON tiles
+    on the same grid as the routing tiles, so the browser loads only the
+    streets in the current viewport instead of the whole 26 MB layer. Each
+    feature lands in the tile containing its middle vertex."""
+    src = config.DATA_DIR / "network.geojson"
+    fc = json.loads(src.read_text())
+    buckets: dict[tuple[int, int], list[dict[str, Any]]] = defaultdict(list)
+    for feat in fc["features"]:
+        coords = feat["geometry"]["coordinates"]
+        lon, lat = coords[len(coords) // 2]
+        buckets[_tile_key(lon, lat)].append(feat)
+
+    tiles_dir = WEB_DATA / "nettiles"
+    tiles_dir.mkdir(parents=True, exist_ok=True)
+    for old in tiles_dir.glob("*.json"):
+        old.unlink()
+
+    keys: list[str] = []
+    total_bytes = 0
+    for (col, row), feats in sorted(buckets.items()):
+        key = f"{col}_{row}"
+        keys.append(key)
+        payload = {"type": "FeatureCollection", "features": feats}
+        data = json.dumps(payload, separators=(",", ":"))
+        total_bytes += len(data)
+        (tiles_dir / f"{key}.json").write_text(data)
+
+    manifest = {
+        "originLon": config.TILE_ORIGIN_LON,
+        "originLat": config.TILE_ORIGIN_LAT,
+        "tileDeg": config.TILE_DEG,
+        "tiles": sorted(keys),
+    }
+    (tiles_dir / "manifest.json").write_text(json.dumps(manifest, separators=(",", ":")))
+    print(
+        f"wrote {len(keys)} network tiles ({total_bytes / 1e6:.1f} MB total) to {tiles_dir}"
+    )
+
+
 def export() -> None:
     with open(config.DATA_DIR / "graph.pkl", "rb") as f:
         graph: nx.MultiDiGraph = pickle.load(f)
@@ -444,12 +484,12 @@ def export() -> None:
     WEB_DATA.mkdir(parents=True, exist_ok=True)
     path = WEB_DATA / "graph.json"
     path.write_text(json.dumps(out, separators=(",", ":")))
-    shutil.copy(config.DATA_DIR / "network.geojson", WEB_DATA / "network.geojson")
     print(
         f"wrote {path} ({path.stat().st_size / 1e6:.1f} MB): "
         f"{len(nodes)} nodes, {len(edges)} edges, {len(geoms)} geometries"
     )
     export_tiles(nodes, names, edges, geoms)
+    export_network_tiles()
     pois = config.RAW_DIR / "pois.geojson"
     if pois.exists():
         shutil.copy(pois, WEB_DATA / "pois.geojson")
