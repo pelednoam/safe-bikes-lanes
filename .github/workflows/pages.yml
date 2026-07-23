@@ -56,9 +56,20 @@ jobs:
             sleep 20
           done
           [ -f _site/app/family-bike-router.apk ] || echo "no release yet — skipping APK mirror"
-          TAG=$(curl -s https://api.github.com/repos/${{ github.repository }}/releases/latest | jq -r .tag_name)
+          # The releases/latest API lags the download redirect under GitHub's
+          # eventual consistency, so retry rather than silently skip
+          # version.json (a miss breaks the in-app updater).
+          TAG=""
+          for i in 1 2 3 4 5; do
+            TAG=$(curl -s https://api.github.com/repos/${{ github.repository }}/releases/latest | jq -r .tag_name)
+            [ "$TAG" != "null" ] && [ -n "$TAG" ] && break
+            echo "release tag not resolved yet (attempt $i) — retrying in 15s"
+            sleep 15
+          done
           if [ "$TAG" != "null" ] && [ -n "$TAG" ]; then
             printf '{"version": "%s"}\n' "$TAG" > _site/app/version.json
+          else
+            echo "::warning::could not resolve latest release tag — version.json not written"
           fi
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
