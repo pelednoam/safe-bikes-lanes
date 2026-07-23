@@ -245,7 +245,7 @@ export class Router {
             }
         });
         if (best < 0 || bestD2 > MAX_SNAP_METERS ** 2) {
-            throw new Error("point is too far from the Cambridge/Somerville network");
+            throw new Error("point is too far from the mapped bike network");
         }
         return best;
     }

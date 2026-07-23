@@ -143,7 +143,7 @@ const POI_META: Record<string, { emoji: string; label: string; color: string }> 
   restroom: { emoji: "🚻", label: "restroom", color: "#7f8c8d" },
 };
 
-const BBOX = { west: -71.18, south: 42.34, east: -71.05, north: 42.43 } as const;
+const BBOX = { west: -71.22, south: 42.35, east: -71.03, north: 42.455 } as const;
 const SKETCHY_KEY = "sketchyMarks";
 const DARK_KEY = "darkMode";
 
@@ -1148,7 +1148,7 @@ function renderSearchResults(results: NominatimResult[]): void {
   const box = el<HTMLDivElement>("search-results");
   box.innerHTML = "";
   if (results.length === 0) {
-    box.textContent = "no results in Cambridge/Somerville";
+    box.textContent = "no results in this area";
     return;
   }
   for (const r of results) {

@@ -34,7 +34,7 @@ function cardBase() {
     ctx.fillRect(0, 0, W, H);
     ctx.fillStyle = "rgba(255,255,255,.92)";
     ctx.font = "600 20px system-ui, sans-serif";
-    ctx.fillText("🚲 Family Bike Router — Cambridge + Somerville", 32, 44);
+    ctx.fillText("🚲 Family Bike Router — Greater Cambridge/Somerville", 32, 44);
     return { canvas, ctx };
 }
 function toBlob(canvas) {

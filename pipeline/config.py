@@ -11,12 +11,13 @@ from typing import Final
 DATA_DIR: Final[Path] = Path(__file__).resolve().parent.parent / "data"
 RAW_DIR: Final[Path] = DATA_DIR / "raw"
 
-# Cambridge + Somerville with a small margin (lets routes shave corners through
-# edges of Arlington/Medford/Boston paths at the boundary).
-BBOX_WEST: Final[float] = -71.18
-BBOX_SOUTH: Final[float] = 42.34
-BBOX_EAST: Final[float] = -71.05
-BBOX_NORTH: Final[float] = 42.43
+# Cambridge + Somerville + inner-ring neighbors (Arlington, Medford, Everett,
+# Belmont, Watertown). These towns have no municipal bike GIS, but the
+# statewide MassDOT/LTS/crash + OSM stack covers them uniformly.
+BBOX_WEST: Final[float] = -71.22
+BBOX_SOUTH: Final[float] = 42.35
+BBOX_EAST: Final[float] = -71.03
+BBOX_NORTH: Final[float] = 42.455
 
 CAMBRIDGE_FACILITIES_URL: Final[str] = (
     "https://raw.githubusercontent.com/cambridgegis/cambridgegis_data/main/"
@@ -40,8 +41,13 @@ IMPACT_CRASH_URL: Final[str] = (
 )
 # Some years deviate from the pattern (2023 service is named "...2023v").
 IMPACT_CRASH_SERVICE_YEAR: Final[dict[int, str]] = {2023: "2023v"}
+IMPACT_CRASH_CITIES: Final[tuple[str, ...]] = (
+    "CAMBRIDGE", "SOMERVILLE", "ARLINGTON", "MEDFORD", "EVERETT", "BELMONT", "WATERTOWN",
+)
 IMPACT_CRASH_WHERE: Final[str] = (
-    "CITY_TOWN_NAME IN ('CAMBRIDGE','SOMERVILLE') AND NON_MTRST_TYPE_CL LIKE '%Bicycl%'"
+    "CITY_TOWN_NAME IN ("
+    + ",".join(f"'{c}'" for c in IMPACT_CRASH_CITIES)
+    + ") AND NON_MTRST_TYPE_CL LIKE '%Bicycl%'"
 )
 SOMERVILLE_MOBILITY3: Final[str] = (
     "https://maps.somervillema.gov/arcgis/rest/services/Mobility3/MapServer"
