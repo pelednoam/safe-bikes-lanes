@@ -22,6 +22,20 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      - name: Fetch map data (published as a release tarball, not committed to git)
+        run: |
+          for i in 1 2 3 4 5; do
+            curl -sL --fail -o web-data.tar.gz \
+              https://github.com/${{ github.repository }}/releases/download/data-snapshot/web-data.tar.gz \
+              && break
+            echo "data tarball not available yet (attempt $i) — retrying in 15s"
+            sleep 15
+          done
+          if [ ! -f web-data.tar.gz ]; then
+            echo "::error::map data tarball not found — run scripts/publish-data.sh"; exit 1
+          fi
+          tar xzf web-data.tar.gz -C web
+          echo "extracted $(ls web/data/tiles/*.json | grep -vc manifest) routing tiles, $(ls web/data/nettiles/*.json | grep -vc manifest) network tiles"
       - uses: actions/setup-node@v4
         with:
           node-version: 22

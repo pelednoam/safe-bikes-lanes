@@ -1,2 +1,8 @@
 dist/
 test-results/
+
+# Generated map data is published as a release-asset tarball
+# (scripts/publish-data.sh), not committed — see .github/workflows/pages.yml.
+# keys.json is hand-maintained config, so it stays tracked.
+data/*
+!data/keys.json

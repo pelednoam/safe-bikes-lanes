@@ -49,19 +49,15 @@ jobs:
       - name: Rebuild review page
         working-directory: pipeline
         run: python review_page.py
-      - name: Commit if changed
+      - name: Publish data tarball + deploy
+        # web/data is NOT committed to git (it would bloat history ~200 MB per
+        # refresh). Publish it as a release asset the Pages deploy downloads.
         run: |
-          git config user.name "data-refresh-bot"
-          git config user.email "noreply@github.com"
-          git add web/data
-          if git diff --cached --quiet; then
-            echo "no data changes"
-          else
-            git commit -m "Automated data refresh $(date -u +%F)" -m "$(git diff --cached --stat | tail -12)"
-            git push
-            # pushes from GITHUB_TOKEN don't trigger push workflows —
-            # dispatch the Pages deploy explicitly (the documented exception)
-            gh workflow run pages.yml --ref main
-          fi
+          tar czf web-data.tar.gz -C web --exclude=data/keys.json data
+          gh release view data-snapshot >/dev/null 2>&1 || gh release create data-snapshot \
+            -t "Map data snapshot" \
+            -n "Generated web/data (routing + network tiles + map layers), published outside git history."
+          gh release upload data-snapshot web-data.tar.gz --clobber
+          gh workflow run pages.yml --ref main
         env:
           GH_TOKEN: ${{ github.token }}
