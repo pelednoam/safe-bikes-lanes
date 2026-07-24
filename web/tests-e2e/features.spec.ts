@@ -152,6 +152,25 @@ test("recent routes appear and replan on tap", async ({ page }) => {
   await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
 });
 
+// Coverage reaches the next ring of towns (app-v32). These routes sit entirely
+// in the newly-added areas and span several tiles, so they exercise on-demand
+// corridor loading + cross-tile stitching out where the graph was just grown.
+for (const [name, hash] of [
+  ["Waltham → Lexington", "#s=-71.236,42.376&e=-71.224,42.447&m=young_kids"],
+  ["Quincy → Milton", "#s=-71.002,42.252&e=-71.066,42.250&m=young_kids"],
+  ["Wellesley → Revere (cross-metro)", "#s=-71.293,42.296&e=-71.012,42.408&m=young_kids"],
+] as [string, string][]) {
+  test(`new-ring towns route: ${name}`, async ({ page }) => {
+    await boot(page, hash);
+    await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
+    // a real drawn route, not just an empty card
+    const coords = await page.evaluate(
+      () => (window._map?.getSource("route") as { _data?: GeoJSON.FeatureCollection })._data,
+    );
+    expect(JSON.stringify(coords)).toContain("LineString");
+  });
+}
+
 test("loop planner builds a round trip from a start point", async ({ page }) => {
   await boot(page, "#s=-71.122258,42.396748");
   await openSection(page, "Other trip types");
