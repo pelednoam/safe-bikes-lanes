@@ -225,6 +225,7 @@ def fetch_all(refresh: bool = False) -> None:
         "boston_bike_facilities.geojson": lambda: arcgis_query(config.BOSTON_FACILITIES_URL),
         "newton_bike_facilities.geojson": lambda: arcgis_query(config.NEWTON_FACILITIES_URL),
         "everett_bike_facilities.geojson": lambda: arcgis_query(config.EVERETT_FACILITIES_URL),
+        "natick_bike_facilities.geojson": lambda: arcgis_query(config.NATICK_FACILITIES_URL),
         "mapc_bike_network.geojson": fetch_mapc,
         "massdot_bike_inventory.geojson": lambda: arcgis_query(config.MASSDOT_BIKE_INVENTORY),
         "massdot_lts.geojson": lambda: arcgis_query(config.MASSDOT_LTS),

@@ -63,7 +63,7 @@ const POI_META = {
     water: { emoji: "🚰", label: "water fountain", color: "#2980b9" },
     restroom: { emoji: "🚻", label: "restroom", color: "#7f8c8d" },
 };
-const BBOX = { west: -71.32, south: 42.20, east: -70.93, north: 42.51 };
+const BBOX = { west: -71.45, south: 42.10, east: -70.88, north: 42.57 };
 const SKETCHY_KEY = "sketchyMarks";
 const DARK_KEY = "darkMode";
 // ---------------------------------------------------------------------------

@@ -221,6 +221,15 @@ def everett_overlay() -> gpd.GeoDataFrame | None:
     return gdf[gdf["cls"].notna()][["geometry", "cls"]]
 
 
+def natick_overlay() -> gpd.GeoDataFrame | None:
+    gdf = load_geojson("natick_bike_facilities.geojson")
+    if gdf is None:
+        return None
+    gdf = gdf.copy()
+    gdf["cls"] = gdf["Fac_Type"].map(config.NATICK_FACILITY_CLASS)
+    return gdf[gdf["cls"].notna()][["geometry", "cls"]]
+
+
 def mapc_overlay() -> gpd.GeoDataFrame | None:
     """Regional existing-facility network; class carried in `mapc_cls`."""
     gdf = load_geojson("mapc_bike_network.geojson")
@@ -313,6 +322,7 @@ def build() -> None:
         ("boston", boston_overlay(), config.FACILITY_JOIN_RADIUS_M),
         ("newton", newton_overlay(), config.FACILITY_JOIN_RADIUS_M),
         ("everett", everett_overlay(), config.FACILITY_JOIN_RADIUS_M),
+        ("natick", natick_overlay(), config.FACILITY_JOIN_RADIUS_M),
     ]:
         if overlay is None or overlay.empty:
             continue
