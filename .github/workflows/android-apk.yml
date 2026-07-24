@@ -17,6 +17,19 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - name: Fetch map data (release tarball — not committed to git)
+        # web/data isn't in git; it's published as a release asset. The native
+        # E2E gate and the APK bundle both need it, so extract it up front.
+        run: |
+          for i in 1 2 3 4 5; do
+            curl -sL --fail -o web-data.tar.gz \
+              https://github.com/${{ github.repository }}/releases/download/data-snapshot/web-data.tar.gz \
+              && break
+            echo "data tarball not available yet (attempt $i) — retrying in 15s"; sleep 15
+          done
+          [ -f web-data.tar.gz ] || { echo "::error::map data tarball not found"; exit 1; }
+          tar xzf web-data.tar.gz -C web
+          echo "extracted $(ls web/data/tiles/*.json | grep -vc manifest) routing tiles"
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -38,19 +51,6 @@ jobs:
       - name: Native app-layer E2E (emulated Capacitor WebView)
         run: npm run e2e:native
         working-directory: web
-      - name: Bundle the freshest live data
-        # overlay the currently-deployed data onto the repo copies so a
-        # freshly built APK matches the website and skips the redundant
-        # first-launch re-download (the website-fetch still covers later drift)
-        run: |
-          cd web/data
-          for f in graph.json network.geojson heatmap.geojson lanemap.geojson \
-                   elevation.geojson pois.geojson gateways.geojson \
-                   construction.geojson meta.json keys.json; do
-            curl -sL --fail -o "$f.new" \
-              "https://pelednoam.github.io/safe-bikes-lanes/data/$f" \
-              && mv "$f.new" "$f" || { rm -f "$f.new"; echo "kept repo copy of $f"; }
-          done
       - name: Assemble web bundle + sync
         env:
           APP_VERSION: ${{ github.ref_name }}
