@@ -10,6 +10,7 @@ crash overlay adjust per-edge protection class and cost. Outputs:
 
 import json
 import math
+import os
 import pickle
 from collections import Counter
 from collections.abc import Mapping
@@ -24,12 +25,30 @@ from elevation import ElevationSampler
 from shapely.geometry import LineString, Point
 
 METRIC_CRS: Final[str] = "EPSG:26986"  # MA mainland state plane (meters)
-BBOX: Final[tuple[float, float, float, float]] = (
-    config.BBOX_WEST,
-    config.BBOX_SOUTH,
-    config.BBOX_EAST,
-    config.BBOX_NORTH,
-)
+
+
+def _bbox() -> tuple[float, float, float, float]:
+    """Config bbox, or a smaller PROFILE_BBOX='w,s,e,n' for fast profiling runs."""
+    env = os.environ.get("PROFILE_BBOX")
+    if env:
+        w, s, e, n = (float(x) for x in env.split(","))
+        return (w, s, e, n)
+    return (config.BBOX_WEST, config.BBOX_SOUTH, config.BBOX_EAST, config.BBOX_NORTH)
+
+
+BBOX: Final[tuple[float, float, float, float]] = _bbox()
+
+
+def mem(stage: str) -> None:
+    """Log current + peak resident memory at a build stage."""
+    try:
+        with open("/proc/self/status") as f:
+            info = {k: v for k, v in (ln.split(":", 1) for ln in f if ":" in ln)}
+        rss = int(info["VmRSS"].split()[0]) / 1e6
+        peak = int(info["VmHWM"].split()[0]) / 1e6
+        print(f"  [mem] {stage:28s} rss={rss:5.1f} GB  peak={peak:5.1f} GB", flush=True)
+    except (OSError, KeyError):
+        pass
 
 ROAD_BUSY: Final[set[str]] = {
     "primary", "primary_link", "secondary", "secondary_link", "trunk", "trunk_link",
@@ -230,6 +249,15 @@ def natick_overlay() -> gpd.GeoDataFrame | None:
     return gdf[gdf["cls"].notna()][["geometry", "cls"]]
 
 
+def salem_overlay() -> gpd.GeoDataFrame | None:
+    gdf = load_geojson("salem_bike_facilities.geojson")
+    if gdf is None:
+        return None
+    gdf = gdf.copy()
+    gdf["cls"] = gdf["TYPE"].map(config.SALEM_FACILITY_CLASS)  # In-Design -> NaN -> dropped
+    return gdf[gdf["cls"].notna()][["geometry", "cls"]]
+
+
 def mapc_overlay() -> gpd.GeoDataFrame | None:
     """Regional existing-facility network; class carried in `mapc_cls`."""
     gdf = load_geojson("mapc_bike_network.geojson")
@@ -285,26 +313,50 @@ def overrides_overlay() -> gpd.GeoDataFrame | None:
 # build
 # ---------------------------------------------------------------------------
 
-def build() -> None:
-    print("downloading OSM graph (bike network) ...")
-    G = ox.graph_from_bbox(BBOX, network_type="bike", simplify=True, truncate_by_edge=True)
-    print(f"  bike graph: {len(G.nodes)} nodes, {len(G.edges)} edges")
-    print("downloading OSM bike-permitted footpaths ...")
-    try:
-        G_foot = ox.graph_from_bbox(
-            BBOX,
-            custom_filter='["highway"~"footway|pedestrian|path"]["bicycle"~"yes|designated|permissive"]',
-            simplify=True,
-            retain_all=True,
-            truncate_by_edge=True,
-        )
-        G = nx.compose(G_foot, G)
-        print(f"  after adding footpaths: {len(G.nodes)} nodes, {len(G.edges)} edges")
-    except Exception as e:
-        print(f"  footpath layer failed ({e}) — continuing with bike graph only")
+FOOT_FILTER: Final[str] = (
+    '["highway"~"footway|pedestrian|path"]["bicycle"~"yes|designated|permissive"]'
+)
 
+
+def acquire_osm(bbox: tuple[float, float, float, float]) -> nx.MultiDiGraph:
+    """Whole-area bike network + bike-permitted footpaths.
+
+    Chunking the graph build was explored and rejected: per-chunk simplify
+    drops degree-2 nodes inconsistently at borders (leaving connectivity gaps),
+    and merging raw chunks bloats the graph with un-mergeable boundary stubs.
+    So this keeps the correct whole-area download but merges footpaths IN PLACE
+    (bike attributes win, matching the old nx.compose(foot, bike)) rather than
+    building a third full graph — that copy was pure transient overhead."""
+    G: nx.MultiDiGraph = ox.graph_from_bbox(
+        bbox, network_type="bike", simplify=True, truncate_by_edge=True
+    )
+    print(f"  bike graph: {len(G.nodes)} nodes, {len(G.edges)} edges")
+    mem("after bike download")
+    try:
+        gf = ox.graph_from_bbox(
+            bbox, custom_filter=FOOT_FILTER, simplify=True, retain_all=True, truncate_by_edge=True
+        )
+    except Exception as e:  # footpath layer optional
+        print(f"  footpath layer failed ({e}) — bike graph only")
+        return G
+    # add only footpath nodes/edges the bike graph lacks (bike precedence)
+    G.add_nodes_from((n, d) for n, d in gf.nodes(data=True) if n not in G)
+    G.add_edges_from(
+        (u, v, k, d) for u, v, k, d in gf.edges(keys=True, data=True) if not G.has_edge(u, v, k)
+    )
+    del gf
+    return G
+
+
+def build() -> None:
+    mem("start")
+    print("downloading OSM (bike + footpaths) ...")
+    G = acquire_osm(BBOX)
+    print(f"  merged graph: {len(G.nodes)} nodes, {len(G.edges)} edges")
+    mem("after download+compose")
     nodes, edges = ox.graph_to_gdfs(G)
     edges = edges.to_crs(METRIC_CRS)
+    mem("after graph_to_gdfs")
 
     # base classification from OSM tags
     base = [classify_osm(t) for t in edges.to_dict("records")]
@@ -323,6 +375,7 @@ def build() -> None:
         ("newton", newton_overlay(), config.FACILITY_JOIN_RADIUS_M),
         ("everett", everett_overlay(), config.FACILITY_JOIN_RADIUS_M),
         ("natick", natick_overlay(), config.FACILITY_JOIN_RADIUS_M),
+        ("salem", salem_overlay(), config.FACILITY_JOIN_RADIUS_M),
     ]:
         if overlay is None or overlay.empty:
             continue
@@ -343,6 +396,7 @@ def build() -> None:
                 upgraded += 1
         print(f"  upgraded {upgraded} edges")
 
+    mem("after facility overlays")
     # LTS escalation: official high-stress rating on an edge we think is calm
     lts = lts_overlay()
     if lts is not None and not lts.empty:
@@ -426,6 +480,7 @@ def build() -> None:
             return config.SOLO_BUSY_ROAD_BUFFERED_MULTIPLIER
         return config.SOLO_CLASS_MULTIPLIER[row["cls"]]
 
+    mem("after crash join")
     edges["stress_mult"] = edges.apply(edge_mult, axis=1)
     edges["stress_mult_solo"] = edges.apply(edge_mult_solo, axis=1)
 
@@ -457,6 +512,7 @@ def build() -> None:
         elev[n] = e_m
         nd["elev"] = round(e_m, 1)
 
+    mem("after elevation sampling")
     # final weights (kids + solo), written back into the graph
     for (u, v, k), row in edges.iterrows():
         pen = 0.0
@@ -478,9 +534,12 @@ def build() -> None:
         )
         data["cls_source"] = row["source"]
 
-    # keep the largest strongly connected component so routing can't dead-end
+    mem("after weight write-back")
+    # keep the largest strongly connected component so routing can't dead-end;
+    # prune in place rather than .copy() the whole graph (that copy was a peak)
     scc = max(nx.strongly_connected_components(G), key=len)
-    G = G.subgraph(scc).copy()
+    G.remove_nodes_from([n for n in G if n not in scc])
+    mem("after SCC")
     print(f"final graph: {len(G.nodes)} nodes, {len(G.edges)} edges (largest SCC)")
     print("class distribution (m):")
     dist: Counter[str] = Counter()

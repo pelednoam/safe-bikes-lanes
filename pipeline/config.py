@@ -15,14 +15,14 @@ RAW_DIR: Final[Path] = DATA_DIR / "raw"
 # Belmont, Watertown) + Brookline + Newton + Boston (north of ~42.30). The
 # neighbors ride the statewide stack; Boston adds its own facility-typed bike
 # network below.
-# Expanded July 2026 to a SECOND ring beyond the inner suburbs: W adds
-# Natick/Weston/Lincoln/Dover, N adds Woburn/Burlington/Reading/Wakefield,
-# NE adds Saugus/Lynn/Nahant/Swampscott, S adds Norwood/Canton/Randolph/
-# Braintree/Weymouth. (First ring was W-71.32/S42.20/E-70.93/N42.51.)
-BBOX_WEST: Final[float] = -71.45
-BBOX_SOUTH: Final[float] = 42.10
-BBOX_EAST: Final[float] = -70.88
-BBOX_NORTH: Final[float] = 42.57
+# Expanded July 2026 to a THIRD ring: W adds Framingham/Ashland/Sudbury/
+# Concord, N adds Billerica/Wilmington/N.Reading, NE adds Peabody/Salem/
+# Danvers/Beverly/Marblehead, SE adds Hingham/Cohasset/Hull/Rockland, S adds
+# Brockton/Stoughton/Sharon/Walpole. (2nd ring was -71.45/42.10/-70.88/42.57.)
+BBOX_WEST: Final[float] = -71.60
+BBOX_SOUTH: Final[float] = 42.00
+BBOX_EAST: Final[float] = -70.78
+BBOX_NORTH: Final[float] = 42.63
 
 # Routing-graph tiling: the browser loads only the tiles covering a route's
 # corridor instead of the whole graph, so coverage can grow toward all of MA
@@ -73,6 +73,13 @@ IMPACT_CRASH_CITIES: Final[tuple[str, ...]] = (
     "SAUGUS", "LYNN", "NAHANT", "SWAMPSCOTT", "WESTON", "LINCOLN", "NATICK",
     "DOVER", "SHERBORN", "WESTWOOD", "NORWOOD", "CANTON", "RANDOLPH",
     "BRAINTREE", "WEYMOUTH", "HOLBROOK",
+    # third ring (July 2026)
+    "FRAMINGHAM", "ASHLAND", "HOLLISTON", "MEDFIELD", "MILLIS", "MEDWAY",
+    "NORFOLK", "WALPOLE", "SHARON", "STOUGHTON", "WAYLAND", "SUDBURY",
+    "CONCORD", "CARLISLE", "BILLERICA", "WILMINGTON", "NORTH READING",
+    "MIDDLETON", "PEABODY", "SALEM", "MARBLEHEAD", "DANVERS", "BEVERLY",
+    "HINGHAM", "COHASSET", "HULL", "ROCKLAND", "ABINGTON", "WHITMAN",
+    "BROCKTON",
 )
 IMPACT_CRASH_WHERE: Final[str] = (
     "CITY_TOWN_NAME IN ("
@@ -196,6 +203,19 @@ NATICK_FACILITY_CLASS: Final[dict[str, str]] = {
     "Conventional Bike Lane": "lane",
     "Buffered Bike Lane": "buffered",
     "Separated Bike Lane": "separated",
+}
+
+# Salem publishes its own TYPE-coded network (existing + "- In Design"
+# planned, which we drop). currentbikeassets_2025, TYPE field.
+SALEM_FACILITIES_URL: Final[str] = (
+    "https://services9.arcgis.com/nPsFhwkdebYjxn1R/arcgis/rest/services/"
+    "currentbikeassets_2025/FeatureServer/0"
+)
+SALEM_FACILITY_CLASS: Final[dict[str, str]] = {
+    "Conventional Bike Lane": "lane",
+    "Protected Bike Lane": "separated",
+    "Shared Use Path": "path",
+    # "Protected Bike Lane - In Design" omitted on purpose (not built yet)
 }
 
 # MAPC regional LandLine/AllTrails network — one source that enriches every
