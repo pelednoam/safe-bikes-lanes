@@ -159,6 +159,10 @@ for (const [name, hash] of [
   ["Waltham → Lexington", "#s=-71.236,42.376&e=-71.224,42.447&m=young_kids"],
   ["Quincy → Milton", "#s=-71.002,42.252&e=-71.066,42.250&m=young_kids"],
   ["Wellesley → Revere (cross-metro)", "#s=-71.293,42.296&e=-71.012,42.408&m=young_kids"],
+  // second ring
+  ["Lynn → Saugus", "#s=-70.949,42.466&e=-71.010,42.464&m=young_kids"],
+  ["Natick → Wellesley", "#s=-71.349,42.283&e=-71.293,42.296&m=young_kids"],
+  ["Sherborn → Swampscott (corner to corner)", "#s=-71.369,42.239&e=-70.917,42.472&m=young_kids"],
 ] as [string, string][]) {
   test(`new-ring towns route: ${name}`, async ({ page }) => {
     await boot(page, hash);
