@@ -55,6 +55,7 @@ jobs:
         run: |
           tar czf web-data.tar.gz -C web --exclude=data/keys.json data
           gh release view data-snapshot >/dev/null 2>&1 || gh release create data-snapshot \
+            --latest=false --prerelease \
             -t "Map data snapshot" \
             -n "Generated web/data (routing + network tiles + map layers), published outside git history."
           gh release upload data-snapshot web-data.tar.gz --clobber
