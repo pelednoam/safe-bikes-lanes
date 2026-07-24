@@ -21,7 +21,10 @@ TARBALL="/tmp/web-data.tar.gz"
 tar czf "$TARBALL" -C web --exclude=data/keys.json data
 SIZE=$(du -h "$TARBALL" | cut -f1)
 
+# --latest=false --prerelease so this data release never becomes the repo's
+# "latest" — the APK updater + Pages mirror key off releases/latest = app-v*.
 gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" \
+  --latest=false --prerelease \
   -t "Map data snapshot" \
   -n "Generated web/data (routing + network tiles + map layers), published outside git history. Consumed by the Pages deploy."
 gh release upload "$TAG" "$TARBALL" --clobber
