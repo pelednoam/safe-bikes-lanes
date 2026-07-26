@@ -169,7 +169,7 @@
                    font-variant-numeric: tabular-nums; }
   #nav-speed { font-size: 15px; color: var(--muted); font-variant-numeric: tabular-nums; }
   #nav-buttons button { margin-top: 6px; padding: 4px 10px; }
-  #nav-myway.active { background: #2b6ef2; color: #fff; border-color: #2b6ef2; }
+  #nav-myway.active, #nav-net.active { background: #2b6ef2; color: #fff; border-color: #2b6ef2; }
   .nav-dot {
     width: 18px; height: 18px; border-radius: 50%; background: #2b6ef2;
     border: 3px solid #fff; box-shadow: 0 0 8px rgba(43,110,242,.9);
@@ -219,6 +219,7 @@
     <button id="nav-playground" title="detour to nearest playground">🛝</button>
     <button id="nav-hazard" title="mark this spot as sketchy">⚠</button>
     <button id="nav-report" title="report a hazard here (with photo)">📷</button>
+    <button id="nav-net" class="active" title="Hide the safety-network overlay">🗺 lanes</button>
     <button id="nav-myway" title="Go with my street choice: when you deviate, reroutes continue in your direction instead of pulling you back">🧭 my way</button>
     <button id="nav-resume" style="display:none">▶ resume ride</button>
   </div>

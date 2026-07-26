@@ -273,6 +273,10 @@ async function refreshNetworkTiles() {
     const src = map.getSource("network");
     if (!src)
         return;
+    // hidden layer: don't spend bandwidth or battery fetching tiles for it
+    // (setNetworkVisible refreshes when it's switched back on)
+    if (map.getLayoutProperty("network", "visibility") === "none")
+        return;
     if (map.getZoom() < NET_MIN_ZOOM) {
         src.setData(emptyFC());
         return;
@@ -2031,9 +2035,29 @@ el("swap").addEventListener("click", () => {
 el("loop-btn").addEventListener("click", () => {
     void requestLoop();
 });
-el("show-net").addEventListener("change", applyBasemap);
+/** Show/hide the coloured safety network. Driven by the panel checkbox and —
+ * because the panel is hidden while navigating — by the nav-mode button too,
+ * so both stay in sync from either place. */
+function setNetworkVisible(on) {
+    el("show-net").checked = on;
+    for (const layer of ["network", "network-unconfirmed"]) {
+        map.setLayoutProperty(layer, "visibility", on ? "visible" : "none");
+    }
+    applyBasemap(); // casing + line widths key off the same flag
+    const btn = el("nav-net");
+    btn.classList.toggle("active", on);
+    btn.title = on ? "Hide the safety-network overlay" : "Show the safety-network overlay";
+    // refresh on re-show: tile loading is skipped while the layer is hidden
+    if (on)
+        void refreshNetworkTiles();
+}
+el("show-net").addEventListener("change", (e) => {
+    setNetworkVisible(e.target.checked);
+});
+el("nav-net").addEventListener("click", () => {
+    setNetworkVisible(!el("show-net").checked);
+});
 for (const [checkboxId, layers] of [
-    ["show-net", ["network", "network-unconfirmed"]],
     ["show-pois", ["pois"]],
     ["show-gates", ["gateways"]],
 ]) {

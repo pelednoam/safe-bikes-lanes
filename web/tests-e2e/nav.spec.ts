@@ -143,6 +143,55 @@ test("ridden progress is dimmed behind the rider", async ({ page, context }) => 
   );
 });
 
+test("the safety network can be toggled off and on mid-ride", async ({ page, context }) => {
+  await startNav(page);
+  const coords = await routeCoords(page);
+  await context.setGeolocation({ longitude: coords[4]?.[0] ?? 0, latitude: coords[4]?.[1] ?? 0 });
+  const vis = (): Promise<string | undefined> =>
+    page.evaluate(
+      () => window._map?.getLayoutProperty("network", "visibility") as string | undefined,
+    );
+
+  // the panel is hidden while navigating, so the control lives in the nav bar
+  const btn = page.locator("#nav-net");
+  await expect(btn).toBeVisible();
+  await expect(btn).toHaveClass(/active/);
+
+  await btn.click();
+  await expect.poll(vis).toBe("none");
+  await expect(btn).not.toHaveClass(/active/);
+  // no network tile requests while it's hidden
+  let fetched = 0;
+  const count = (r: { url: () => string }): void => {
+    if (r.url().includes("/nettiles/") && !r.url().endsWith("manifest.json")) fetched++;
+  };
+  page.on("request", count);
+  for (const c of coords.slice(5, 12)) {
+    await context.setGeolocation({ longitude: c[0], latitude: c[1] });
+    await page.waitForTimeout(120);
+  }
+  await page.waitForTimeout(600);
+  expect(fetched).toBe(0);
+  page.off("request", count);
+
+  // back on, and it repopulates
+  await btn.click();
+  await expect.poll(vis).toBe("visible");
+  await expect(btn).toHaveClass(/active/);
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() => {
+          const src = window._map?.getSource("network") as
+            | { _data?: GeoJSON.FeatureCollection }
+            | undefined;
+          return src?._data?.features?.length ?? 0;
+        }),
+      { timeout: 15_000 },
+    )
+    .toBeGreaterThan(0);
+});
+
 test("the rider's own zoom is kept (no snapping back), recenter restores follow", async ({
   page,
   context,
