@@ -4,7 +4,7 @@
 // single tsconfig project; this file is small, boilerplate, and stable.
 "use strict";
 
-const CACHE = "family-bike-router-v9";
+const CACHE = "family-bike-router-v10";
 // Precache the shell + the tile manifests + eager POIs. The routing graph
 // (data/tiles/*.json), the display network (data/nettiles/*.json), and the
 // heavy overlays (heatmap/elevation/lane) all load on demand — cached
@@ -18,6 +18,12 @@ const ASSETS = [
   "types.js",
   "tiles.js",
   "manifest.json",
+  "fonts/Barlow-400.woff2",
+  "fonts/Barlow-500.woff2",
+  "fonts/Barlow-600.woff2",
+  "fonts/Barlow-700.woff2",
+  "fonts/BarlowSemiCondensed-600.woff2",
+  "fonts/BarlowSemiCondensed-700.woff2",
   "data/tiles/manifest.json",
   "data/nettiles/manifest.json",
   "data/pois.geojson",

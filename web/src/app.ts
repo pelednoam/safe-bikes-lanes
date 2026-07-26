@@ -687,7 +687,7 @@ function renderOptions(): void {
   if (options.length > 1) {
     const head = document.createElement("div");
     head.className = "options-head";
-    head.textContent = `${options.length} route options — safety-rated:`;
+    head.textContent = `${options.length} route options`;
     box.appendChild(head);
   }
   for (const o of options) {
@@ -700,11 +700,24 @@ function renderOptions(): void {
     badge.style.background = GRADE_COLORS[o.grade];
     badge.textContent = o.grade;
     card.appendChild(badge);
-    const label = document.createElement("span");
-    label.innerHTML =
-      `<b>${o.label}</b> · ${fmtDist(s.meters)} · ~${s.minutes} min · ` +
-      `${s.pct_protected}% protected · ↗ ${s.climb_m ?? 0} m`;
-    card.appendChild(label);
+    // name on its own line, the numbers on a second — a single run-on string
+    // of "·" separators is unreadable at a glance
+    const body = document.createElement("span");
+    body.className = "opt-body";
+    const name = document.createElement("span");
+    name.className = "opt-name";
+    name.textContent = o.label;
+    const stats = document.createElement("span");
+    stats.className = "opt-stats";
+    // the selected card is the hero: just the headline numbers, since the
+    // breakdown below it already spells out protected/quiet/climb
+    stats.textContent =
+      o.id === selectedId
+        ? `${fmtDist(s.meters)} · ${s.minutes} min`
+        : `${fmtDist(s.meters)} · ${s.minutes} min · ${s.pct_protected}% protected` +
+          ` · ↗ ${s.climb_m ?? 0} m`;
+    body.append(name, stats);
+    card.appendChild(body);
     card.addEventListener("click", () => {
       selectOption(o.id);
     });

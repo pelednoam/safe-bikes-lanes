@@ -14,183 +14,322 @@
 <meta name="apple-mobile-web-app-title" content="Bike Router">
 <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
 <style>
+  /* ── Typeface ─────────────────────────────────────────────────────────
+     Barlow: a low-contrast grotesk drawn from public road signage — the
+     vernacular of the subject itself. Self-hosted (works offline, passes the
+     app's CSP), latin subset only, ~133 KB for six faces. */
+  @font-face { font-family:'Barlow'; font-style:normal; font-weight:400; font-display:swap;
+               src:url(fonts/Barlow-400.woff2) format('woff2'); }
+  @font-face { font-family:'Barlow'; font-style:normal; font-weight:500; font-display:swap;
+               src:url(fonts/Barlow-500.woff2) format('woff2'); }
+  @font-face { font-family:'Barlow'; font-style:normal; font-weight:600; font-display:swap;
+               src:url(fonts/Barlow-600.woff2) format('woff2'); }
+  @font-face { font-family:'Barlow'; font-style:normal; font-weight:700; font-display:swap;
+               src:url(fonts/Barlow-700.woff2) format('woff2'); }
+  @font-face { font-family:'Barlow Semi Condensed'; font-style:normal; font-weight:600;
+               font-display:swap; src:url(fonts/BarlowSemiCondensed-600.woff2) format('woff2'); }
+  @font-face { font-family:'Barlow Semi Condensed'; font-style:normal; font-weight:700;
+               font-display:swap; src:url(fonts/BarlowSemiCondensed-700.woff2) format('woff2'); }
+
   :root {
-    font-family: system-ui, sans-serif;
-    --bg: #fff; --fg: #222; --muted: #666; --border: #ddd;
-    --btn-bg: #f6f6f6; --hover: #f4f4f4; --sel-bg: #eef2fc;
-    --caution: #a33; --ok: #2a7;
+    --font: 'Barlow', system-ui, -apple-system, sans-serif;
+    --font-cond: 'Barlow Semi Condensed', 'Barlow', system-ui, sans-serif;
+    font-family: var(--font);
+
+    /* Colour discipline: hue is reserved for SAFETY meaning. The chrome is
+       neutral, so anything coloured on screen is telling you something. The
+       action colour is the protected-lane green — here, "go" means "safe". */
+    --s-path:#1a9850; --s-sep:#66bd63; --s-buf:#a6d96a;
+    --s-lane:#fee08b; --s-shar:#fdae61; --s-mod:#f46d43; --s-busy:#d73027;
+    --accent:#12833f; --accent-hi:#0e6c33; --accent-soft:rgba(26,152,80,.12);
+
+    --ink:#111619; --muted:#5c6a72; --line:rgba(17,22,25,.11);
+    --surface:rgba(255,255,255,.86); --solid:#ffffff; --field:rgba(17,22,25,.05);
+    --shadow: 0 1px 2px rgba(10,14,18,.07), 0 12px 32px -10px rgba(10,14,18,.25);
+    --r-sm:9px; --r-md:13px; --r-lg:19px; --r-pill:999px;
+
+    /* aliases kept for rules + inline styles that reference the old names */
+    --bg:var(--solid); --fg:var(--ink); --border:var(--line);
+    --btn-bg:var(--field); --hover:rgba(17,22,25,.08); --sel-bg:var(--accent-soft);
+    --caution:#b3261e; --ok:#12833f;
   }
   body.dark {
-    --bg: #1c1e24; --fg: #e8e8e8; --muted: #9aa3ad; --border: #3a3d46;
-    --btn-bg: #2a2d35; --hover: #2f333c; --sel-bg: #243052;
-    --caution: #ff8f8f; --ok: #5fd39a;
+    --ink:#e9eef1; --muted:#93a1aa; --line:rgba(255,255,255,.13);
+    --surface:rgba(19,23,27,.84); --solid:#13171b; --field:rgba(255,255,255,.07);
+    --shadow: 0 1px 2px rgba(0,0,0,.5), 0 14px 34px -10px rgba(0,0,0,.6);
+    --hover:rgba(255,255,255,.10); --accent:#2aa35a; --accent-hi:#36b768;
+    --accent-soft:rgba(102,189,99,.16);
+    --caution:#ff9a92; --ok:#5fd39a;
   }
-  html, body { margin: 0; height: 100%; }
-  #map { position: absolute; inset: 0; }
+
+  html, body { margin:0; height:100%; }
+  body { font-family: var(--font); color: var(--ink); }
+  #map { position:absolute; inset:0; }
+  ::selection { background: var(--accent-soft); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+
+  /* ── Panel ─────────────────────────────────────────────────────────── */
   #panel {
-    position: absolute; top: 10px; left: 10px; z-index: 5; width: 316px;
-    background: var(--bg); color: var(--fg); border-radius: 10px;
-    box-shadow: 0 2px 10px rgba(0,0,0,.25);
-    padding: 12px 14px; font-size: 13px; max-height: calc(100% - 40px); overflow-y: auto;
-    overscroll-behavior: contain;
+    position:absolute; top:12px; left:12px; z-index:5; width:346px;
+    background:var(--surface); color:var(--ink);
+    -webkit-backdrop-filter:blur(22px) saturate(1.6); backdrop-filter:blur(22px) saturate(1.6);
+    border:1px solid var(--line); border-radius:var(--r-lg); box-shadow:var(--shadow);
+    padding:14px; font-size:14.5px; line-height:1.45;
+    max-height:calc(100% - 24px); overflow-y:auto; overscroll-behavior:contain;
   }
-  body.dark .maplibregl-popup-content { background: var(--bg); color: var(--fg); }
-  body.dark .maplibregl-popup-tip { border-top-color: var(--bg) !important;
-                                    border-bottom-color: var(--bg) !important; }
+  #panel h1 {
+    font-size:16px; font-weight:700; letter-spacing:-.012em; margin:0 0 3px;
+  }
+  #panel .hint { color:var(--muted); font-size:13px; margin:0 0 12px; }
+  body.dark .maplibregl-popup-content { background:var(--solid); color:var(--ink);
+    border-radius:var(--r-md); }
+  body.dark .maplibregl-popup-tip { border-top-color:var(--solid) !important;
+                                    border-bottom-color:var(--solid) !important; }
+  .maplibregl-popup-content { border-radius:var(--r-md); font-family:var(--font);
+    box-shadow:var(--shadow); }
+
+  /* ── Fields ────────────────────────────────────────────────────────── */
+  #od { display:flex; flex-direction:column; gap:6px; margin-bottom:8px; }
+  #search, #from-field {
+    width:100%; box-sizing:border-box; padding:10px 12px; font-size:15px;
+    font-family:var(--font); color:var(--ink); background:var(--field);
+    border:1px solid transparent; border-radius:var(--r-md); margin:0;
+  }
+  #search::placeholder { color:var(--muted); }
+  #search:focus, #from-field:focus-visible { border-color:var(--accent); outline:none;
+    background:var(--solid); }
+  #from-field { text-align:left; cursor:pointer; font-weight:500; }
+  #from-field:hover { background:var(--hover); }
+  #from-field.custom { border-color:var(--accent); }
+  #from-field.picking { border-color:var(--accent); color:var(--accent); font-weight:700; }
+  #from-field .od-ico { opacity:.85; }
+  .search-row { display:flex; gap:6px; align-items:center; margin:4px 0; }
+  .search-row span { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .search-row button { margin:0; padding:3px 9px; font-size:12px; }
+
+  /* ── Rider mode: a segmented control, not radio dots ───────────────── */
+  #modes {
+    display:flex; gap:2px; background:var(--field); border-radius:var(--r-pill);
+    padding:3px; margin:10px 0;
+  }
+  #modes label {
+    flex:1; margin:0; text-align:center; padding:7px 4px; border-radius:var(--r-pill);
+    font-size:13.5px; font-weight:600; color:var(--muted); cursor:pointer;
+    white-space:nowrap; transition:background .16s ease, color .16s ease;
+  }
+  #modes input { position:absolute; opacity:0; width:0; height:0; }
+  #modes label:has(input:checked) {
+    background:var(--solid); color:var(--ink); box-shadow:0 1px 3px rgba(10,14,18,.16);
+  }
+  #modes label:hover:not(:has(input:checked)) { color:var(--ink); }
+
+  /* ── Route options — the selected one is the hero ──────────────────── */
+  #options { margin:12px 0 4px; }
+  .options-head {
+    color:var(--muted); font-size:10.5px; font-weight:600; letter-spacing:.08em;
+    text-transform:uppercase; margin-bottom:7px;
+  }
+  .option-card {
+    display:flex; align-items:center; gap:11px; padding:9px 11px; margin:5px 0;
+    border:1px solid var(--line); border-radius:var(--r-md); cursor:pointer;
+    background:transparent; transition:background .14s ease, border-color .14s ease;
+  }
+  .option-card:hover { background:var(--field); }
+  .option-card.selected {
+    background:var(--accent-soft); border-color:transparent;
+    box-shadow:inset 0 0 0 1.5px var(--accent); padding:13px 12px;
+  }
+  .option-card .grade {
+    flex:none; color:#fff; border-radius:10px; width:30px; height:30px;
+    display:inline-flex; align-items:center; justify-content:center;
+    font-family:var(--font-cond); font-weight:700; font-size:19px; line-height:1;
+  }
+  .option-card.selected .grade { width:44px; height:44px; font-size:28px; border-radius:12px; }
+  .opt-body { display:flex; flex-direction:column; gap:1px; min-width:0; }
+  .opt-name { font-weight:600; font-size:14.5px; }
+  .option-card.selected .opt-name {
+    font-size:11px; font-weight:700; letter-spacing:.09em; text-transform:uppercase;
+    color:var(--muted);
+  }
+  .opt-stats { color:var(--muted); font-size:13px; font-variant-numeric:tabular-nums; }
+  .option-card.selected .opt-stats {
+    color:var(--ink); font-size:16px; font-weight:600; letter-spacing:-.01em;
+  }
+
+  /* ── The route fingerprint: this ride's shape, start to finish ─────── */
+  #summary { display:none; margin-top:12px; }
+  #fingerprint {
+    background:var(--field); border-radius:var(--r-md); padding:10px 11px 11px;
+    margin:12px 0 10px;
+  }
+  .fp-head {
+    display:flex; justify-content:space-between; align-items:baseline;
+    font-size:10.5px; font-weight:600; letter-spacing:.08em; text-transform:uppercase;
+    color:var(--muted); margin-bottom:8px;
+  }
+  #classbar { display:flex; height:13px; border-radius:7px; overflow:hidden; margin:0; }
+  #ribbon { margin:9px 0 0; }
+  .stat {
+    display:flex; justify-content:space-between; align-items:baseline;
+    padding:5px 0; border-bottom:1px solid var(--line); font-size:13.5px;
+  }
+  .stat:last-of-type { border-bottom:none; }
+  .stat span { color:var(--muted); }
+  .stat b { font-variant-numeric:tabular-nums; font-weight:600; font-size:14.5px; }
+
+  .caution { color:var(--caution); margin:3px 0; font-size:13.5px; }
+  .caution a { font-size:12px; }
+  .all-clear { color:var(--ok); margin:3px 0; font-weight:500; }
+  #why { margin-top:10px; }
+  #why ul { margin:7px 0 0; padding-left:16px; }
+  #why li { margin:5px 0; color:var(--muted); font-size:13.5px; }
+  #shed-panel { display:none; background:var(--accent-soft); border-radius:var(--r-md);
+                padding:9px 11px; margin:8px 0; }
+  #shed-info { color:var(--muted); margin-top:5px; font-size:13px; }
+  #sketchy-section { display:none; border-top:1px solid var(--line); margin-top:10px;
+                     padding-top:8px; }
+  .sketchy-row { display:flex; justify-content:space-between; align-items:center; margin:3px 0; }
+  .sketchy-row button { margin:0; padding:2px 8px; font-size:12px; }
+  .legend { display:grid; grid-template-columns:14px auto; gap:5px 8px; margin-top:10px;
+            align-items:center; font-size:13px; color:var(--muted); }
+  .legend i { width:14px; height:5px; border-radius:3px; display:inline-block; }
+  .tool-row { display:flex; gap:7px; align-items:center; flex-wrap:wrap; margin:8px 0; }
+  .tool-row select, #walk-max {
+    padding:5px 8px; border-radius:var(--r-sm); border:1px solid var(--line);
+    background:var(--field); color:var(--ink); font-family:var(--font); font-size:13.5px;
+  }
+
+  /* ── Controls ──────────────────────────────────────────────────────── */
+  button {
+    margin-top:8px; margin-right:6px; padding:7px 12px; border:1px solid var(--line);
+    background:var(--field); color:var(--ink); border-radius:var(--r-sm); cursor:pointer;
+    font-family:var(--font); font-size:13.5px; font-weight:600;
+    transition:background .14s ease, border-color .14s ease;
+  }
+  button:hover { background:var(--hover); }
+  button.primary {
+    display:block; width:100%; margin:12px 0 2px; padding:12px; font-size:15.5px;
+    font-weight:700; letter-spacing:.005em; color:#fff;
+    background:var(--accent); border-color:var(--accent); border-radius:var(--r-md);
+    box-shadow:0 1px 2px rgba(10,14,18,.12);
+  }
+  button.primary:hover { background:var(--accent-hi); border-color:var(--accent-hi); }
+  input[type="checkbox"], input[type="radio"] { accent-color:var(--accent); }
+  label.toggle, .pref { display:block; margin:7px 0; user-select:none; cursor:pointer;
+                        font-size:13.5px; }
+  .pref-head { font-weight:600; margin-top:12px; font-size:13.5px; }
+  .row { display:flex; gap:7px; }
+  .footer { margin-top:12px; display:flex; gap:7px; flex-wrap:wrap; }
+  .footer button { font-size:12.5px; }
+  #error { color:var(--caution); display:none; margin-top:8px; font-weight:500; }
+  #loading { display:none; color:var(--muted); margin-top:8px; }
+
+  /* progressive disclosure: essentials on top, the rest folded away */
+  .section { margin-top:10px; border-top:1px solid var(--line); padding-top:8px; }
+  .section > summary, #why summary {
+    cursor:pointer; font-weight:600; padding:3px 0; list-style:none; font-size:13.5px;
+    display:flex; align-items:center; gap:7px;
+  }
+  .section > summary::-webkit-details-marker, #why summary::-webkit-details-marker { display:none; }
+  .section > summary::before, #why summary::before {
+    content:""; width:5px; height:5px; flex:none; border-right:1.6px solid var(--muted);
+    border-bottom:1.6px solid var(--muted); transform:rotate(-45deg);
+    transition:transform .16s ease; margin-left:2px;
+  }
+  .section[open] > summary::before, #why[open] summary::before { transform:rotate(45deg); }
+
   .opt-chip {
-    background: var(--g); color: #fff; font-size: 11px; font-weight: 700;
-    padding: 2px 8px; border-radius: 11px; white-space: nowrap; cursor: pointer;
-    box-shadow: 0 1px 4px rgba(0,0,0,.45); border: 2px solid transparent;
+    background:var(--g); color:#fff; font-size:11px; font-weight:700;
+    padding:3px 9px; border-radius:var(--r-pill); white-space:nowrap; cursor:pointer;
+    box-shadow:0 1px 5px rgba(10,14,18,.45); border:2px solid transparent;
+    font-family:var(--font); font-variant-numeric:tabular-nums;
   }
-  .opt-chip.sel { border-color: #fff; outline: 2px solid #1440a0; }
-  #sheet-handle { display: none; }
-  /* phones + small tablets: the panel is a draggable bottom sheet */
+  .opt-chip.sel { border-color:#fff; outline:2px solid var(--accent); }
+
+  /* ── Dialogs ───────────────────────────────────────────────────────── */
+  #about, #rides, #hazard {
+    max-width:560px; width:calc(100% - 40px); max-height:85vh;
+    background:var(--solid); color:var(--ink); border:none; border-radius:var(--r-lg);
+    padding:20px 24px; font-size:14px; font-family:var(--font);
+    box-shadow:0 24px 60px -12px rgba(10,14,18,.45);
+  }
+  #about::backdrop, #rides::backdrop, #hazard::backdrop {
+    background:rgba(10,14,18,.5); backdrop-filter:blur(3px);
+  }
+  #about h2, #rides h2, #hazard h2 { font-size:16px; margin:18px 0 7px; letter-spacing:-.01em; }
+  #about h2:first-of-type, #rides h2:first-of-type, #hazard h2:first-of-type {
+    margin-top:0; padding-right:30px; }
+  #about table, #rides table { border-collapse:collapse; width:100%; margin:8px 0; }
+  #about td, #about th, #rides td, #rides th {
+    border-bottom:1px solid var(--line); padding:5px 7px;
+    text-align:left; font-variant-numeric:tabular-nums; }
+  #rides td button { margin:0 2px 0 0; padding:2px 8px; font-size:12px; }
+  #about-close, #rides-close, #hazard-close { position:absolute; top:12px; right:14px; margin:0; }
+  #about ol { padding-left:18px; } #about li { margin:5px 0; }
+
+  /* ── Floating banners ──────────────────────────────────────────────── */
+  #data-update, #update-banner {
+    position:absolute; z-index:8; background:var(--surface); color:var(--ink);
+    -webkit-backdrop-filter:blur(20px) saturate(1.5); backdrop-filter:blur(20px) saturate(1.5);
+    border:1px solid var(--line); border-radius:var(--r-md); box-shadow:var(--shadow);
+    padding:9px 13px; font-size:13.5px; font-weight:500;
+  }
+  #data-update { top:12px; left:50%; transform:translateX(-50%); }
+  #update-banner { top:12px; right:12px; z-index:7; gap:9px; align-items:center; }
+
+  /* ── Navigation banner: read at arm's length, at speed ─────────────── */
+  #nav-banner {
+    display:none; position:absolute; top:12px; left:50%; transform:translateX(-50%);
+    z-index:6; background:var(--surface); color:var(--ink);
+    -webkit-backdrop-filter:blur(22px) saturate(1.6); backdrop-filter:blur(22px) saturate(1.6);
+    border:1px solid var(--line); border-radius:var(--r-lg); box-shadow:var(--shadow);
+    padding:12px 16px; min-width:280px; max-width:calc(100% - 90px); text-align:center;
+  }
+  #nav-main { display:flex; align-items:center; gap:14px; justify-content:center; }
+  #nav-icon { font-size:52px; line-height:1; }
+  #nav-texts { text-align:left; }
+  #nav-dist { font-family:var(--font-cond); font-size:44px; font-weight:700; line-height:1.02;
+              letter-spacing:-.015em; font-variant-numeric:tabular-nums; }
+  #nav-street { font-size:20px; font-weight:600; color:var(--ink); max-width:270px;
+                overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #nav-trip { display:flex; align-items:baseline; gap:11px; justify-content:center;
+              margin-top:7px; }
+  #nav-remaining { font-size:17px; font-weight:600; font-variant-numeric:tabular-nums; }
+  #nav-speed { font-size:15px; color:var(--muted); font-variant-numeric:tabular-nums; }
+  #nav-buttons button { margin-top:7px; padding:5px 11px; }
+  #nav-myway.active, #nav-net.active {
+    background:var(--accent); color:#fff; border-color:var(--accent); }
+  .nav-dot {
+    width:18px; height:18px; border-radius:50%; background:#2b6ef2;
+    border:3px solid #fff; box-shadow:0 0 0 1px rgba(10,14,18,.25), 0 0 12px rgba(43,110,242,.8);
+  }
+  body.navigating #panel { display:none; }
+
+  /* ── Phone: a bottom sheet, and the chrome gets out of the way ─────── */
+  #sheet-handle { display:none; }
   @media (max-width: 760px), (max-height: 500px) {
     #panel {
-      top: auto; bottom: 0; left: 0; right: 0; width: auto; max-height: 52%;
-      border-radius: 16px 16px 0 0; font-size: 13px;
-      padding-top: 4px; padding-bottom: calc(12px + env(safe-area-inset-bottom));
-      transition: max-height .18s ease;
+      top:auto; bottom:0; left:0; right:0; width:auto; max-height:52%;
+      border-radius:var(--r-lg) var(--r-lg) 0 0; border-bottom:none; font-size:14.5px;
+      padding:4px 14px calc(14px + env(safe-area-inset-bottom));
+      transition:max-height .2s ease;
     }
-    #panel.peek { max-height: 132px; overflow: hidden; }
-    #panel.half { max-height: 52%; }
-    #panel.full { max-height: 88%; }
+    /* the map already says where you are — the title and blurb are desktop-only */
+    #panel h1, #panel .hint { display:none; }
+    #panel.peek { max-height:186px; overflow:hidden; }
+    #panel.half { max-height:52%; }
+    #panel.full { max-height:88%; }
     #sheet-handle {
-      display: block; width: 44px; height: 5px; border-radius: 3px;
-      background: var(--border); margin: 2px auto 8px; touch-action: none; cursor: grab;
+      display:block; width:40px; height:4px; border-radius:2px;
+      background:var(--line); margin:7px auto 10px; touch-action:none; cursor:grab;
     }
-    button, select, input[type="search"] { min-height: 38px; }
-    label.toggle, #modes label { padding: 3px 0; display: inline-block; }
-    .option-card { padding: 9px 8px; }
+    button, select, input[type="search"] { min-height:40px; }
+    #modes label { padding:9px 4px; }
   }
-  button, input, select, label { touch-action: manipulation; }
-  #panel h1 { font-size: 15px; margin: 0 0 4px; }
-  #panel .hint { color: var(--muted); margin: 4px 0 8px; }
-  #search { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--border); background: var(--bg); color: var(--fg);
-            border-radius: 8px; font-size: 14px; }
-  #od { display: flex; flex-direction: column; gap: 5px; margin-bottom: 6px; }
-  #from-field { margin: 0; width: 100%; text-align: left; padding: 8px 10px; border-radius: 8px;
-                background: var(--btn-bg); font-size: 14px; }
-  #from-field.custom { border-color: #2b83ba; }
-  #from-field.picking { border-color: #2b6ef2; color: #2b6ef2; font-weight: 600; }
-  #from-field .od-ico { opacity: .8; }
-  .search-row { display: flex; gap: 4px; align-items: center; margin: 3px 0; }
-  .search-row span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .search-row button { margin: 0; padding: 2px 7px; font-size: 11px; }
-  #modes { margin: 8px 0; }
-  #modes label { margin-right: 10px; cursor: pointer; white-space: nowrap; }
-  #avoid-box { margin: 6px 0; }
-  #avoid-box summary { cursor: pointer; font-weight: 600; }
-  #avoid-box label { display: inline-block; margin: 2px 10px 2px 0; cursor: pointer; }
-  .tool-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 6px 0; }
-  .tool-row select { padding: 3px 5px; border-radius: 5px; border: 1px solid var(--border); background: var(--btn-bg); color: var(--fg); }
-  #shed-panel { display: none; background: var(--sel-bg); border-radius: 8px; padding: 7px 9px;
-                margin: 6px 0; }
-  #shed-info { color: var(--muted); margin-top: 4px; }
-  #options { margin: 8px 0 4px; }
-  .options-head { color: var(--muted); margin-bottom: 4px; }
-  .option-card {
-    display: flex; align-items: center; gap: 8px; padding: 6px 8px; margin: 4px 0;
-    border: 1px solid var(--border); border-radius: 8px; cursor: pointer;
+  button, input, select, label { touch-action:manipulation; }
+  @media (prefers-reduced-motion: reduce) {
+    * { transition-duration:.01ms !important; animation-duration:.01ms !important; }
   }
-  .option-card:hover { background: var(--hover); }
-  .option-card.selected { border-color: #6f8fe8; background: var(--sel-bg); }
-  .option-card .grade {
-    color: #fff; border-radius: 6px; min-width: 20px; height: 20px;
-    display: inline-flex; align-items: center; justify-content: center; font-size: 12px;
-  }
-  #summary { display: none; border-top: 1px solid var(--border); margin-top: 8px; padding-top: 8px; }
-  .stat { display: flex; justify-content: space-between; margin: 2px 0; }
-  .stat b { font-variant-numeric: tabular-nums; }
-  #classbar { display: flex; height: 12px; border-radius: 6px; overflow: hidden; margin: 8px 0; }
-  #ribbon { margin: 6px 0; }
-  .caution { color: var(--caution); margin: 2px 0; }
-  .caution a { font-size: 11px; }
-  .all-clear { color: var(--ok); margin: 2px 0; }
-  #why { margin-top: 8px; }
-  #why summary { cursor: pointer; font-weight: 600; }
-  #why ul { margin: 6px 0 0; padding-left: 18px; }
-  #why li { margin: 4px 0; color: var(--fg); opacity: .85; }
-  #sketchy-section { display: none; border-top: 1px solid var(--border); margin-top: 8px; padding-top: 6px; }
-  .sketchy-row { display: flex; justify-content: space-between; align-items: center; margin: 2px 0; }
-  .sketchy-row button { margin: 0; padding: 1px 6px; font-size: 11px; }
-  .legend { display: grid; grid-template-columns: 14px auto; gap: 3px 7px; margin-top: 8px;
-            align-items: center; }
-  .legend i { width: 14px; height: 5px; border-radius: 2px; display: inline-block; }
-  button { margin-top: 8px; margin-right: 6px; padding: 5px 10px; border: 1px solid var(--border);
-           background: var(--btn-bg); color: var(--fg); border-radius: 6px; cursor: pointer; }
-  button:hover { background: var(--hover); }
-  label.toggle { display: block; margin-top: 6px; user-select: none; cursor: pointer; }
-  #error { color: #b00; display: none; margin-top: 6px; }
-  #loading { display: none; color: var(--muted); margin-top: 6px; }
-  #about, #rides, #hazard { max-width: 540px; width: calc(100% - 40px); max-height: 85vh;
-           background: var(--bg); color: var(--fg);
-           border: none; border-radius: 12px; padding: 18px 22px; font-size: 13px;
-           box-shadow: 0 6px 30px rgba(0,0,0,.35); }
-  #about::backdrop, #rides::backdrop, #hazard::backdrop { background: rgba(0,0,0,.45); }
-  #about h2, #rides h2, #hazard h2 { font-size: 15px; margin: 14px 0 6px; }
-  #about h2:first-of-type, #rides h2:first-of-type, #hazard h2:first-of-type { margin-top: 0; padding-right: 30px; }
-  #about table, #rides table { border-collapse: collapse; width: 100%; margin: 6px 0; }
-  #about td, #about th, #rides td, #rides th {
-    border-bottom: 1px solid var(--border); padding: 3px 6px;
-    text-align: left; font-variant-numeric: tabular-nums; }
-  #rides td button { margin: 0 2px 0 0; padding: 1px 7px; font-size: 11px; }
-  #about-close, #rides-close, #hazard-close { position: absolute; top: 10px; right: 12px; margin: 0; }
-  #about ol { padding-left: 18px; } #about li { margin: 4px 0; }
-  #data-update {
-    position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
-    z-index: 8; background: var(--sel-bg); color: var(--fg); border: 1px solid #6f8fe8;
-    border-radius: 10px; padding: 6px 12px; font-size: 13px;
-    box-shadow: 0 2px 10px rgba(0,0,0,.25);
-  }
-  #update-banner {
-    position: absolute; top: 10px; right: 10px; z-index: 7; gap: 8px;
-    align-items: center; background: var(--sel-bg); color: var(--fg);
-    border: 1px solid #6f8fe8; border-radius: 10px; padding: 8px 12px;
-    box-shadow: 0 2px 10px rgba(0,0,0,.25); font-size: 13px;
-  }
-  #nav-banner {
-    display: none; position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
-    z-index: 6; background: var(--bg); color: var(--fg); border-radius: 12px;
-    box-shadow: 0 3px 14px rgba(0,0,0,.35); padding: 10px 14px; min-width: 260px;
-    max-width: calc(100% - 90px); text-align: center;
-  }
-  #nav-main { display: flex; align-items: center; gap: 14px; justify-content: center; }
-  /* sized to be read at a glance from a handlebar at speed, not up close */
-  #nav-icon { font-size: 52px; line-height: 1; }
-  #nav-texts { text-align: left; }
-  #nav-dist { font-size: 40px; font-weight: 800; line-height: 1.05;
-              font-variant-numeric: tabular-nums; }
-  #nav-street { font-size: 20px; font-weight: 600; color: var(--fg); max-width: 260px;
-                overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #nav-trip { display: flex; align-items: baseline; gap: 10px; justify-content: center;
-              margin-top: 6px; }
-  #nav-remaining { font-size: 17px; font-weight: 600; color: var(--fg);
-                   font-variant-numeric: tabular-nums; }
-  #nav-speed { font-size: 15px; color: var(--muted); font-variant-numeric: tabular-nums; }
-  #nav-buttons button { margin-top: 6px; padding: 4px 10px; }
-  #nav-myway.active, #nav-net.active { background: #2b6ef2; color: #fff; border-color: #2b6ef2; }
-  .nav-dot {
-    width: 18px; height: 18px; border-radius: 50%; background: #2b6ef2;
-    border: 3px solid #fff; box-shadow: 0 0 8px rgba(43,110,242,.9);
-  }
-  body.navigating #panel { display: none; }
-  /* progressive disclosure: essentials on top, the rest in collapsed sections */
-  .section { margin-top: 8px; border-top: 1px solid var(--border); padding-top: 6px; }
-  .section > summary { cursor: pointer; font-weight: 600; padding: 3px 0; list-style: none; }
-  .section > summary::-webkit-details-marker { display: none; }
-  .section > summary::before { content: "\25b8  "; color: var(--muted); }
-  .section[open] > summary::before { content: "\25be  "; }
-  .pref { display: block; margin: 4px 0; cursor: pointer; }
-  .pref-head { font-weight: 600; margin-top: 10px; }
-  .row { display: flex; gap: 6px; }
-  .footer { margin-top: 10px; display: flex; gap: 6px; flex-wrap: wrap; }
-  .footer button { font-size: 12px; }
-  button.primary {
-    display: block; width: 100%; margin: 10px 0 2px; padding: 11px; font-size: 15px;
-    font-weight: 700; color: #fff; background: #1a9850; border-color: #1a9850;
-  }
-  button.primary:hover { background: #178a45; }
 </style>
 </head>
 <body>
@@ -251,13 +390,16 @@
   <div id="loading">routing…</div>
   <div id="options" style="display:none"></div>
   <div id="summary">
+    <div id="fingerprint">
+      <div class="fp-head"><span>The ride</span><span>start → finish</span></div>
+      <div id="classbar"></div>
+      <div id="ribbon" title="the ride, start to finish: stress colors on top, elevation profile below, ▲ = busy crossing"></div>
+    </div>
     <div class="stat"><span>Route</span><b id="s-dist"></b></div>
     <div class="stat"><span>Riding time</span><b id="s-time"></b></div>
     <div class="stat"><span>Protected / off-street</span><b id="s-prot"></b></div>
     <div class="stat"><span>Quiet streets</span><b id="s-quiet"></b></div>
     <div class="stat"><span>vs. shortest route</span><b id="s-detour"></b></div>
-    <div id="classbar"></div>
-    <div id="ribbon" title="the ride, start to finish: stress colors on top, elevation profile below, ▲ = busy crossing"></div>
     <div id="cautions"></div>
     <details id="why" open>
       <summary>Why this route?</summary>
