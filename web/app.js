@@ -1,5 +1,5 @@
 import { isNativeApp, isNewerAppVersion, nativeSpeak, openExternal, startBackgroundWatcher, stopBackgroundWatcher, } from "./native.js";
-import { bearingDeg, buildAlerts, buildManeuvers, buildTrack, distM, snapToTrack, sunsetTime, trackBearing, } from "./nav.js";
+import { bearingDeg, buildAlerts, buildManeuvers, buildTrack, distM, snapToTrack, sunsetTime, trackBearingAhead, trackSlice, } from "./nav.js";
 import { addHazard, buildReportText, downscalePhoto, getHazardPhoto, HAZARD_LABELS, listHazards, removeHazard, } from "./hazards.js";
 import { clearRecent, deletePlace, emojiFor, listPlaces, listRecent, pushRecent, savePlace, } from "./places.js";
 import { clearRides, deleteRide, loadRides, RideRecorder, rideTotals, saveRide, } from "./rides.js";
@@ -290,7 +290,14 @@ async function refreshNetworkTiles() {
         return; // a newer move superseded this fetch
     src.setData({ type: "FeatureCollection", features });
 }
-map.on("moveend", () => void refreshNetworkTiles());
+// Debounced: the follow camera drives the map every animation frame while
+// navigating, and each move fires moveend — without this the whole network
+// layer would be re-queried and re-rendered ~60x/second mid-ride.
+let netRefreshTimer;
+map.on("moveend", () => {
+    window.clearTimeout(netRefreshTimer);
+    netRefreshTimer = window.setTimeout(() => void refreshNetworkTiles(), 300);
+});
 void dataReady
     .then(() => loadJson("keys.json"))
     .then((keys) => {
@@ -1470,6 +1477,16 @@ map.on("load", () => {
         filter: ["==", ["get", "walk"], true],
         paint: { "line-color": "#ffffff", "line-width": 2.5, "line-dasharray": [1.5, 1.5] },
     });
+    // the part already ridden, greyed over the coloured route so how far you've
+    // come reads at a glance while navigating
+    map.addSource("route-done", { type: "geojson", data: emptyFC() });
+    map.addLayer({
+        id: "route-done",
+        type: "line",
+        source: "route-done",
+        layout: { "line-cap": "round", "line-join": "round", visibility: "none" },
+        paint: { "line-color": "#8a8f98", "line-width": 6, "line-opacity": 0.85 },
+    });
     map.addSource("construction", { type: "geojson", data: emptyFC() });
     map.addLayer({
         id: "construction-lines",
@@ -2431,8 +2448,25 @@ const OFF_ROUTE_STRIKES = 3;
 const MAX_GPS_ACCURACY_M = 50;
 /** Minimum time between automatic reroutes. */
 const REROUTE_COOLDOWN_MS = 10000;
-const ANNOUNCE_FAR_M = 90;
-const ANNOUNCE_NOW_M = 25;
+// Turn calls are timed, not fixed-distance: 90 m is 40 s of warning at a kid's
+// pace but only 13 s on a fast descent. Announce N seconds out, clamped so the
+// call is never absurdly early or too late to act on.
+const ANNOUNCE_FAR_S = 25;
+const ANNOUNCE_NEAR_S = 10;
+const ANNOUNCE_NOW_S = 4;
+const ANNOUNCE_FAR_CLAMP = [60, 200];
+const ANNOUNCE_NEAR_CLAMP = [30, 80];
+const ANNOUNCE_NOW_CLAMP = [12, 30];
+/** Chain the following turn into the call when it lands right after. */
+const THEN_CHAIN_M = 45;
+/** Snap the dot to the route while within this of it (beyond = show real GPS,
+ * so being genuinely off-route is visible rather than hidden). */
+const SNAP_DISPLAY_M = 25;
+/** Follow-camera zooms: cruising, and tightened near a maneuver. */
+const NAV_ZOOM_CRUISE = 16.4;
+const NAV_ZOOM_TURN = 17.4;
+const NAV_ZOOM_TURN_M = 90;
+const NAV_PITCH = 50;
 let navActive = false;
 let navWatchId = null;
 let navTrack = null;
@@ -2460,6 +2494,25 @@ let navLastRerouteAt = 0;
 let navMyWay = localStorage.getItem("navMyWay") === "1";
 let navPrevPos = null;
 let navHeading = null;
+// --- smooth motion (the "feels like Google Maps" layer) -------------------
+// GPS fixes land ~1/s. Rather than teleporting the dot and firing a competing
+// easeTo per fix, every fix sets a TARGET and one rAF loop eases the dot and
+// camera toward it continuously.
+let navRaf = null;
+/** Where the dot is drawn right now, and where it's heading. */
+let navPosShown = null;
+let navPosTarget = null;
+let navBearingShown = 0;
+let navBearingTarget = 0;
+let navZoomTarget = NAV_ZOOM_CRUISE;
+/** Rider's own zoom wins until they hit recenter — no yanking back mid-glance. */
+let navUserZoom = false;
+/** True mid-gesture: the follow camera keeps its hands off so it can't cut
+ * the rider's own pinch/scroll inertia short. */
+let navInteracting = false;
+/** Smoothed speed (m/s) used to time the turn calls. */
+let navSpeed = 0;
+let navLastFixAt = 0;
 let recorder = null;
 let recordMode = false;
 let recordWatchId = null;
@@ -2508,15 +2561,26 @@ function rebuildNavFromSelected() {
     navHalfway = false;
     return true;
 }
+/** Distance / ETA line. `straight` marks an off-route estimate (as the crow
+ * flies) so the number is honest rather than frozen at its last on-route value. */
+function navUpdateTrip(remainingM, straight = false) {
+    // ETA off measured pace when we have it, profile pace before then
+    const kmh = navSpeed > 1.0 ? (navSpeed * 3600) / 1000 : PROFILES[profileId].paceKmh;
+    const mins = Math.round((remainingM / 1000 / kmh) * 60);
+    const eta = new Date(Date.now() + mins * 60000);
+    const clock = eta.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    el("nav-remaining").textContent =
+        `${straight ? "~" : ""}${fmtDist(remainingM)} · ${mins} min · arrive ${clock}`;
+    el("nav-speed").textContent =
+        navSpeed > 0.8 ? `${((navSpeed * 3600) / 1000).toFixed(0)} km/h` : "";
+}
 function navUpdateBanner(distToNext, remainingM) {
     const m = navManeuvers[navNext];
     el("nav-icon").textContent = m?.icon ?? "⬆";
     el("nav-dist").textContent =
         distToNext < 15 ? "now" : fmtDist(Math.round(distToNext / 10) * 10);
     el("nav-street").textContent = m?.text ?? "";
-    const mins = Math.round((remainingM / 1000 / PROFILES[profileId].paceKmh) * 60);
-    el("nav-remaining").textContent =
-        `${fmtDist(remainingM)} to go · ~${mins} min`;
+    navUpdateTrip(remainingM);
 }
 function toFix(pos) {
     return {
@@ -2530,12 +2594,83 @@ function toFix(pos) {
 function navOnPosition(pos) {
     navOnFix(toFix(pos));
 }
+/** Shortest signed angle a -> b, in degrees. */
+function angleDelta(a, b) {
+    return ((((b - a) % 360) + 540) % 360) - 180;
+}
+/** One continuous loop drives the dot and the follow camera toward the latest
+ * fix. Fixes arrive ~1/s; easing every frame keeps motion smooth instead of
+ * teleporting the dot while a queue of 900 ms camera eases fight each other. */
+function navAnimate() {
+    navRaf = null;
+    if (!navActive)
+        return;
+    if (navPosTarget) {
+        const cur = navPosShown ?? navPosTarget;
+        const k = 0.18; // keeps up with a fix/sec without looking twitchy
+        const next = [
+            cur[0] + (navPosTarget[0] - cur[0]) * k,
+            cur[1] + (navPosTarget[1] - cur[1]) * k,
+        ];
+        navPosShown = distM(next, navPosTarget) < 0.3 ? navPosTarget : next;
+        navDot?.setLngLat(navPosShown);
+    }
+    if (navFollowing && navPosShown && !navInteracting) {
+        navBearingShown =
+            (navBearingShown + angleDelta(navBearingShown, navBearingTarget) * 0.12 + 360) % 360;
+        const curZoom = map.getZoom();
+        const zoom = navUserZoom ? curZoom : curZoom + (navZoomTarget - curZoom) * 0.06;
+        // Only touch the camera when something actually moved. jumpTo fires a full
+        // movestart/zoomstart/moveend cycle, so writing every frame spams events
+        // (and burns battery) even when the rider is sitting still at a light.
+        const c = map.getCenter();
+        const moved = Math.abs(c.lng - navPosShown[0]) > 1e-7 ||
+            Math.abs(c.lat - navPosShown[1]) > 1e-7 ||
+            Math.abs(angleDelta(map.getBearing(), navBearingShown)) > 0.05 ||
+            Math.abs(zoom - curZoom) > 0.002;
+        if (moved) {
+            map.jumpTo({ center: navPosShown, bearing: navBearingShown, zoom, pitch: NAV_PITCH });
+        }
+    }
+    navRaf = requestAnimationFrame(navAnimate);
+}
+function navStartAnimation() {
+    if (navRaf === null)
+        navRaf = requestAnimationFrame(navAnimate);
+}
+function navStopAnimation() {
+    if (navRaf !== null)
+        cancelAnimationFrame(navRaf);
+    navRaf = null;
+    navPosShown = null;
+    navPosTarget = null;
+}
+/** Metres of warning for a turn call: `secs` of riding at the current pace,
+ * clamped so it's neither absurdly early nor too late to react. */
+function announceDist(secs, [lo, hi]) {
+    const speed = navSpeed > 0.8 ? navSpeed : (PROFILES[profileId].paceKmh * 1000) / 3600;
+    return Math.max(lo, Math.min(hi, speed * secs));
+}
 function navOnFix(fix) {
     if (!navActive || !navTrack || !router)
         return;
     const lon = fix.lon;
     const lat = fix.lat;
     navLastPos = [lon, lat];
+    // smoothed ground speed, for timing the turn calls
+    const now = Date.now();
+    if (fix.speed !== null && fix.speed !== undefined && fix.speed >= 0) {
+        navSpeed = navSpeed === 0 ? fix.speed : navSpeed * 0.6 + fix.speed * 0.4;
+    }
+    else if (navPrevPos && navLastFixAt) {
+        const dt = (now - navLastFixAt) / 1000;
+        if (dt > 0.2) {
+            const v = distM(navPrevPos, [lon, lat]) / dt;
+            if (v < 25)
+                navSpeed = navSpeed === 0 ? v : navSpeed * 0.7 + v * 0.3;
+        }
+    }
+    navLastFixAt = now;
     // travel direction: GPS heading when moving, else derived from movement
     const gpsHeading = fix.heading;
     if (gpsHeading !== null && !Number.isNaN(gpsHeading) && (fix.speed ?? 0) > 0.7) {
@@ -2547,15 +2682,19 @@ function navOnFix(fix) {
     if (!navPrevPos || distM(navPrevPos, [lon, lat]) > 3)
         navPrevPos = [lon, lat];
     recorder?.addPoint(Date.now(), lon, lat, router.edgeClassAt(lon, lat));
+    const snap = snapToTrack(navTrack, lon, lat, navHint);
+    // Draw the dot ON the route while we're plausibly on it — raw bike GPS
+    // wanders 5-15 m, which visibly drifts the dot into buildings and across
+    // the street. Beyond SNAP_DISPLAY_M show the true position, so actually
+    // being off-route reads as off-route instead of being hidden by snapping.
+    navPosTarget = snap.offM <= SNAP_DISPLAY_M ? snap.pos : [lon, lat];
     if (!navDot) {
         const dot = document.createElement("div");
         dot.className = "nav-dot";
-        navDot = new maplibregl.Marker({ element: dot }).setLngLat([lon, lat]).addTo(map);
+        navDot = new maplibregl.Marker({ element: dot }).setLngLat(navPosTarget).addTo(map);
+        navPosShown = navPosTarget;
     }
-    else {
-        navDot.setLngLat([lon, lat]);
-    }
-    const snap = snapToTrack(navTrack, lon, lat, navHint);
+    navStartAnimation();
     // off-route: a few good fixes in a row trigger a reroute to the destination
     // (like Google Maps — ride wherever you like, the route follows you)
     if (snap.offM > OFF_ROUTE_M) {
@@ -2567,6 +2706,13 @@ function navOnFix(fix) {
         el("nav-icon").textContent = "↩";
         el("nav-dist").textContent = "off route";
         el("nav-street").textContent = "adjusting…";
+        // keep the trip line live instead of freezing on the last on-route value:
+        // straight-line to the destination is the honest estimate while off-route
+        if (navDest)
+            navUpdateTrip(distM([lon, lat], navDest), true);
+        // follow the rider's own direction while they're off the line
+        if (navHeading !== null)
+            navBearingTarget = navHeading;
         const now = Date.now();
         if (navOffCount >= OFF_ROUTE_STRIKES && navDest && now - navLastRerouteAt > REROUTE_COOLDOWN_MS) {
             navOffCount = 0;
@@ -2602,15 +2748,27 @@ function navOnFix(fix) {
     const distToNext = Math.max(0, (next?.atM ?? 0) - snap.alongM);
     const remaining = Math.max(0, navTrack.totalM - snap.alongM);
     navUpdateBanner(distToNext, remaining);
-    if (next && navAnnounceStage < 2 && distToNext <= ANNOUNCE_NOW_M) {
-        speak(next.voice);
-        vibrate([200]);
-        navAnnounceStage = 2;
-    }
-    else if (next && navAnnounceStage < 1 && distToNext <= ANNOUNCE_FAR_M) {
-        speak(`in ${Math.round(distToNext / 10) * 10} meters, ${next.voice}`);
-        vibrate([100]);
-        navAnnounceStage = 1;
+    if (next) {
+        // chain a turn that lands right after this one ("left, then right") so a
+        // quick pair isn't two calls on top of each other
+        const after = navManeuvers[navNext + 1];
+        const chain = after && after.atM - next.atM <= THEN_CHAIN_M ? `, then ${after.voice}` : "";
+        if (navAnnounceStage < 3 && distToNext <= announceDist(ANNOUNCE_NOW_S, ANNOUNCE_NOW_CLAMP)) {
+            speak(`${next.voice}${chain}`);
+            vibrate([200]);
+            navAnnounceStage = 3;
+        }
+        else if (navAnnounceStage < 2 &&
+            distToNext <= announceDist(ANNOUNCE_NEAR_S, ANNOUNCE_NEAR_CLAMP)) {
+            speak(`in ${Math.round(distToNext / 10) * 10} meters, ${next.voice}${chain}`);
+            vibrate([100]);
+            navAnnounceStage = 2;
+        }
+        else if (navAnnounceStage < 1 &&
+            distToNext <= announceDist(ANNOUNCE_FAR_S, ANNOUNCE_FAR_CLAMP)) {
+            speak(`in ${Math.round(distToNext / 50) * 50} meters, ${next.voice}`);
+            navAnnounceStage = 1;
+        }
     }
     // hazard alerts (voice + distinct buzz), announced ~100 m out
     while (navAlertNext < navAlerts.length && (navAlerts[navAlertNext]?.atM ?? 0) < snap.alongM - 10) {
@@ -2647,15 +2805,19 @@ function navOnFix(fix) {
             finishAndSaveRide();
         }
     }
-    if (navFollowing) {
-        map.easeTo({
-            center: [lon, lat],
-            zoom: 16.8,
-            pitch: 50,
-            bearing: trackBearing(navTrack, snap.idx),
-            duration: 900,
-        });
+    // dim the ridden part of the route so progress reads at a glance
+    getSource("route-done").setData({
+        type: "Feature",
+        properties: {},
+        geometry: { type: "LineString", coordinates: trackSlice(navTrack, snap.alongM) },
+    });
+    // Camera targets — the rAF loop eases toward these. Bearing is averaged over
+    // the track ahead (a per-segment bearing swings wildly on twisty paths), and
+    // held steady when stopped so the map doesn't spin in place.
+    if (navSpeed > 0.8 || navBearingTarget === 0) {
+        navBearingTarget = trackBearingAhead(navTrack, snap.idx, snap.alongM);
     }
+    navZoomTarget = distToNext <= NAV_ZOOM_TURN_M ? NAV_ZOOM_TURN : NAV_ZOOM_CRUISE;
 }
 async function startNav() {
     if (!rebuildNavFromSelected())
@@ -2668,10 +2830,17 @@ async function startNav() {
     el("nav-resume").style.display = "none";
     navActive = true;
     navFollowing = true;
+    navUserZoom = false;
+    navSpeed = 0;
+    navLastFixAt = 0;
+    navBearingShown = map.getBearing();
+    navBearingTarget = 0;
+    navZoomTarget = NAV_ZOOM_CRUISE;
     recorder = new RideRecorder();
     document.body.classList.add("navigating");
     el("nav-banner").style.display = "block";
     el("nav-recenter").style.display = "none";
+    map.setLayoutProperty("route-done", "visibility", "visible");
     try {
         wakeLock = await navigator.wakeLock.request("screen");
     }
@@ -2705,12 +2874,15 @@ function exitNav() {
     navBgWatcherId = null;
     void wakeLock?.release().catch(() => undefined);
     wakeLock = null;
+    navStopAnimation();
     navDot?.remove();
     navDot = null;
     if ("speechSynthesis" in window)
         window.speechSynthesis.cancel();
     document.body.classList.remove("navigating");
     el("nav-banner").style.display = "none";
+    map.setLayoutProperty("route-done", "visibility", "none");
+    getSource("route-done").setData(emptyFC());
     const threeD = el("show-3d").checked;
     map.easeTo({ pitch: threeD ? 60 : 0, bearing: 0, duration: 800 });
 }
@@ -2899,6 +3071,7 @@ el("nav-mute").addEventListener("click", () => {
 });
 el("nav-recenter").addEventListener("click", () => {
     navFollowing = true;
+    navUserZoom = false; // hand the zoom back to the follow camera
     el("nav-recenter").style.display = "none";
 });
 map.on("dragstart", () => {
@@ -2907,6 +3080,48 @@ map.on("dragstart", () => {
         el("nav-recenter").style.display = "inline-block";
     }
 });
+// A pinch/scroll zoom while navigating is the rider deliberately looking
+// further ahead — keep their zoom (the old code re-applied its own every fix,
+// so zooming out snapped back within a second) until they tap recenter.
+map.on("zoomstart", (e) => {
+    if (navActive && e.originalEvent) {
+        navUserZoom = true;
+        el("nav-recenter").style.display = "inline-block";
+    }
+});
+// The follow camera writes the map every animation frame, which would fight
+// (and cancel) the rider's own pinch/scroll before MapLibre could even start
+// the gesture. Back off the moment they touch the map, resume shortly after.
+let navInteractTimer;
+function pauseFollowForInput() {
+    if (!navActive)
+        return;
+    navInteracting = true;
+    window.clearTimeout(navInteractTimer);
+    navInteractTimer = window.setTimeout(() => {
+        navInteracting = false;
+    }, 500);
+}
+/** The rider took the zoom: keep it until they tap recenter. */
+function takeZoomControl() {
+    if (!navActive)
+        return;
+    navUserZoom = true;
+    el("nav-recenter").style.display = "inline-block";
+}
+// Bound to the map's own input events, not a canvas listener (wheel/touch land
+// on MapLibre's overlay containers, which don't bubble through the leaf canvas)
+// and not to zoomstart (handler-driven zooms don't reliably carry originalEvent).
+map.on("wheel", () => {
+    pauseFollowForInput();
+    takeZoomControl();
+});
+map.on("touchstart", (e) => {
+    pauseFollowForInput();
+    if ((e.originalEvent?.touches.length ?? 0) >= 2)
+        takeZoomControl(); // pinch
+});
+map.on("mousedown", pauseFollowForInput);
 // ---------------------------------------------------------------------------
 // offline: pre-cache basemap tiles along the selected route (zooms 13-16,
 // ~1-tile corridor) into the service worker's tile cache

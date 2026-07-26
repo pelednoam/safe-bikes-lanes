@@ -155,13 +155,19 @@
     box-shadow: 0 3px 14px rgba(0,0,0,.35); padding: 10px 14px; min-width: 260px;
     max-width: calc(100% - 90px); text-align: center;
   }
-  #nav-main { display: flex; align-items: center; gap: 12px; justify-content: center; }
-  #nav-icon { font-size: 34px; line-height: 1; }
+  #nav-main { display: flex; align-items: center; gap: 14px; justify-content: center; }
+  /* sized to be read at a glance from a handlebar at speed, not up close */
+  #nav-icon { font-size: 52px; line-height: 1; }
   #nav-texts { text-align: left; }
-  #nav-dist { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
-  #nav-street { font-size: 15px; color: var(--muted); max-width: 220px;
+  #nav-dist { font-size: 40px; font-weight: 800; line-height: 1.05;
+              font-variant-numeric: tabular-nums; }
+  #nav-street { font-size: 20px; font-weight: 600; color: var(--fg); max-width: 260px;
                 overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #nav-remaining { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  #nav-trip { display: flex; align-items: baseline; gap: 10px; justify-content: center;
+              margin-top: 6px; }
+  #nav-remaining { font-size: 17px; font-weight: 600; color: var(--fg);
+                   font-variant-numeric: tabular-nums; }
+  #nav-speed { font-size: 15px; color: var(--muted); font-variant-numeric: tabular-nums; }
   #nav-buttons button { margin-top: 6px; padding: 4px 10px; }
   #nav-myway.active { background: #2b6ef2; color: #fff; border-color: #2b6ef2; }
   .nav-dot {
@@ -203,7 +209,10 @@
       <div id="nav-street">–</div>
     </div>
   </div>
-  <div id="nav-remaining"></div>
+  <div id="nav-trip">
+    <span id="nav-remaining"></span>
+    <span id="nav-speed"></span>
+  </div>
   <div id="nav-tools">
     <button id="nav-water" title="detour to nearest water fountain">🚰</button>
     <button id="nav-restroom" title="detour to nearest restroom">🚻</button>

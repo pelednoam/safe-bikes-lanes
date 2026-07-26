@@ -29,6 +29,9 @@ export interface Snap {
   offM: number;
   /** Meters traveled along the route. */
   alongM: number;
+  /** The GPS point projected onto the route — what the position dot should
+   * show, so bike GPS wander doesn't drift it off the line. */
+  pos: [number, number];
 }
 
 const M_PER_DEG_LAT = 110_540;
@@ -178,7 +181,7 @@ export function snapToTrack(track: Track, lon: number, lat: number, hintIdx = -1
   const { coords, cumM } = track;
   const kx = mPerDegLon(lat);
   const search = (lo: number, hi: number): Snap => {
-    let best: Snap = { idx: Math.max(lo, 0), offM: Infinity, alongM: 0 };
+    let best: Snap = { idx: Math.max(lo, 0), offM: Infinity, alongM: 0, pos: [lon, lat] };
     for (let i = Math.max(lo, 0); i < Math.min(hi, coords.length - 1); i++) {
       const a = coords[i] as [number, number];
       const b = coords[i + 1] as [number, number];
@@ -193,7 +196,12 @@ export function snapToTrack(track: Track, lon: number, lat: number, hintIdx = -1
       const off = Math.hypot(dx, dy);
       if (off < best.offM) {
         const segLen = Math.sqrt(len2);
-        best = { idx: i, offM: off, alongM: (cumM[i] as number) + t * segLen };
+        best = {
+          idx: i,
+          offM: off,
+          alongM: (cumM[i] as number) + t * segLen,
+          pos: [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])],
+        };
       }
     }
     return best;
@@ -331,4 +339,40 @@ export function trackBearing(track: Track, idx: number): number {
   const b = track.coords[Math.max(1, Math.min(idx + 1, track.coords.length - 1))];
   if (!a || !b) return 0;
   return (bearingDeg(a, b) + 360) % 360;
+}
+
+/** Bearing averaged over the next `aheadM` metres of track — damps the wild
+ * swings a per-segment bearing gives on twisty paths. */
+export function trackBearingAhead(track: Track, idx: number, alongM: number, aheadM = 60): number {
+  const { coords, cumM } = track;
+  const a = coords[Math.max(0, Math.min(idx, coords.length - 2))];
+  if (!a) return 0;
+  let j = Math.min(idx + 1, coords.length - 1);
+  while (j < coords.length - 1 && (cumM[j] as number) - alongM < aheadM) j++;
+  const b = coords[j];
+  if (!b) return 0;
+  return (bearingDeg(a, b) + 360) % 360;
+}
+
+/** The first `uptoM` metres of the track as a coordinate list (the ridden
+ * portion, drawn dimmed so progress is visible at a glance). */
+export function trackSlice(track: Track, uptoM: number): [number, number][] {
+  const { coords, cumM } = track;
+  const out: [number, number][] = [];
+  for (let i = 0; i < coords.length; i++) {
+    const at = cumM[i] as number;
+    if (at >= uptoM) {
+      // interpolate the partial segment so the dim line ends exactly at you
+      const prev = coords[i - 1];
+      const prevM = cumM[i - 1] ?? 0;
+      const cur = coords[i] as [number, number];
+      if (prev && at > prevM) {
+        const t = (uptoM - prevM) / (at - prevM);
+        out.push([prev[0] + t * (cur[0] - prev[0]), prev[1] + t * (cur[1] - prev[1])]);
+      }
+      break;
+    }
+    out.push(coords[i] as [number, number]);
+  }
+  return out;
 }

@@ -7,6 +7,9 @@ import {
   buildTrack,
   snapToTrack,
   sunsetTime,
+  trackBearing,
+  trackBearingAhead,
+  trackSlice,
   turnAngle,
 } from "../src/nav.js";
 import type { LineFeature, ProtectionClass, RibbonSeg, RoutePayload } from "../src/types.js";
@@ -167,6 +170,45 @@ describe("snapToTrack", () => {
     // point near the corner: with a hint at the start, still resolves sanely
     const snap = snapToTrack(track, LON + 99 * DLON, LAT + 1 * DLAT, 0);
     expect(snap.alongM).toBeGreaterThan(90);
+  });
+
+  it("returns the point projected ONTO the route (what the dot draws)", () => {
+    const track = buildTrack(lRoute());
+    // 10 m south of the eastbound leg: the snapped point sits back on the line
+    const snap = snapToTrack(track, LON + 50 * DLON, LAT - 10 * DLAT);
+    expect(snap.pos[1]).toBeCloseTo(LAT, 5); // pulled back onto the leg
+    expect(snap.pos[0]).toBeCloseTo(LON + 50 * DLON, 5); // kept its along-position
+    // and the projected point is genuinely on the track (offset ~0)
+    expect(snapToTrack(track, snap.pos[0], snap.pos[1]).offM).toBeLessThan(0.5);
+  });
+});
+
+describe("trackSlice (ridden-progress line)", () => {
+  it("returns the ridden prefix, ending exactly at the rider", () => {
+    const track = buildTrack(lRoute());
+    const done = trackSlice(track, 50);
+    expect(done.length).toBeGreaterThanOrEqual(2);
+    const last = done[done.length - 1] as [number, number];
+    // ends mid-first-leg, at ~50 m along
+    expect(snapToTrack(track, last[0], last[1]).alongM).toBeCloseTo(50, 0);
+  });
+
+  it("is empty at the start and the whole track at the end", () => {
+    const track = buildTrack(lRoute());
+    expect(trackSlice(track, 0).length).toBe(0);
+    expect(trackSlice(track, track.totalM + 100).length).toBe(track.coords.length);
+  });
+});
+
+describe("trackBearingAhead", () => {
+  it("averages over the track ahead instead of one twitchy segment", () => {
+    const track = buildTrack(lRoute());
+    // near the corner of the L: the per-segment bearing is the old leg (~90),
+    // while looking ahead blends toward the new leg
+    const ahead = trackBearingAhead(track, 0, 0, 1000);
+    const seg = trackBearing(track, 0);
+    expect(seg).toBeCloseTo(90, 0);
+    expect(Math.abs(ahead - seg)).toBeGreaterThan(5);
   });
 });
 
