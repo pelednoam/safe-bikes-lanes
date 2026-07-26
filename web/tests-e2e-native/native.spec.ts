@@ -116,6 +116,33 @@ test("update banner appears when the site has a newer release", async ({ page })
   await expect(page.locator("#update-text")).toContainText("app-v999");
 });
 
+test("tapping install actually requests the APK", async ({ page }) => {
+  // Regression: this used to go through the Capacitor Browser plugin, which
+  // opens a Chrome Custom Tab — Custom Tabs silently drop file downloads, so
+  // the button did nothing at all. It must now request the APK itself (the
+  // WebView's DownloadListener hands that off to the system browser).
+  await nativeShim(page);
+  await page.route("**/version.json", (route) => {
+    const remote = route.request().url().includes("github.io");
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ version: remote ? "app-v999" : "app-v17" }),
+    });
+  });
+  let apkRequested = false;
+  await page.route("**/family-bike-router.apk", (route) => {
+    apkRequested = true;
+    // don't actually navigate away in the test
+    void route.abort();
+  });
+  await page.goto("/");
+  await expect(page.locator("#update-banner")).toBeVisible({ timeout: 30_000 });
+  await page.locator("#update-get").click();
+  await expect.poll(() => apkRequested, { timeout: 10_000 }).toBe(true);
+  // and the rider is told where the download went
+  await expect(page.locator("#update-text")).toContainText(/notification/i);
+});
+
 test("fresh-data download shows the progress banner then clears", async ({ page }) => {
   await nativeShim(page);
   // remote data build is newer -> app downloads layers from the "website",

@@ -1,4 +1,4 @@
-import { isNativeApp, isNewerAppVersion, nativeSpeak, openExternal, startBackgroundWatcher, stopBackgroundWatcher, } from "./native.js";
+import { isNativeApp, isNewerAppVersion, nativeSpeak, startDownload, startBackgroundWatcher, stopBackgroundWatcher, } from "./native.js";
 import { bearingDeg, buildAlerts, buildManeuvers, buildTrack, distM, snapToTrack, sunsetTime, trackBearingAhead, trackSlice, } from "./nav.js";
 import { addHazard, buildReportText, downscalePhoto, getHazardPhoto, HAZARD_LABELS, listHazards, removeHazard, } from "./hazards.js";
 import { clearRecent, deletePlace, emojiFor, listPlaces, listRecent, pushRecent, savePlace, } from "./places.js";
@@ -3307,19 +3307,14 @@ async function checkAppUpdate() {
             `Update available: ${bundled.version} → ${latest.version}`;
         banner.style.display = "flex";
         const getBtn = el("update-get");
-        getBtn.href = APK_URL; // static fallback so a tap works even without JS
+        getBtn.href = APK_URL; // plain link: works even if the handler never runs
         const text = el("update-text");
-        const label = `Update available: ${bundled.version} → ${latest.version}`;
         getBtn.addEventListener("click", (ev) => {
             ev.preventDefault();
-            text.textContent = "opening download… (check your notifications)";
-            void openExternal(APK_URL).then((ok) => {
-                if (!ok) {
-                    text.innerHTML =
-                        `${label} — <a href="${APK_URL}" style="color:inherit;text-decoration:underline">` +
-                            `tap here to download</a>`;
-                }
-            });
+            // downloads land in the notification shade, so say where it went —
+            // the app itself shows no visible change
+            text.textContent = "downloading… open your notifications to install";
+            startDownload(APK_URL);
         });
         el("update-dismiss").addEventListener("click", () => {
             banner.style.display = "none";

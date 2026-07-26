@@ -15,7 +15,7 @@ import {
   isNativeApp,
   isNewerAppVersion,
   nativeSpeak,
-  openExternal,
+  startDownload,
   startBackgroundWatcher,
   stopBackgroundWatcher,
 } from "./native.js";
@@ -3560,19 +3560,14 @@ async function checkAppUpdate(): Promise<void> {
       `Update available: ${bundled.version} → ${latest.version}`;
     banner.style.display = "flex";
     const getBtn = el<HTMLAnchorElement>("update-get");
-    getBtn.href = APK_URL; // static fallback so a tap works even without JS
+    getBtn.href = APK_URL; // plain link: works even if the handler never runs
     const text = el<HTMLElement>("update-text");
-    const label = `Update available: ${bundled.version} → ${latest.version}`;
     getBtn.addEventListener("click", (ev: Event) => {
       ev.preventDefault();
-      text.textContent = "opening download… (check your notifications)";
-      void openExternal(APK_URL).then((ok) => {
-        if (!ok) {
-          text.innerHTML =
-            `${label} — <a href="${APK_URL}" style="color:inherit;text-decoration:underline">` +
-            `tap here to download</a>`;
-        }
-      });
+      // downloads land in the notification shade, so say where it went —
+      // the app itself shows no visible change
+      text.textContent = "downloading… open your notifications to install";
+      startDownload(APK_URL);
     });
     el<HTMLButtonElement>("update-dismiss").addEventListener("click", () => {
       banner.style.display = "none";

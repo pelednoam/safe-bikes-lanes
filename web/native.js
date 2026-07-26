@@ -71,26 +71,28 @@ export async function stopBackgroundWatcher(id) {
         return;
     await plugin.removeWatcher({ id }).catch(() => undefined);
 }
-/** Open a URL in the system browser (Chrome Custom Tab) — needed for APK
- * downloads, which the WebView itself won't handle. False when unavailable. */
-export async function openExternal(url) {
+/** Start a file download (the APK update).
+ *
+ * This used to go through the Capacitor Browser plugin, which opens a Chrome
+ * Custom Tab — and Custom Tabs silently DROP file downloads, so tapping
+ * "install" appeared to do nothing. Navigating the WebView instead trips the
+ * DownloadListener registered in MainActivity, which hands the URL to the
+ * system browser to download and offer for install. */
+export function startDownload(url) {
     const cap = window.Capacitor;
     if (cap && cap.isNativePlatform()) {
-        try {
-            await cap.registerPlugin("Browser").open({ url });
-            return true;
-        }
-        catch {
-            // fall through to window.open (Capacitor routes external links to the
-            // system browser, which downloads the APK)
-        }
+        // Loaded in a hidden iframe rather than by navigating the top document:
+        // the DownloadListener fires either way, but if it ever doesn't, a
+        // top-level navigation to a binary would leave the rider staring at a
+        // blank WebView — this way the app page survives.
+        const frame = document.createElement("iframe");
+        frame.style.display = "none";
+        frame.src = url;
+        document.body.appendChild(frame);
+        window.setTimeout(() => frame.remove(), 60000);
+        return;
     }
-    try {
-        return window.open(url, "_blank") !== null;
-    }
-    catch {
-        return false;
-    }
+    window.open(url, "_blank");
 }
 /** True when `latest` is a newer app-vN tag than `current`. */
 export function isNewerAppVersion(current, latest) {
