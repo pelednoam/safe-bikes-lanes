@@ -1954,17 +1954,24 @@ function currentSheet() {
 (function initSheet() {
     const panel = el("panel");
     const handle = el("sheet-handle");
+    // start collapsed: the map is the point, and a route expands the sheet
+    // to "half" on its own (revealSheet)
     if (window.matchMedia("(max-width: 760px), (max-height: 500px)").matches)
-        setSheet("half");
+        setSheet("peek");
     let dragging = false;
     let startY = 0;
     let startH = 0;
     let moved = 0;
+    let liveH = 0;
     handle.addEventListener("pointerdown", (e) => {
         dragging = true;
         startY = e.clientY;
         startH = panel.getBoundingClientRect().height;
+        liveH = startH;
         moved = 0;
+        // kill the max-height transition for the duration: with it on, the sheet
+        // lags ~200 ms behind the thumb and the drag feels broken
+        panel.classList.add("dragging");
         handle.setPointerCapture(e.pointerId);
     });
     handle.addEventListener("pointermove", (e) => {
@@ -1972,15 +1979,18 @@ function currentSheet() {
             return;
         const dy = startY - e.clientY;
         moved = Math.max(moved, Math.abs(dy));
-        const h = Math.min(window.innerHeight * 0.88, Math.max(70, startH + dy));
+        liveH = Math.min(window.innerHeight * 0.88, Math.max(70, startH + dy));
         panel.classList.remove("peek", "half", "full");
-        panel.style.maxHeight = `${h}px`;
+        panel.style.maxHeight = `${liveH}px`;
     });
     const end = () => {
         if (!dragging)
             return;
         dragging = false;
-        const h = panel.getBoundingClientRect().height;
+        panel.classList.remove("dragging");
+        // snap from where the drag actually ended, not from a mid-animation
+        // measurement of the element
+        const h = liveH;
         panel.style.maxHeight = "";
         if (moved < 6) {
             // a tap cycles peek -> half -> full -> peek
@@ -1993,6 +2003,8 @@ function currentSheet() {
     };
     handle.addEventListener("pointerup", end);
     handle.addEventListener("pointercancel", end);
+    // some WebViews revoke capture mid-gesture; without this the sheet sticks
+    handle.addEventListener("lostpointercapture", end);
 })();
 /** After a route computes, make sure the sheet is at least half-open (mobile). */
 function revealSheet() {
@@ -3277,11 +3289,10 @@ function applyDark(dark) {
     el("dark-mode").checked = dark;
     applyBasemap();
 }
-const storedDark = localStorage.getItem(DARK_KEY);
-const initialDark = storedDark !== null
-    ? storedDark === "1"
-    : window.matchMedia("(prefers-color-scheme: dark)").matches;
-applyDark(initialDark);
+// Light by default: this is a daylight map, and the basemap + safety colours
+// are tuned for it. Dark is opt-in and remembered — following the phone's
+// system theme turned it on for riders who never asked for it.
+applyDark(localStorage.getItem(DARK_KEY) === "1");
 el("dark-mode").addEventListener("change", (e) => {
     const dark = e.target.checked;
     localStorage.setItem(DARK_KEY, dark ? "1" : "0");

@@ -314,15 +314,25 @@
       padding:4px 14px calc(14px + env(safe-area-inset-bottom));
       transition:max-height .2s ease;
     }
+    #panel.dragging { transition:none;
+    }
     /* the map already says where you are — the title and blurb are desktop-only */
     #panel h1, #panel .hint { display:none; }
-    #panel.peek { max-height:186px; overflow:hidden; }
+    #panel.peek { max-height:168px; overflow:hidden; }
     #panel.half { max-height:52%; }
     #panel.full { max-height:88%; }
+    /* The grabber is a thin bar, but the TARGET is the full width of the
+       sheet top — a 4px-tall hit area is close to undraggable with a thumb. */
     #sheet-handle {
-      display:block; width:40px; height:4px; border-radius:2px;
-      background:var(--line); margin:7px auto 10px; touch-action:none; cursor:grab;
+      display:block; width:100%; height:28px; margin:0 0 2px; position:relative;
+      touch-action:none; cursor:grab; background:none;
     }
+    #sheet-handle::before {
+      content:""; position:absolute; left:50%; top:10px; transform:translateX(-50%);
+      width:46px; height:5px; border-radius:3px; background:var(--muted); opacity:.4;
+    }
+    #sheet-handle:active { cursor:grabbing; }
+    #sheet-handle:active::before { opacity:.75; }
     button, select, input[type="search"] { min-height:40px; }
     #modes label { padding:9px 4px; }
   }

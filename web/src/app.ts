@@ -2120,30 +2120,40 @@ function currentSheet(): SheetState {
 (function initSheet(): void {
   const panel = el<HTMLDivElement>("panel");
   const handle = el<HTMLDivElement>("sheet-handle");
-  if (window.matchMedia("(max-width: 760px), (max-height: 500px)").matches) setSheet("half");
+  // start collapsed: the map is the point, and a route expands the sheet
+  // to "half" on its own (revealSheet)
+  if (window.matchMedia("(max-width: 760px), (max-height: 500px)").matches) setSheet("peek");
   let dragging = false;
   let startY = 0;
   let startH = 0;
   let moved = 0;
+  let liveH = 0;
   handle.addEventListener("pointerdown", (e: PointerEvent) => {
     dragging = true;
     startY = e.clientY;
     startH = panel.getBoundingClientRect().height;
+    liveH = startH;
     moved = 0;
+    // kill the max-height transition for the duration: with it on, the sheet
+    // lags ~200 ms behind the thumb and the drag feels broken
+    panel.classList.add("dragging");
     handle.setPointerCapture(e.pointerId);
   });
   handle.addEventListener("pointermove", (e: PointerEvent) => {
     if (!dragging) return;
     const dy = startY - e.clientY;
     moved = Math.max(moved, Math.abs(dy));
-    const h = Math.min(window.innerHeight * 0.88, Math.max(70, startH + dy));
+    liveH = Math.min(window.innerHeight * 0.88, Math.max(70, startH + dy));
     panel.classList.remove("peek", "half", "full");
-    panel.style.maxHeight = `${h}px`;
+    panel.style.maxHeight = `${liveH}px`;
   });
   const end = (): void => {
     if (!dragging) return;
     dragging = false;
-    const h = panel.getBoundingClientRect().height;
+    panel.classList.remove("dragging");
+    // snap from where the drag actually ended, not from a mid-animation
+    // measurement of the element
+    const h = liveH;
     panel.style.maxHeight = "";
     if (moved < 6) {
       // a tap cycles peek -> half -> full -> peek
@@ -2156,6 +2166,8 @@ function currentSheet(): SheetState {
   };
   handle.addEventListener("pointerup", end);
   handle.addEventListener("pointercancel", end);
+  // some WebViews revoke capture mid-gesture; without this the sheet sticks
+  handle.addEventListener("lostpointercapture", end);
 })();
 
 /** After a route computes, make sure the sheet is at least half-open (mobile). */
@@ -3512,12 +3524,10 @@ function applyDark(dark: boolean): void {
   applyBasemap();
 }
 
-const storedDark = localStorage.getItem(DARK_KEY);
-const initialDark =
-  storedDark !== null
-    ? storedDark === "1"
-    : window.matchMedia("(prefers-color-scheme: dark)").matches;
-applyDark(initialDark);
+// Light by default: this is a daylight map, and the basemap + safety colours
+// are tuned for it. Dark is opt-in and remembered — following the phone's
+// system theme turned it on for riders who never asked for it.
+applyDark(localStorage.getItem(DARK_KEY) === "1");
 
 el<HTMLInputElement>("dark-mode").addEventListener("change", (e: Event) => {
   const dark = (e.target as HTMLInputElement).checked;

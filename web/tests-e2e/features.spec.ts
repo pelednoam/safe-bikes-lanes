@@ -254,7 +254,54 @@ test("phone layout collapses the panel to a bottom sheet", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await boot(page);
   await expect(page.locator("#sheet-handle")).toBeVisible();
-  await expect(page.locator("#panel")).toHaveClass(/half/); // default sheet state
-  await page.locator("#sheet-handle").click(); // tap cycles half -> full
-  await expect(page.locator("#panel")).toHaveClass(/full/);
+  // starts collapsed so the map gets the screen
+  await expect(page.locator("#panel")).toHaveClass(/peek/);
+  await page.locator("#sheet-handle").click(); // tap cycles peek -> half
+  await expect(page.locator("#panel")).toHaveClass(/half/);
+});
+
+test("the bottom sheet can be dragged down to give the map the screen", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await boot(page, DAVIS_KENDALL);
+  // a computed route opens the sheet to half
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator("#panel")).toHaveClass(/half/);
+
+  const handle = page.locator("#sheet-handle");
+  const box = await handle.boundingBox();
+  expect(box).not.toBeNull();
+  if (!box) return;
+  // the grabber must be a real thumb target, not a hairline
+  expect(box.height).toBeGreaterThan(20);
+  expect(box.width).toBeGreaterThan(200);
+
+  // drag it down; the sheet should collapse and hand the space back.
+  // hover() first: it waits for the handle to stop moving (the sheet is still
+  // settling right after a route lands), then presses at its real centre.
+  await handle.hover();
+  const from = await handle.boundingBox();
+  if (!from) return;
+  const cx = from.x + from.width / 2;
+  const cy = from.y + from.height / 2;
+  await page.mouse.down();
+  for (let y = 0; y <= 320; y += 40) {
+    await page.mouse.move(cx, cy + y);
+    await page.waitForTimeout(20);
+  }
+  await page.mouse.up();
+  await expect(page.locator("#panel")).toHaveClass(/peek/);
+  const panelBox = await page.locator("#panel").boundingBox();
+  expect(panelBox?.height ?? 999).toBeLessThan(844 * 0.3);
+});
+
+test.describe("system theme is dark", () => {
+  test.use({ colorScheme: "dark" });
+  test("the app still opens in light mode unless dark was chosen", async ({ page }) => {
+    // following the phone's theme turned dark mode on for riders who never
+    // asked for it; it's opt-in and remembered instead
+    await page.goto("/");
+    await page.waitForFunction(() => window._map !== undefined, null, { timeout: 45_000 });
+    await expect(page.locator("body")).not.toHaveClass(/dark/);
+    await expect(page.locator("#dark-mode")).not.toBeChecked();
+  });
 });
