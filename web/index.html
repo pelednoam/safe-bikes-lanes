@@ -278,25 +278,37 @@
   #update-banner { top:12px; right:12px; z-index:7; gap:9px; align-items:center; }
 
   /* ── Navigation banner: read at arm's length, at speed ─────────────── */
+  /* Compact by default — it sits over the map, so it shows the turn and the
+     ETA and nothing else until the rider asks for the controls. */
   #nav-banner {
     display:none; position:absolute; top:12px; left:50%; transform:translateX(-50%);
     z-index:6; background:var(--surface); color:var(--ink);
     -webkit-backdrop-filter:blur(22px) saturate(1.6); backdrop-filter:blur(22px) saturate(1.6);
     border:1px solid var(--line); border-radius:var(--r-lg); box-shadow:var(--shadow);
-    padding:12px 16px; min-width:280px; max-width:calc(100% - 90px); text-align:center;
+    padding:9px 34px 9px 14px; min-width:236px; max-width:calc(100% - 90px);
+    text-align:center;
   }
-  #nav-main { display:flex; align-items:center; gap:14px; justify-content:center; }
-  #nav-icon { font-size:52px; line-height:1; }
-  #nav-texts { text-align:left; }
-  #nav-dist { font-family:var(--font-cond); font-size:44px; font-weight:700; line-height:1.02;
+  #nav-main { display:flex; align-items:center; gap:11px; justify-content:center; }
+  #nav-icon { font-size:38px; line-height:1; }
+  #nav-texts { text-align:left; min-width:0; }
+  #nav-dist { font-family:var(--font-cond); font-size:34px; font-weight:700; line-height:1.02;
               letter-spacing:-.015em; font-variant-numeric:tabular-nums; }
-  #nav-street { font-size:20px; font-weight:600; color:var(--ink); max-width:270px;
+  #nav-street { font-size:16px; font-weight:600; color:var(--ink); max-width:220px;
                 overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  #nav-trip { display:flex; align-items:baseline; gap:11px; justify-content:center;
-              margin-top:7px; }
-  #nav-remaining { font-size:17px; font-weight:600; font-variant-numeric:tabular-nums; }
-  #nav-speed { font-size:15px; color:var(--muted); font-variant-numeric:tabular-nums; }
+  #nav-trip { display:flex; align-items:baseline; gap:10px; justify-content:center;
+              margin-top:3px; }
+  #nav-remaining { font-size:15px; font-weight:600; font-variant-numeric:tabular-nums; }
+  #nav-speed { font-size:13.5px; color:var(--muted); font-variant-numeric:tabular-nums; }
   #nav-buttons button { margin-top:7px; padding:5px 11px; }
+  #nav-toggle {
+    position:absolute; top:5px; right:6px; margin:0; padding:2px 7px; font-size:15px;
+    line-height:1.1; background:none; border:none; color:var(--muted);
+    transition:transform .16s ease;
+  }
+  #nav-banner.expanded #nav-toggle { transform:rotate(180deg); }
+  #nav-extra { display:none; }
+  #nav-banner.expanded #nav-extra { display:block; }
+  #nav-recenter { margin-top:8px; }
   #nav-myway.active, #nav-net.active {
     background:var(--accent); color:#fff; border-color:var(--accent); }
   .nav-dot {
@@ -362,21 +374,26 @@
     <span id="nav-remaining"></span>
     <span id="nav-speed"></span>
   </div>
-  <div id="nav-tools">
-    <button id="nav-water" title="detour to nearest water fountain">🚰</button>
-    <button id="nav-restroom" title="detour to nearest restroom">🚻</button>
-    <button id="nav-playground" title="detour to nearest playground">🛝</button>
-    <button id="nav-hazard" title="mark this spot as sketchy">⚠</button>
-    <button id="nav-report" title="report a hazard here (with photo)">📷</button>
-    <button id="nav-net" class="active" title="Hide the safety-network overlay">🗺 lanes</button>
-    <button id="nav-myway" title="Go with my street choice: when you deviate, reroutes continue in your direction instead of pulling you back">🧭 my way</button>
-    <button id="nav-resume" style="display:none">▶ resume ride</button>
+  <button id="nav-recenter" style="display:none">⌖ recenter</button>
+  <!-- controls stay folded away so the banner doesn't cover the map; the turn
+       and the ETA above are always visible -->
+  <div id="nav-extra">
+    <div id="nav-tools">
+      <button id="nav-water" title="detour to nearest water fountain">🚰</button>
+      <button id="nav-restroom" title="detour to nearest restroom">🚻</button>
+      <button id="nav-playground" title="detour to nearest playground">🛝</button>
+      <button id="nav-hazard" title="mark this spot as sketchy">⚠</button>
+      <button id="nav-report" title="report a hazard here (with photo)">📷</button>
+      <button id="nav-net" class="active" title="Hide the safety-network overlay">🗺 lanes</button>
+      <button id="nav-myway" title="Go with my street choice: when you deviate, reroutes continue in your direction instead of pulling you back">🧭 my way</button>
+      <button id="nav-resume" style="display:none">▶ resume ride</button>
+    </div>
+    <div id="nav-buttons">
+      <button id="nav-mute" title="voice on/off">🔊</button>
+      <button id="nav-exit">✕ end</button>
+    </div>
   </div>
-  <div id="nav-buttons">
-    <button id="nav-mute" title="voice on/off">🔊</button>
-    <button id="nav-recenter" style="display:none">⌖ recenter</button>
-    <button id="nav-exit">✕ end</button>
-  </div>
+  <button id="nav-toggle" title="Ride controls" aria-expanded="false">⌄</button>
 </div>
 <div id="panel">
   <div id="sheet-handle" title="drag to resize"></div>

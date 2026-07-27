@@ -2040,6 +2040,12 @@ map.on("click", (e: MapMouseEvent) => {
     void computeShed();
     return;
   }
+  // Mid-ride the map is for looking at, not re-planning: a stray tap on the
+  // handlebars used to silently swap the route out from under the rider.
+  if (navActive) {
+    if (!window.confirm("End the ride and plan a new route from here?")) return;
+    exitNav();
+  }
   if (activeField === "start") {
     setPoint("start", e.lngLat);
     activeField = "end";
@@ -2709,6 +2715,10 @@ const NAV_ZOOM_CRUISE = 16.4;
 const NAV_ZOOM_TURN = 17.4;
 const NAV_ZOOM_TURN_M = 90;
 const NAV_PITCH = 50;
+/** After the rider stops touching the map, the camera takes itself back —
+ * otherwise one bump on the handlebars leaves the ride permanently off-centre
+ * and you have to keep hunting for the recenter button. */
+const REFOLLOW_MS = 10_000;
 
 let navActive = false;
 let navWatchId: number | null = null;
@@ -2753,6 +2763,7 @@ let navUserZoom = false;
 /** True mid-gesture: the follow camera keeps its hands off so it can't cut
  * the rider's own pinch/scroll inertia short. */
 let navInteracting = false;
+let navRefollowTimer: number | undefined;
 /** Smoothed speed (m/s) used to time the turn calls. */
 let navSpeed = 0;
 let navLastFixAt = 0;
@@ -3094,6 +3105,7 @@ async function startNav(): Promise<void> {
   recorder = new RideRecorder();
   document.body.classList.add("navigating");
   el<HTMLDivElement>("nav-banner").style.display = "block";
+  el<HTMLDivElement>("nav-banner").classList.remove("expanded");
   el<HTMLButtonElement>("nav-recenter").style.display = "none";
   map.setLayoutProperty("route-done", "visibility", "visible");
   try {
@@ -3136,6 +3148,7 @@ function exitNav(): void {
   navBgWatcherId = null;
   void wakeLock?.release().catch(() => undefined);
   wakeLock = null;
+  window.clearTimeout(navRefollowTimer);
   navStopAnimation();
   navDot?.remove();
   navDot = null;
@@ -3340,6 +3353,11 @@ el<HTMLButtonElement>("nav-exit").addEventListener("click", () => {
   if (recordMode) stopRecording();
   else exitNav();
 });
+el<HTMLButtonElement>("nav-toggle").addEventListener("click", () => {
+  const banner = el<HTMLDivElement>("nav-banner");
+  const open = banner.classList.toggle("expanded");
+  el<HTMLButtonElement>("nav-toggle").setAttribute("aria-expanded", String(open));
+});
 el<HTMLButtonElement>("nav-mute").addEventListener("click", () => {
   navMuted = !navMuted;
   el<HTMLButtonElement>("nav-mute").textContent = navMuted ? "🔇" : "🔊";
@@ -3354,6 +3372,7 @@ map.on("dragstart", () => {
   if (navActive) {
     navFollowing = false;
     el<HTMLButtonElement>("nav-recenter").style.display = "inline-block";
+    scheduleRefollow();
   }
 });
 // A pinch/scroll zoom while navigating is the rider deliberately looking
@@ -3372,17 +3391,31 @@ let navInteractTimer: number | undefined;
 function pauseFollowForInput(): void {
   if (!navActive) return;
   navInteracting = true;
+  scheduleRefollow();
   window.clearTimeout(navInteractTimer);
   navInteractTimer = window.setTimeout(() => {
     navInteracting = false;
   }, 500);
 }
 
-/** The rider took the zoom: keep it until they tap recenter. */
+/** The rider took the zoom: keep it until they tap recenter (or until the
+ * camera takes itself back — see scheduleRefollow). */
 function takeZoomControl(): void {
   if (!navActive) return;
   navUserZoom = true;
   el<HTMLButtonElement>("nav-recenter").style.display = "inline-block";
+  scheduleRefollow();
+}
+
+/** Hand the camera back to the route once the rider has stopped fiddling. */
+function scheduleRefollow(): void {
+  window.clearTimeout(navRefollowTimer);
+  navRefollowTimer = window.setTimeout(() => {
+    if (!navActive) return;
+    navFollowing = true;
+    navUserZoom = false;
+    el<HTMLButtonElement>("nav-recenter").style.display = "none";
+  }, REFOLLOW_MS);
 }
 
 // Bound to the map's own input events, not a canvas listener (wheel/touch land

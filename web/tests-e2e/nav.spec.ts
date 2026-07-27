@@ -152,7 +152,9 @@ test("the safety network can be toggled off and on mid-ride", async ({ page, con
       () => window._map?.getLayoutProperty("network", "visibility") as string | undefined,
     );
 
-  // the panel is hidden while navigating, so the control lives in the nav bar
+  // the panel is hidden while navigating, so the control lives in the nav bar —
+  // behind the toggle, which keeps the banner off the map by default
+  await page.locator("#nav-toggle").click();
   const btn = page.locator("#nav-net");
   await expect(btn).toBeVisible();
   await expect(btn).toHaveClass(/active/);
@@ -241,4 +243,54 @@ test("the rider's own zoom is kept (no snapping back), recenter restores follow"
   });
   await expect.poll(() => page.evaluate(() => window._map?.getZoom() ?? 0), { timeout: 10_000 })
     .toBeGreaterThan(zoomed + 0.5);
+});
+
+test("the banner stays compact until the rider opens it", async ({ page }) => {
+  await startNav(page);
+  // riding: the turn and the ETA are visible, the controls are not — the
+  // banner sits over the map, so it earns as little of it as possible
+  await expect(page.locator("#nav-main")).toBeVisible();
+  await expect(page.locator("#nav-trip")).toBeVisible();
+  await expect(page.locator("#nav-extra")).not.toBeVisible();
+  const compact = (await page.locator("#nav-banner").boundingBox())?.height ?? 0;
+  expect(compact).toBeLessThan(150);
+
+  await page.locator("#nav-toggle").click();
+  await expect(page.locator("#nav-extra")).toBeVisible();
+  await expect(page.locator("#nav-exit")).toBeVisible();
+  const open = (await page.locator("#nav-banner").boundingBox())?.height ?? 0;
+  expect(open).toBeGreaterThan(compact);
+});
+
+test("tapping the map mid-ride asks before it throws the route away", async ({ page, context }) => {
+  await startNav(page);
+  const coords = await routeCoords(page);
+  await context.setGeolocation({ longitude: coords[5]?.[0] ?? 0, latitude: coords[5]?.[1] ?? 0 });
+  await page.waitForTimeout(600);
+
+  // decline: the ride carries on untouched
+  page.once("dialog", (d) => void d.dismiss());
+  await page.mouse.click(700, 620);
+  await page.waitForTimeout(400);
+  await expect(page.locator("#nav-banner")).toBeVisible();
+
+  // accept: the ride ends and the planner comes back
+  page.once("dialog", (d) => void d.accept());
+  await page.mouse.click(700, 620);
+  await expect(page.locator("#nav-banner")).not.toBeVisible();
+});
+
+test("the camera takes itself back after the rider stops panning", async ({ page, context }) => {
+  await startNav(page);
+  const coords = await routeCoords(page);
+  await context.setGeolocation({ longitude: coords[5]?.[0] ?? 0, latitude: coords[5]?.[1] ?? 0 });
+  await page.waitForTimeout(600);
+  // pan away — following stops and the recenter button appears
+  await page.mouse.move(700, 400);
+  await page.mouse.down();
+  await page.mouse.move(500, 300, { steps: 8 });
+  await page.mouse.up();
+  await expect(page.locator("#nav-recenter")).toBeVisible();
+  // ...and comes back on its own, without hunting for the button
+  await expect(page.locator("#nav-recenter")).toBeHidden({ timeout: 20_000 });
 });
