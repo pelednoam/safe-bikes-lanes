@@ -16,10 +16,35 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    // A stable signing key, supplied by CI from repo secrets. Without this the
+    // build falls back to Gradle's auto-generated debug keystore — which is
+    // regenerated on every fresh CI runner, so each APK was signed with a
+    // different key and Android refused to install any of them over another
+    // ("app not installed"). Local builds with no keystore keep the old
+    // behaviour so nothing extra is needed to build one by hand.
+    def keystoreFile = file(System.getenv("ANDROID_KEYSTORE_PATH") ?: "signing.jks")
+    signingConfigs {
+        stable {
+            if (keystoreFile.exists()) {
+                storeFile keystoreFile
+                storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias System.getenv("ANDROID_KEY_ALIAS") ?: "safebikes"
+                keyPassword System.getenv("ANDROID_KEYSTORE_PASSWORD")
+            }
+        }
+    }
     buildTypes {
+        debug {
+            if (keystoreFile.exists()) {
+                signingConfig signingConfigs.stable
+            }
+        }
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (keystoreFile.exists()) {
+                signingConfig signingConfigs.stable
+            }
         }
     }
 }

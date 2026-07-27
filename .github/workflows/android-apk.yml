@@ -56,9 +56,42 @@ jobs:
           APP_VERSION: ${{ github.ref_name }}
         run: npm run app:sync
         working-directory: web
+      - name: Restore the signing key
+        # Every runner is fresh, so Gradle's auto-generated debug keystore
+        # differs per build — Android then refuses to install one APK over
+        # another. Sign with one stable key held in repo secrets instead.
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "::error::ANDROID_KEYSTORE_B64 is not set — the APK would get a throwaway signature and could not update an installed app"
+            exit 1
+          fi
+          printf '%s' "$KEYSTORE_B64" | base64 -d > web/android/app/signing.jks
+          echo "keystore restored ($(stat -c%s web/android/app/signing.jks) bytes)"
       - name: Build debug APK
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: ./gradlew assembleDebug
         working-directory: web/android
+      - name: Verify the APK is signed with the expected key
+        # The whole point of the stable key is that every APK can update the
+        # last one, so prove the build actually used it rather than trusting it.
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+          EXPECT=$(keytool -exportcert -keystore web/android/app/signing.jks \
+            -storepass "$ANDROID_KEYSTORE_PASSWORD" -alias "$ANDROID_KEY_ALIAS" \
+            | sha256sum | cut -d" " -f1)
+          ACTUAL=$(python3 .github/scripts/apk_cert.py \
+            web/android/app/build/outputs/apk/debug/app-debug.apk)
+          echo "keystore cert: $EXPECT"
+          echo "apk cert:      $ACTUAL"
+          [ "$EXPECT" = "$ACTUAL" ] || {
+            echo "::error::APK is not signed with the stable key — it could not update an installed app"; exit 1; }
       - name: Rename APK
         run: cp web/android/app/build/outputs/apk/debug/app-debug.apk family-bike-router.apk
       - uses: actions/upload-artifact@v4
