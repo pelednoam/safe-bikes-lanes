@@ -380,8 +380,15 @@ function syncOD() {
     const f = el("from-field");
     if (f.classList.contains("picking"))
         return;
-    el("from-label").textContent = fromCurrent ? "Your location" : "Custom start";
     f.classList.toggle("custom", !fromCurrent);
+    if (fromCurrent) {
+        f.value = "";
+        f.placeholder = "Your location";
+    }
+    else if (f.value === "") {
+        // set by tapping/dragging the map rather than typed
+        f.placeholder = "Start set on the map";
+    }
 }
 function makeMarker(lngLat, color, label) {
     const m = new maplibregl.Marker({ color, draggable: true });
@@ -1143,7 +1150,7 @@ async function searchAddress(query) {
         throw new Error(`search failed (${resp.status})`);
     return (await resp.json());
 }
-function renderSearchResults(results) {
+function renderSearchResults(results, target = "end") {
     const box = el("search-results");
     box.innerHTML = "";
     if (results.length === 0) {
@@ -1153,21 +1160,31 @@ function renderSearchResults(results) {
     for (const r of results) {
         const row = document.createElement("div");
         row.className = "search-row";
+        const short = r.display_name.split(",").slice(0, 3).join(",");
         const name = document.createElement("span");
-        name.textContent = r.display_name.split(",").slice(0, 3).join(",");
+        name.textContent = short;
         name.title = r.display_name;
         row.appendChild(name);
         const lngLat = [parseFloat(r.lon), parseFloat(r.lat)];
-        for (const kind of ["start", "end"]) {
-            const btn = document.createElement("button");
-            btn.textContent = kind;
-            btn.addEventListener("click", () => {
-                setPoint(kind, lngLat);
-                map.flyTo({ center: lngLat, zoom: 15 });
-                box.innerHTML = "";
-            });
-            row.appendChild(btn);
-        }
+        // the whole row picks the field you searched from — no aiming at a tiny
+        // button, which matters on a phone
+        const choose = () => {
+            setPoint(target, lngLat);
+            const field = el(target === "start" ? "from-field" : "search");
+            field.value = short;
+            field.classList.remove("picking");
+            if (target === "start")
+                activeField = "end";
+            syncOD();
+            map.flyTo({ center: lngLat, zoom: 15 });
+            box.innerHTML = "";
+        };
+        name.style.cursor = "pointer";
+        name.addEventListener("click", choose);
+        const use = document.createElement("button");
+        use.textContent = target === "start" ? "start" : "go";
+        use.addEventListener("click", choose);
+        row.appendChild(use);
         const star = document.createElement("button");
         star.textContent = "☆";
         star.title = "save as a place (Home, Work, …)";
@@ -2031,24 +2048,26 @@ function revealSheet() {
     if (currentSheet() === "peek")
         setSheet("half");
 }
-el("from-field").addEventListener("click", () => {
+el("from-locate").addEventListener("click", () => {
+    // back to riding from wherever you are
+    start?.remove();
+    start = null;
+    fromCurrent = true;
+    activeField = "end";
     const f = el("from-field");
-    if (!fromCurrent && start) {
-        // revert to using the current location as the origin
-        start.remove();
-        start = null;
-        fromCurrent = true;
-        activeField = "end";
-        f.classList.remove("picking");
-        syncOD();
-        void requestRoute();
-    }
-    else {
-        // pick a custom start: the next map tap / place / search fills it
-        activeField = "start";
-        f.classList.add("picking");
-        el("from-label").textContent = "tap the map or a place…";
-    }
+    f.classList.remove("picking");
+    f.value = "";
+    el("search-results").innerHTML = "";
+    syncOD();
+    void requestRoute();
+});
+el("from-pick").addEventListener("click", () => {
+    // the next map tap sets the start
+    activeField = "start";
+    const f = el("from-field");
+    f.classList.add("picking");
+    f.value = "";
+    f.placeholder = "tap the map to set the start…";
 });
 el("reset").addEventListener("click", () => {
     start?.remove();
@@ -2059,6 +2078,8 @@ el("reset").addEventListener("click", () => {
     fromCurrent = true;
     activeField = "end";
     el("from-field").classList.remove("picking");
+    el("from-field").value = "";
+    el("search-results").innerHTML = "";
     syncOD();
     options = [];
     selectedId = null;
@@ -2199,23 +2220,33 @@ for (const radio of document.querySelectorAll("input[name=profile]")) {
         }
     });
 }
-const searchInput = el("search");
-let searchTimer;
-searchInput.addEventListener("input", () => {
-    window.clearTimeout(searchTimer);
-    const q = searchInput.value.trim();
-    if (q.length < 3) {
-        el("search-results").innerHTML = "";
-        return;
-    }
-    searchTimer = window.setTimeout(() => {
-        searchAddress(q)
-            .then(renderSearchResults)
-            .catch(() => {
-            el("search-results").textContent = "search unavailable";
-        });
-    }, 400);
-});
+/** Wire an address search to a field, so the origin is searchable too and not
+ * only settable by tapping the map or using the current location. */
+function attachSearch(input, target) {
+    let timer;
+    input.addEventListener("input", () => {
+        window.clearTimeout(timer);
+        const q = input.value.trim();
+        if (q.length < 3) {
+            el("search-results").innerHTML = "";
+            return;
+        }
+        timer = window.setTimeout(() => {
+            searchAddress(q)
+                .then((results) => {
+                // a later keystroke in the other field may have moved on
+                if (input.value.trim() !== q)
+                    return;
+                renderSearchResults(results, target);
+            })
+                .catch(() => {
+                el("search-results").textContent = "search unavailable";
+            });
+        }, 400);
+    });
+}
+attachSearch(el("search"), "end");
+attachSearch(el("from-field"), "start");
 document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
         if (el("about").open ||

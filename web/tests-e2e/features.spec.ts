@@ -308,3 +308,33 @@ test.describe("system theme is dark", () => {
     await expect(page.locator("#dark-mode")).not.toBeChecked();
   });
 });
+
+test("a route can be planned by typing both ends, not just tapping the map", async ({ page }) => {
+  // stub the geocoder: the test is about the fields, not Nominatim
+  await page.route("**/nominatim**", (route) => {
+    const q = new URL(route.request().url()).searchParams.get("q") ?? "";
+    const [lon, lat] = q.toLowerCase().includes("davis")
+      ? [-71.122258, 42.396748]
+      : [-71.086705, 42.362552];
+    void route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify([{ display_name: `${q}, Somerville, MA`, lon: String(lon), lat: String(lat) }]),
+    });
+  });
+  await boot(page);
+
+  // the origin is searchable now — type it instead of tapping the map
+  await page.locator("#from-field").fill("Davis Square");
+  await page.locator("#search-results .search-row button", { hasText: "start" }).first().click();
+  await expect(page.locator("#from-field")).toHaveValue(/Davis Square/);
+
+  await page.locator("#search").fill("Kendall");
+  await page.locator("#search-results .search-row button", { hasText: "go" }).first().click();
+
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator("#s-dist")).toContainText("km");
+
+  // the pin button hands the origin back to the current location
+  await page.locator("#from-locate").click();
+  await expect(page.locator("#from-field")).toHaveValue("");
+});

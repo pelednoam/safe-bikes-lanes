@@ -489,10 +489,16 @@ function currentPosition(): Promise<[number, number]> {
 
 /** Reflect the origin state in the From field. */
 function syncOD(): void {
-  const f = el<HTMLButtonElement>("from-field");
+  const f = el<HTMLInputElement>("from-field");
   if (f.classList.contains("picking")) return;
-  el<HTMLElement>("from-label").textContent = fromCurrent ? "Your location" : "Custom start";
   f.classList.toggle("custom", !fromCurrent);
+  if (fromCurrent) {
+    f.value = "";
+    f.placeholder = "Your location";
+  } else if (f.value === "") {
+    // set by tapping/dragging the map rather than typed
+    f.placeholder = "Start set on the map";
+  }
 }
 
 function makeMarker(lngLat: LngLat | [number, number], color: string, label: string): Marker {
@@ -508,7 +514,7 @@ function makeMarker(lngLat: LngLat | [number, number], color: string, label: str
 function setPoint(kind: "start" | "end", lngLat: LngLat | [number, number]): void {
   if (kind === "start") {
     fromCurrent = false;
-    el<HTMLButtonElement>("from-field").classList.remove("picking");
+    el<HTMLInputElement>("from-field").classList.remove("picking");
     if (start) start.setLngLat(lngLat);
     else start = makeMarker(lngLat, "#2b83ba", "start");
   } else {
@@ -1272,7 +1278,7 @@ async function searchAddress(query: string): Promise<NominatimResult[]> {
   return (await resp.json()) as NominatimResult[];
 }
 
-function renderSearchResults(results: NominatimResult[]): void {
+function renderSearchResults(results: NominatimResult[], target: "start" | "end" = "end"): void {
   const box = el<HTMLDivElement>("search-results");
   box.innerHTML = "";
   if (results.length === 0) {
@@ -1282,21 +1288,30 @@ function renderSearchResults(results: NominatimResult[]): void {
   for (const r of results) {
     const row = document.createElement("div");
     row.className = "search-row";
+    const short = r.display_name.split(",").slice(0, 3).join(",");
     const name = document.createElement("span");
-    name.textContent = r.display_name.split(",").slice(0, 3).join(",");
+    name.textContent = short;
     name.title = r.display_name;
     row.appendChild(name);
     const lngLat: [number, number] = [parseFloat(r.lon), parseFloat(r.lat)];
-    for (const kind of ["start", "end"] as const) {
-      const btn = document.createElement("button");
-      btn.textContent = kind;
-      btn.addEventListener("click", () => {
-        setPoint(kind, lngLat);
-        map.flyTo({ center: lngLat, zoom: 15 });
-        box.innerHTML = "";
-      });
-      row.appendChild(btn);
-    }
+    // the whole row picks the field you searched from — no aiming at a tiny
+    // button, which matters on a phone
+    const choose = (): void => {
+      setPoint(target, lngLat);
+      const field = el<HTMLInputElement>(target === "start" ? "from-field" : "search");
+      field.value = short;
+      field.classList.remove("picking");
+      if (target === "start") activeField = "end";
+      syncOD();
+      map.flyTo({ center: lngLat, zoom: 15 });
+      box.innerHTML = "";
+    };
+    name.style.cursor = "pointer";
+    name.addEventListener("click", choose);
+    const use = document.createElement("button");
+    use.textContent = target === "start" ? "start" : "go";
+    use.addEventListener("click", choose);
+    row.appendChild(use);
     const star = document.createElement("button");
     star.textContent = "☆";
     star.title = "save as a place (Home, Work, …)";
@@ -2194,23 +2209,27 @@ function revealSheet(): void {
   if (currentSheet() === "peek") setSheet("half");
 }
 
-el<HTMLButtonElement>("from-field").addEventListener("click", () => {
-  const f = el<HTMLButtonElement>("from-field");
-  if (!fromCurrent && start) {
-    // revert to using the current location as the origin
-    start.remove();
-    start = null;
-    fromCurrent = true;
-    activeField = "end";
-    f.classList.remove("picking");
-    syncOD();
-    void requestRoute();
-  } else {
-    // pick a custom start: the next map tap / place / search fills it
-    activeField = "start";
-    f.classList.add("picking");
-    el<HTMLElement>("from-label").textContent = "tap the map or a place…";
-  }
+el<HTMLButtonElement>("from-locate").addEventListener("click", () => {
+  // back to riding from wherever you are
+  start?.remove();
+  start = null;
+  fromCurrent = true;
+  activeField = "end";
+  const f = el<HTMLInputElement>("from-field");
+  f.classList.remove("picking");
+  f.value = "";
+  el<HTMLDivElement>("search-results").innerHTML = "";
+  syncOD();
+  void requestRoute();
+});
+
+el<HTMLButtonElement>("from-pick").addEventListener("click", () => {
+  // the next map tap sets the start
+  activeField = "start";
+  const f = el<HTMLInputElement>("from-field");
+  f.classList.add("picking");
+  f.value = "";
+  f.placeholder = "tap the map to set the start…";
 });
 
 el<HTMLButtonElement>("reset").addEventListener("click", () => {
@@ -2221,7 +2240,9 @@ el<HTMLButtonElement>("reset").addEventListener("click", () => {
   clearOptionChips();
   fromCurrent = true;
   activeField = "end";
-  el<HTMLButtonElement>("from-field").classList.remove("picking");
+  el<HTMLInputElement>("from-field").classList.remove("picking");
+  el<HTMLInputElement>("from-field").value = "";
+  el<HTMLDivElement>("search-results").innerHTML = "";
   syncOD();
   options = [];
   selectedId = null;
@@ -2365,23 +2386,32 @@ for (const radio of document.querySelectorAll<HTMLInputElement>("input[name=prof
   });
 }
 
-const searchInput = el<HTMLInputElement>("search");
-let searchTimer: number | undefined;
-searchInput.addEventListener("input", () => {
-  window.clearTimeout(searchTimer);
-  const q = searchInput.value.trim();
-  if (q.length < 3) {
-    el<HTMLDivElement>("search-results").innerHTML = "";
-    return;
-  }
-  searchTimer = window.setTimeout(() => {
-    searchAddress(q)
-      .then(renderSearchResults)
-      .catch(() => {
-        el<HTMLDivElement>("search-results").textContent = "search unavailable";
-      });
-  }, 400);
-});
+/** Wire an address search to a field, so the origin is searchable too and not
+ * only settable by tapping the map or using the current location. */
+function attachSearch(input: HTMLInputElement, target: "start" | "end"): void {
+  let timer: number | undefined;
+  input.addEventListener("input", () => {
+    window.clearTimeout(timer);
+    const q = input.value.trim();
+    if (q.length < 3) {
+      el<HTMLDivElement>("search-results").innerHTML = "";
+      return;
+    }
+    timer = window.setTimeout(() => {
+      searchAddress(q)
+        .then((results) => {
+          // a later keystroke in the other field may have moved on
+          if (input.value.trim() !== q) return;
+          renderSearchResults(results, target);
+        })
+        .catch(() => {
+          el<HTMLDivElement>("search-results").textContent = "search unavailable";
+        });
+    }, 400);
+  });
+}
+attachSearch(el<HTMLInputElement>("search"), "end");
+attachSearch(el<HTMLInputElement>("from-field"), "start");
 
 document.addEventListener("keydown", (e: KeyboardEvent) => {
   if (e.key === "Escape") {

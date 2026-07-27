@@ -98,8 +98,9 @@
   #search::placeholder { color:var(--muted); }
   #search:focus, #from-field:focus-visible { border-color:var(--accent); outline:none;
     background:var(--solid); }
-  #from-field { text-align:left; cursor:pointer; font-weight:500; }
-  #from-field:hover { background:var(--hover); }
+  .od-row { display:flex; gap:6px; align-items:stretch; }
+  .od-row #from-field { flex:1; min-width:0; }
+  .od-row button { margin:0; padding:0 11px; font-size:16px; line-height:1; }
   #from-field.custom { border-color:var(--accent); }
   #from-field.picking { border-color:var(--accent); color:var(--accent); font-weight:700; }
   #from-field .od-ico { opacity:.85; }
@@ -400,7 +401,12 @@
   <h1>Family Bike Router</h1>
   <div class="hint">Cambridge, Somerville &amp; nearby towns — safety first. Search or tap the map for where you’re headed; routes start from your location.</div>
   <div id="od">
-    <button id="from-field" type="button" title="Start point — defaults to your current location; tap to set a custom start"><span class="od-ico">📍</span> <span id="from-label">Your location</span></button>
+    <div class="od-row">
+      <input id="from-field" type="search" placeholder="Your location" autocomplete="off"
+             title="Start — type an address, or leave it empty to start from where you are">
+      <button id="from-locate" type="button" title="Start from my current location">📍</button>
+      <button id="from-pick" type="button" title="Pick the start by tapping the map">🗺</button>
+    </div>
     <input id="search" type="search" placeholder="Where to?" autocomplete="off">
   </div>
   <div id="search-results"></div>
