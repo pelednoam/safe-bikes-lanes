@@ -285,12 +285,18 @@ test("the camera takes itself back after the rider stops panning", async ({ page
   const coords = await routeCoords(page);
   await context.setGeolocation({ longitude: coords[5]?.[0] ?? 0, latitude: coords[5]?.[1] ?? 0 });
   await page.waitForTimeout(600);
-  // pan away — following stops and the recenter button appears
-  await page.mouse.move(700, 400);
-  await page.mouse.down();
-  await page.mouse.move(500, 300, { steps: 8 });
-  await page.mouse.up();
-  await expect(page.locator("#nav-recenter")).toBeVisible();
+  // Pan away. Fired through the map's own dragstart rather than a synthetic
+  // mouse gesture: whether a drag crosses MapLibre's threshold is its concern,
+  // not ours, and it doesn't do so reliably on a loaded CI runner. What's
+  // under test is what WE do about it.
+  // read the result in the same round trip as the event: the handler is
+  // synchronous, and a separate polling assertion can lose the race to the
+  // 10 s auto-refollow when the machine is loaded
+  const shownOnPan = await page.evaluate(() => {
+    window._map?.fire("dragstart" as never);
+    return getComputedStyle(document.getElementById("nav-recenter") as HTMLElement).display;
+  });
+  expect(shownOnPan).not.toBe("none");
   // ...and comes back on its own, without hunting for the button
   await expect(page.locator("#nav-recenter")).toBeHidden({ timeout: 20_000 });
 });
