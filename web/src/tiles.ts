@@ -69,6 +69,37 @@ class TileGrid {
     }
     return keys;
   }
+
+  /** Existing tile keys within `margin` cells of the straight line through
+   * `points`. For a long trip the endpoints' bbox covers most of the map —
+   * this walks the corridor instead, which is a small fraction of it. */
+  keysForCorridor(points: [number, number][], margin: number): string[] {
+    const keys = new Set<string>();
+    const addAround = (lon: number, lat: number): void => {
+      const [c, r] = this.colRow(lon, lat);
+      for (let dc = -margin; dc <= margin; dc++) {
+        for (let dr = -margin; dr <= margin; dr++) {
+          const key = `${c + dc}_${r + dr}`;
+          if (this.existing.has(key)) keys.add(key);
+        }
+      }
+    };
+    for (let i = 0; i < points.length; i++) {
+      const a = points[i] as [number, number];
+      addAround(a[0], a[1]);
+      const b = points[i + 1];
+      if (!b) continue;
+      // sample at half a cell so no cell along the line is skipped
+      const steps = Math.max(
+        1,
+        Math.ceil(Math.max(Math.abs(b[0] - a[0]), Math.abs(b[1] - a[1])) / (this.tileDeg / 2)),
+      );
+      for (let s = 1; s <= steps; s++) {
+        addAround(a[0] + ((b[0] - a[0]) * s) / steps, a[1] + ((b[1] - a[1]) * s) / steps);
+      }
+    }
+    return [...keys];
+  }
 }
 
 export class TileStore {
@@ -106,6 +137,22 @@ export class TileStore {
    * least one new tile arrived (so the caller should rebuild its Router). */
   async ensure(box: BBox, margin = 1): Promise<boolean> {
     const keys = this.keysForBBox(box, margin);
+    const before = this.loaded.size;
+    await Promise.all(keys.map((k) => this.fetchTile(k)));
+    return this.loaded.size > before;
+  }
+
+  /** Tile keys along the corridor through `points` (see TileGrid). */
+  keysForCorridor(points: [number, number][], margin = 1): string[] {
+    if (!this.grid) throw new Error("tile manifest not loaded");
+    return this.grid.keysForCorridor(points, margin);
+  }
+
+  /** Fetch the tiles along the corridor through `points`, rather than the
+   * whole bounding box of them — a cross-metro trip would otherwise pull most
+   * of the map. Returns true when at least one new tile arrived. */
+  async ensureCorridor(points: [number, number][], margin = 1): Promise<boolean> {
+    const keys = this.keysForCorridor(points, margin);
     const before = this.loaded.size;
     await Promise.all(keys.map((k) => this.fetchTile(k)));
     return this.loaded.size > before;

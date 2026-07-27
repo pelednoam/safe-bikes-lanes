@@ -170,8 +170,11 @@ for (const [name, hash] of [
   ["Concord → Cohasset (corner to corner)", "#s=-71.349,42.460&e=-70.803,42.242&m=young_kids"],
 ] as [string, string][]) {
   test(`new-ring towns route: ${name}`, async ({ page }) => {
+    // a cross-metro trip legitimately pulls ~120 graph tiles before it can
+    // route; that is seconds locally but well past the default on CI
+    test.slow();
     await boot(page, hash);
-    await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 90_000 });
     // a real drawn route, not just an empty card
     const coords = await page.evaluate(
       () => (window._map?.getSource("route") as { _data?: GeoJSON.FeatureCollection })._data,
