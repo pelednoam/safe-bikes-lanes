@@ -62,3 +62,47 @@ export function pushRecent(entry) {
 export function clearRecent() {
     localStorage.removeItem(RECENT_KEY);
 }
+// ---------------------------------------------------------------------------
+// backup / restore
+// ---------------------------------------------------------------------------
+/** Everything the rider has taught the app, kept on the device. Uninstalling
+ * the Android app wipes it (which is how saved places used to vanish on every
+ * update, back when each APK had a throwaway signature and could only be
+ * installed over the top by uninstalling first). */
+const BACKUP_KEYS = [
+    "savedPlaces",
+    "recentRoutes",
+    "sketchyMarks",
+    "rideHistory",
+    "avoidTypes",
+    "walkMaxM",
+    "navMyWay",
+    "darkMode",
+];
+export function exportBackup(nowIso) {
+    const data = {};
+    for (const key of BACKUP_KEYS) {
+        const value = localStorage.getItem(key);
+        if (value !== null)
+            data[key] = value;
+    }
+    return { app: "family-bike-router", saved: nowIso, data };
+}
+/** Restore a backup, returning how many entries were written. Unknown keys are
+ * ignored so a hand-edited or future file can't write arbitrary storage. */
+export function importBackup(raw) {
+    const backup = raw;
+    if (!backup || backup.app !== "family-bike-router" || typeof backup.data !== "object") {
+        throw new Error("not a Family Bike Router backup");
+    }
+    const data = backup.data;
+    let written = 0;
+    for (const key of BACKUP_KEYS) {
+        const value = data[key];
+        if (typeof value === "string") {
+            localStorage.setItem(key, value);
+            written++;
+        }
+    }
+    return written;
+}

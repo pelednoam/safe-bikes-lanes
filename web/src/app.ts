@@ -46,6 +46,8 @@ import {
   clearRecent,
   deletePlace,
   emojiFor,
+  exportBackup,
+  importBackup,
   listPlaces,
   listRecent,
   pushRecent,
@@ -2230,6 +2232,44 @@ el<HTMLButtonElement>("from-pick").addEventListener("click", () => {
   f.classList.add("picking");
   f.value = "";
   f.placeholder = "tap the map to set the start…";
+});
+
+el<HTMLButtonElement>("backup-save").addEventListener("click", () => {
+  const backup = exportBackup(new Date().toISOString());
+  const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `family-bike-router-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  const places = listPlaces().length;
+  el<HTMLDivElement>("backup-note").textContent =
+    `Backed up ${places} saved place${places === 1 ? "" : "s"} and your marks.`;
+});
+
+el<HTMLButtonElement>("backup-load").addEventListener("click", () => {
+  el<HTMLInputElement>("backup-file").click();
+});
+
+el<HTMLInputElement>("backup-file").addEventListener("change", () => {
+  const file = el<HTMLInputElement>("backup-file").files?.[0];
+  if (!file) return;
+  void file
+    .text()
+    .then((text) => {
+      const n = importBackup(JSON.parse(text));
+      renderPlacesAndRecent();
+      sketchyMarks = loadSketchy();
+      applyAvoidPoints();
+      renderSketchy();
+      el<HTMLDivElement>("backup-note").textContent =
+        `Restored ${n} item${n === 1 ? "" : "s"} — ${listPlaces().length} saved places.`;
+    })
+    .catch((err: unknown) => {
+      el<HTMLDivElement>("backup-note").textContent =
+        `Couldn't restore that file: ${err instanceof Error ? err.message : String(err)}`;
+    });
+  el<HTMLInputElement>("backup-file").value = "";
 });
 
 el<HTMLButtonElement>("reset").addEventListener("click", () => {

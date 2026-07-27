@@ -338,3 +338,39 @@ test("a route can be planned by typing both ends, not just tapping the map", asy
   await page.locator("#from-locate").click();
   await expect(page.locator("#from-field")).toHaveValue("");
 });
+
+test("saved places survive a wipe via backup and restore", async ({ page }) => {
+  // Uninstalling an Android app wipes its storage, so places vanished on every
+  // update while each APK needed a reinstall. Backup is the safety net.
+  await boot(page);
+  await page.evaluate(() => {
+    localStorage.setItem(
+      "savedPlaces",
+      JSON.stringify([{ name: "Home", lon: -71.1, lat: 42.38 }]),
+    );
+  });
+  await page.reload();
+  await page.waitForFunction(() => window._map !== undefined, null, { timeout: 45_000 });
+  await openSection(page, "Preferences");
+  await expect(page.locator("#places-list")).toContainText("Home");
+
+  const download = await Promise.race([
+    page.waitForEvent("download", { timeout: 15_000 }),
+    page.locator("#backup-save").click().then(() => null),
+  ]);
+  const file = download ? await download.path() : null;
+  expect(file).not.toBeNull();
+  await expect(page.locator("#backup-note")).toContainText(/Backed up 1 saved place/);
+
+  // the device gets wiped
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+  await page.waitForFunction(() => window._map !== undefined, null, { timeout: 45_000 });
+  await openSection(page, "Preferences");
+  await expect(page.locator("#places-list")).not.toContainText("Home");
+
+  // restore from the file we just downloaded
+  if (file) await page.locator("#backup-file").setInputFiles(file);
+  await expect(page.locator("#backup-note")).toContainText(/Restored/);
+  await expect(page.locator("#places-list")).toContainText("Home");
+});

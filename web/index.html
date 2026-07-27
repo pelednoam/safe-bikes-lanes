@@ -472,6 +472,15 @@
     <label class="pref"><input type="checkbox" id="avoid-sharrow"> sharrows</label>
     <label class="pref"><input type="checkbox" id="avoid-moderate_street"> moderate streets</label>
     <label class="pref"><input type="checkbox" id="avoid-busy_street"> busy streets</label>
+    <div class="pref-head">💾 my data</div>
+    <div class="hint">Saved places and marks live on this device. Back them up
+    before reinstalling the app — uninstalling Android apps wipes their data.</div>
+    <div class="row">
+      <button id="backup-save" title="Download your places, marks and history as a file">⬇ Back up</button>
+      <button id="backup-load" title="Restore from a backup file">⬆ Restore</button>
+      <input id="backup-file" type="file" accept="application/json,.json" style="display:none">
+    </div>
+    <div id="backup-note" class="hint"></div>
     <div id="sketchy-section">
       <b>Your sketchy marks</b> (routes avoid these)
       <div id="sketchy-list"></div>

@@ -1,7 +1,7 @@
 import { isNativeApp, isNewerAppVersion, nativeSpeak, startDownload, startBackgroundWatcher, stopBackgroundWatcher, } from "./native.js";
 import { bearingDeg, buildAlerts, buildManeuvers, buildTrack, distM, snapToTrack, sunsetTime, trackBearingAhead, trackSlice, } from "./nav.js";
 import { addHazard, buildReportText, downscalePhoto, getHazardPhoto, HAZARD_LABELS, listHazards, removeHazard, } from "./hazards.js";
-import { clearRecent, deletePlace, emojiFor, listPlaces, listRecent, pushRecent, savePlace, } from "./places.js";
+import { clearRecent, deletePlace, emojiFor, exportBackup, importBackup, listPlaces, listRecent, pushRecent, savePlace, } from "./places.js";
 import { clearRides, deleteRide, loadRides, RideRecorder, rideTotals, saveRide, } from "./rides.js";
 import { initDataSource, loadJson, usingRemoteData } from "./data.js";
 import { buildCues, PROFILES, Router, toGPX } from "./router.js";
@@ -2068,6 +2068,42 @@ el("from-pick").addEventListener("click", () => {
     f.classList.add("picking");
     f.value = "";
     f.placeholder = "tap the map to set the start…";
+});
+el("backup-save").addEventListener("click", () => {
+    const backup = exportBackup(new Date().toISOString());
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `family-bike-router-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    const places = listPlaces().length;
+    el("backup-note").textContent =
+        `Backed up ${places} saved place${places === 1 ? "" : "s"} and your marks.`;
+});
+el("backup-load").addEventListener("click", () => {
+    el("backup-file").click();
+});
+el("backup-file").addEventListener("change", () => {
+    const file = el("backup-file").files?.[0];
+    if (!file)
+        return;
+    void file
+        .text()
+        .then((text) => {
+        const n = importBackup(JSON.parse(text));
+        renderPlacesAndRecent();
+        sketchyMarks = loadSketchy();
+        applyAvoidPoints();
+        renderSketchy();
+        el("backup-note").textContent =
+            `Restored ${n} item${n === 1 ? "" : "s"} — ${listPlaces().length} saved places.`;
+    })
+        .catch((err) => {
+        el("backup-note").textContent =
+            `Couldn't restore that file: ${err instanceof Error ? err.message : String(err)}`;
+    });
+    el("backup-file").value = "";
 });
 el("reset").addEventListener("click", () => {
     start?.remove();
