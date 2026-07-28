@@ -483,6 +483,7 @@ async function requestRoute() {
         selectOption(wanted !== null && options.some((o) => o.id === wanted) ? wanted : fallback.id);
         recordRecentRoute([s.lng, s.lat], [d.lng, d.lat]);
         revealSheet();
+        frameRoute(fallback);
     }
     catch (err) {
         options = [];
@@ -2868,6 +2869,51 @@ function closeAsk() {
     el("nav-ask").style.display = "none";
     navAskYes = null;
 }
+/** "in 50 meters, you have arrived" is not English. The destination maneuver's
+ * wording is written for the moment of arrival, so the staged calls need their
+ * own phrasing. Returns null for ordinary turns. */
+function arrivalPhrase(voice, metres) {
+    return /have arrived/i.test(voice) ? `in ${metres} meters, your destination` : null;
+}
+/** Where we're going, for the arrival line. */
+let navDestLabel = null;
+/** Fit the map to a freshly planned route. A link is how routes are shared, and
+ * the recipient of a 42 km route was left looking at the default view with 2% of
+ * it on screen. Skipped while navigating, where the camera belongs to the rider. */
+function frameRoute(option) {
+    if (navActive)
+        return;
+    const coords = option.payload.geojson.features.flatMap((f) => f.geometry.type === "LineString" ? f.geometry.coordinates : []);
+    if (coords.length < 2)
+        return;
+    let w = Infinity;
+    let sth = Infinity;
+    let e = -Infinity;
+    let n = -Infinity;
+    for (const [lon, lat] of coords) {
+        if (lon < w)
+            w = lon;
+        if (lon > e)
+            e = lon;
+        if (lat < sth)
+            sth = lat;
+        if (lat > n)
+            n = lat;
+    }
+    const phone = window.matchMedia("(max-width: 760px)").matches;
+    map.fitBounds([
+        [w, sth],
+        [e, n],
+    ], {
+        // leave room for the panel: on a phone it's a bottom sheet, on desktop
+        // it's down the left-hand side
+        padding: phone
+            ? { top: 60, bottom: Math.round(window.innerHeight * 0.5), left: 30, right: 30 }
+            : { top: 60, bottom: 60, left: 380, right: 60 },
+        duration: 700,
+        maxZoom: 16,
+    });
+}
 /** A bearing as something sayable ("north-east"), for telling an off-route
  * rider which way the new route runs. */
 function compassPoint(deg) {
@@ -2973,13 +3019,15 @@ function navOnFix(fix) {
     }
     if (!navPrevPos || distM(navPrevPos, [lon, lat]) > 3)
         navPrevPos = [lon, lat];
-    recorder?.addPoint(Date.now(), lon, lat, router.edgeClassAt(lon, lat));
     // keep the ride recoverable: Back, a reload or a crash used to lose it all
     if (recorder && ++navFixesSinceStash >= STASH_EVERY_FIXES) {
         navFixesSinceStash = 0;
         stashInProgress(recorder.finish(profileId));
     }
     const snap = snapToTrack(navTrack, lon, lat, navHint);
+    // record against along-route progress rather than raw fix-to-fix distance,
+    // which counted GPS wander as forward motion
+    recorder?.addPoint(Date.now(), lon, lat, router.edgeClassAt(lon, lat), snap.offM <= OFF_ROUTE_M ? snap.alongM : undefined);
     // Draw the dot ON the route while we're plausibly on it — raw bike GPS
     // wanders 5-15 m, which visibly drifts the dot into buildings and across
     // the street. Beyond SNAP_DISPLAY_M show the true position, so actually
@@ -3102,13 +3150,13 @@ function navOnFix(fix) {
         }
         else if (navAnnounceStage < 2 &&
             distToNext <= announceDist(ANNOUNCE_NEAR_S, ANNOUNCE_NEAR_CLAMP)) {
-            speak(`in ${Math.round(distToNext / 10) * 10} meters, ${next.voice}${chain}`);
+            speak(arrivalPhrase(next.voice, Math.round(distToNext / 10) * 10) ?? `in ${Math.round(distToNext / 10) * 10} meters, ${next.voice}${chain}`);
             vibrate([100]);
             navAnnounceStage = 2;
         }
         else if (navAnnounceStage < 1 &&
             distToNext <= announceDist(ANNOUNCE_FAR_S, ANNOUNCE_FAR_CLAMP)) {
-            speak(`in ${Math.round(distToNext / 50) * 50} meters, ${next.voice}`);
+            speak(arrivalPhrase(next.voice, Math.round(distToNext / 50) * 50) ?? `in ${Math.round(distToNext / 50) * 50} meters, ${next.voice}`);
             navAnnounceStage = 1;
         }
     }
@@ -3149,14 +3197,20 @@ function navOnFix(fix) {
         vibrate([200, 100, 200]);
         if (navOriginalDest) {
             speak("arrived at your stop. tap resume when you're ready to ride on.");
-            el("nav-dist").textContent = "🛑";
-            el("nav-street").textContent = "at the stop — resume when ready";
+            el("nav-icon").textContent = "🛑";
+            el("nav-dist").textContent = "At the stop";
+            el("nav-street").textContent = "tap ▶ resume to ride on";
             el("nav-resume").style.display = "inline-block";
         }
         else {
             speak(`you have arrived. ${(navTrack.totalM / 1000).toFixed(1)} kilometers — nicely done!`);
-            el("nav-dist").textContent = "🏁";
-            el("nav-street").textContent = "arrived!";
+            el("nav-icon").textContent = "🏁";
+            el("nav-dist").textContent = "Arrived";
+            el("nav-street").textContent = navDestLabel ?? "you're there";
+            el("nav-remaining").textContent =
+                `${(navTrack.totalM / 1000).toFixed(1)} km ridden`;
+            el("nav-speed").textContent = "";
+            hideRideAlert();
             finishAndSaveRide();
         }
     }
@@ -3181,6 +3235,7 @@ async function startNav() {
     if (!destLngLat)
         return;
     navDest = [destLngLat.lng, destLngLat.lat];
+    navDestLabel = el("search").value.trim().split(",")[0] || null;
     navOriginalDest = null;
     el("nav-resume").style.display = "none";
     navActive = true;

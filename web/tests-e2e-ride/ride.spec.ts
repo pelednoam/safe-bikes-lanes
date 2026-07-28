@@ -63,7 +63,11 @@ test("a whole ride: guidance, progress and arrival", async ({ page }) => {
   }
   // arrival is announced and the ride is recorded
   expect(log.spoken.join(" | ")).toMatch(/arrived/i);
-  await expect(page.locator("#nav-street")).toContainText(/arrived/i, { timeout: 10_000 });
+  // the big slot says the word; the line below names where you are, and the
+  // stale speed reading is cleared
+  await expect(page.locator("#nav-dist")).toContainText(/arrived/i, { timeout: 10_000 });
+  await expect(page.locator("#nav-remaining")).toContainText(/km ridden/);
+  await expect(page.locator("#nav-speed")).toHaveText("");
 });
 
 test("a wrong turn is noticed and rerouted, not ignored", async ({ page }) => {
@@ -246,4 +250,18 @@ test("joining a route part-way doesn't machine-gun the milestones", async ({ pag
   const spoken = await page.evaluate(() => window.__rider.spoken);
   const chimes = spoken.filter((s) => /kilometers? done/i.test(s));
   expect(chimes.length).toBeLessThanOrEqual(1);
+});
+
+test("the saved ride distance matches the route, not GPS wander", async ({ page }) => {
+  test.slow();
+  const path = await startRide(page);
+  // ride 3 km at a kid's pace with realistic wander; the recorded distance used
+  // to come out 18-60% long and contradict the spoken arrival total
+  await ride(page, path, { speedKmh: 8, jitterM: 8, timeScale: 60, untilM: 3000 });
+  const ridden = await page.evaluate(() => {
+    const raw = localStorage.getItem("rideInProgress");
+    return raw ? (JSON.parse(raw) as { meters: number }).meters : 0;
+  });
+  expect(ridden).toBeGreaterThan(3000 * 0.85);
+  expect(ridden).toBeLessThan(3000 * 1.15);
 });

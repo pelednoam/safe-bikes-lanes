@@ -918,8 +918,14 @@ export class Router {
       const key = path.join(",") + (walkFlags ? "|w" : "");
       if (seen.has(key)) continue;
       seen.add(key);
+      // Price every option at the RIDER's pace. "Balanced" is routed with the
+      // milder profile's weights, but it was also timed at that profile's speed,
+      // so an identical 8.6 km ride showed 64 min as "Safest" and 47 min as
+      // "Balanced" — reading as "save 17 minutes for free" and pushing riders
+      // off the safest option for no reason. You don't ride faster because the
+      // route was chosen differently.
       const payload =
-        c.id === "direct" ? directPayload : this.payload(path, c.profile, walkFlags);
+        c.id === "direct" ? directPayload : this.payload(path, profile, walkFlags);
       payload.summary.shortest_meters = directPayload.summary.meters;
       payload.summary.detour_pct =
         directPayload.summary.meters > 0

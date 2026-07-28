@@ -1,7 +1,7 @@
 // Behavior tests for the in-browser router on small synthetic graphs.
 import { describe, expect, it } from "vitest";
 
-import { buildCues, Router, toGPX } from "../src/router.js";
+import { buildCues, PROFILES, Router, toGPX } from "../src/router.js";
 import type { PoiFeature } from "../src/types.js";
 
 /*
@@ -387,5 +387,20 @@ describe("ok-to-walk mode", () => {
     )[0];
     expect(roomy?.payload.summary.walk_m).toBe(150);
     expect(roomy?.payload.summary.explanation?.join(" ")).toMatch(/200 m walking budget/);
+  });
+});
+
+describe("option pricing", () => {
+  it("times every option at the rider's own pace", () => {
+    // "Balanced" is routed with the milder profile's weights, but the rider
+    // doesn't ride faster because of it: an identical-length ride used to show
+    // 64 min as Safest and 47 min as Balanced, which reads as free time saved.
+    const opts = toyRouter().routeOptions(A, B, "young_kids");
+    const pace = PROFILES.young_kids.paceKmh;
+    for (const o of opts) {
+      const expected = (o.payload.summary.meters / 1000 / pace) * 60;
+      // within a minute of the rider's pace (walking stretches aside)
+      expect(Math.abs(o.payload.summary.minutes - expected)).toBeLessThan(1.5);
+    }
   });
 });

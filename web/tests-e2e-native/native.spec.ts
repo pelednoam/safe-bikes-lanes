@@ -39,11 +39,20 @@ async function nativeShim(page: Page): Promise<void> {
   });
 }
 
+/** Failures the app handles by design: the data resolver tries the website and
+ * falls back to the bundled copy, so an unreachable site is not an app error —
+ * and the sandbox running these tests has no route to it. Anything else counts. */
+function isExpectedOfflineNoise(text: string): boolean {
+  return /pelednoam\.github\.io|ERR_FAILED|ERR_INTERNET_DISCONNECTED|CORS policy/.test(text);
+}
+
 async function bootNative(page: Page): Promise<string[]> {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(`pageerror: ${e.message}`));
   page.on("console", (m) => {
-    if (m.type() === "error") errors.push(`console: ${m.text()}`);
+    if (m.type() === "error" && !isExpectedOfflineNoise(m.text())) {
+      errors.push(`console: ${m.text()}`);
+    }
   });
   await nativeShim(page);
   await page.goto("/");

@@ -22,6 +22,20 @@ export interface RideSummary {
 const STORE_KEY = "rideHistory";
 const MIN_SAVE_M = 200;
 const MIN_STEP_M = 3;
+/** Distance is accumulated over spans of at least this far (or this often),
+ * not per fix. Summing per-fix displacement made GPS wander *be* the distance:
+ * at a young-kids pace of 8 km/h a 1 Hz fix moves 2.2 m, well under typical
+ * 5-15 m bike-GPS wander, so a measured ride came out 18-60% long and the app
+ * announced "8.6 kilometers" then "ride saved. 12.9 kilometers." */
+/** Window by TIME, never by distance: triggering on the noisy displacement
+ * itself preferentially counts the fixes where wander happened to push it up,
+ * which is a bias that no threshold choice removes. Over 10 s a riding child
+ * covers ~22 m, so wander is a small fraction of each span. */
+const ANCHOR_MAX_MS = 10_000;
+/** Below this per window we were parked, not riding. */
+const ANCHOR_MIN_M = 12;
+/** A drop this large in along-route progress means the route was replaced. */
+const ALONG_REBASE_M = 50;
 const POLYLINE_STEP_M = 15;
 const MOVING_SPEED_MS = 0.8;
 const MAX_RIDES = 200;
@@ -32,6 +46,10 @@ export class RideRecorder {
   private startT: number | null = null;
   private lastT = 0;
   private last: [number, number] | null = null;
+  private anchor: [number, number] | null = null;
+  private anchorT = 0;
+  private alongBase: number | null = null;
+  private alongMax = 0;
   private lastPoly: [number, number] | null = null;
   private polyline: [number, number][] = [];
   private meters = 0;
@@ -40,34 +58,80 @@ export class RideRecorder {
   /** Timestamp of the last sample that showed movement. */
   lastMovedAt = 0;
 
-  addPoint(tMs: number, lon: number, lat: number, cls: ProtectionClass | null): void {
+  /** `alongM` is progress along the navigated route, when there is one. */
+  addPoint(
+    tMs: number,
+    lon: number,
+    lat: number,
+    cls: ProtectionClass | null,
+    alongM?: number,
+  ): void {
     const cur: [number, number] = [lon, lat];
     if (this.startT === null || this.last === null) {
       this.startT = tMs;
       this.lastT = tMs;
       this.last = cur;
       this.lastPoly = cur;
+      this.anchor = cur;
+      this.anchorT = tMs;
       this.polyline.push(cur);
       this.lastMovedAt = tMs;
       return;
     }
-    const d = distM(this.last, cur);
+    const dRaw = distM(this.last, cur);
     const dt = (tMs - this.lastT) / 1000;
     this.lastT = tMs;
-    if (d < MIN_STEP_M) return; // GPS jitter while stopped
-    this.meters += d;
-    if (dt > 0 && d / dt > MOVING_SPEED_MS) this.movingS += dt;
-    this.lastMovedAt = tMs;
-    if (cls !== null) this.byClass.set(cls, (this.byClass.get(cls) ?? 0) + d);
     this.last = cur;
+    if (dt > 0 && dRaw >= MIN_STEP_M && dRaw / dt > MOVING_SPEED_MS) {
+      this.movingS += dt;
+      this.lastMovedAt = tMs;
+    }
     if (this.lastPoly === null || distM(this.lastPoly, cur) > POLYLINE_STEP_M) {
       this.polyline.push(cur);
       this.lastPoly = cur;
     }
+    // Prefer along-route progress when navigating: perpendicular wander can't
+    // advance it and longitudinal wander averages out, so it needs no filtering.
+    if (alongM !== undefined) {
+      // High-water mark, not a sum of steps: adding every positive step while
+      // discarding the negative ones is a ratchet, and wander then compounds
+      // (measured 22% long over 3 km). This way wander can overstate the ride
+      // by at most one excursion in total.
+      if (this.alongBase === null) {
+        this.alongBase = alongM;
+        this.alongMax = alongM;
+      } else if (alongM < this.alongBase - ALONG_REBASE_M) {
+        // a reroute rebased the track: bank what we rode and start again
+        this.meters += this.alongMax - this.alongBase;
+        this.alongBase = alongM;
+        this.alongMax = alongM;
+      } else if (alongM > this.alongMax) {
+        const step = alongM - this.alongMax;
+        this.alongMax = alongM;
+        if (cls !== null) this.byClass.set(cls, (this.byClass.get(cls) ?? 0) + step);
+      }
+      return;
+    }
+    // Free recording (no route): measure displacement over a time window.
+    const anchor = this.anchor ?? cur;
+    if (tMs - this.anchorT >= ANCHOR_MAX_MS) {
+      const dAnchor = distM(anchor, cur);
+      if (dAnchor >= ANCHOR_MIN_M) {
+        this.meters += dAnchor;
+        if (cls !== null) this.byClass.set(cls, (this.byClass.get(cls) ?? 0) + dAnchor);
+      }
+      this.anchor = cur;
+      this.anchorT = tMs;
+    }
+  }
+
+  /** Banked distance plus the current along-route span. */
+  private get total(): number {
+    return this.meters + (this.alongBase === null ? 0 : this.alongMax - this.alongBase);
   }
 
   get metersSoFar(): number {
-    return this.meters;
+    return this.total;
   }
 
   get durationSoFar(): number {
@@ -76,14 +140,14 @@ export class RideRecorder {
 
   /** Returns null for rides too short to be worth keeping. */
   finish(profile: ProfileId): RideSummary | null {
-    if (this.startT === null || this.meters < MIN_SAVE_M) return null;
+    if (this.startT === null || this.total < MIN_SAVE_M) return null;
     const classified = [...this.byClass.values()].reduce((a, b) => a + b, 0);
     const sumOf = (set: ReadonlySet<ProtectionClass>): number =>
       [...this.byClass.entries()].reduce((a, [c, m]) => a + (set.has(c) ? m : 0), 0);
     return {
       id: `${this.startT}`,
       startedAt: new Date(this.startT).toISOString(),
-      meters: Math.round(this.meters),
+      meters: Math.round(this.total),
       durationS: Math.round((this.lastT - this.startT) / 1000),
       movingS: Math.round(this.movingS),
       byClass: Object.fromEntries(

@@ -75,3 +75,54 @@ describe("rideTotals", () => {
     expect(totals.avgProtectedPct).toBe(61); // (50*5000 + 80*3000) / 8000
   });
 });
+
+describe("distance measurement under GPS wander", () => {
+  /** Deterministic wander so the expectation is stable. */
+  function noise(seed: number): () => number {
+    let s = seed;
+    return () => {
+      s = (s * 1103515245 + 12345) & 0x7fffffff;
+      return s / 0x7fffffff - 0.5;
+    };
+  }
+
+  /** Ride straight east at `speedKmh`, 1 Hz, with `jitterM` of wander. */
+  function measure(speedKmh: number, jitterM: number, metres: number): number {
+    const rec = new RideRecorder();
+    const lat = 42.38;
+    const mPerDegLon = 111_320 * Math.cos((lat * Math.PI) / 180);
+    const step = (speedKmh * 1000) / 3600;
+    const rnd = noise(99);
+    let t = 0;
+    for (let d = 0; d <= metres; d += step) {
+      const lon = -71.1 + (d + rnd() * jitterM * 2) / mPerDegLon;
+      rec.addPoint(t, lon, lat + (rnd() * jitterM * 2) / 110_540, "quiet_street");
+      t += 1000;
+    }
+    return rec.finish("young_kids")?.meters ?? 0;
+  }
+
+  it("is close to the truth at a young-kids pace with realistic wander", () => {
+    // 8 km/h is 2.2 m per fix — well under typical 5-15 m bike-GPS wander, which
+    // used to make the recorded ride 18-60% long
+    const measured = measure(8, 7, 3000);
+    expect(measured).toBeGreaterThan(3000 * 0.85);
+    expect(measured).toBeLessThan(3000 * 1.15);
+  });
+
+  it("doesn't accumulate distance while stopped", () => {
+    const rec = new RideRecorder();
+    const rnd = noise(7);
+    for (let i = 0; i < 120; i++) {
+      // parked at a light, 8 m of wander, two minutes
+      rec.addPoint(i * 1000, -71.1 + (rnd() * 16) / 82_000, 42.38 + (rnd() * 16) / 110_540, null);
+    }
+    expect(rec.metersSoFar).toBeLessThan(60);
+  });
+
+  it("still measures a fast rider correctly", () => {
+    const measured = measure(20, 5, 5000);
+    expect(measured).toBeGreaterThan(5000 * 0.9);
+    expect(measured).toBeLessThan(5000 * 1.1);
+  });
+});

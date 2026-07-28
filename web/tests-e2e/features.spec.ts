@@ -374,3 +374,31 @@ test("saved places survive a wipe via backup and restore", async ({ page }) => {
   await expect(page.locator("#backup-note")).toContainText(/Restored/);
   await expect(page.locator("#places-list")).toContainText("Home");
 });
+
+test("a shared route link brings the route into view", async ({ page }) => {
+  // a link is how routes are shared; the recipient of a long route used to get
+  // the default view of Somerville with ~2% of the route on screen
+  await boot(page, "#s=-71.293,42.296&e=-71.012,42.408&m=solo");
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 90_000 });
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() => {
+          const src = window._map?.getSource("route") as
+            | { _data?: GeoJSON.FeatureCollection }
+            | undefined;
+          const coords = (src?._data?.features ?? []).flatMap((f) =>
+            f.geometry.type === "LineString" ? (f.geometry.coordinates as [number, number][]) : [],
+          );
+          if (coords.length === 0 || !window._map) return 0;
+          const b = window._map.getBounds();
+          const inside = coords.filter(
+            (c) =>
+              c[0] >= b.getWest() && c[0] <= b.getEast() && c[1] >= b.getSouth() && c[1] <= b.getNorth(),
+          );
+          return Math.round((100 * inside.length) / coords.length);
+        }),
+      { timeout: 30_000 },
+    )
+    .toBeGreaterThan(80);
+});
