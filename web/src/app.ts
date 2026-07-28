@@ -2914,6 +2914,11 @@ function navUpdateTrip(remainingM: number, straight = false): void {
 }
 
 function navUpdateBanner(distToNext: number, remainingM: number): void {
+  // Once arrived, leave the arrival message up: the next fix a second later
+  // used to overwrite it with the last turn instruction, so the rider never
+  // actually saw that they'd got there. (Cleared on reroute/resume, which
+  // resets navArrived.)
+  if (navArrived) return;
   const m = navManeuvers[navNext];
   el<HTMLElement>("nav-icon").textContent = m?.icon ?? "⬆";
   el<HTMLElement>("nav-dist").textContent =

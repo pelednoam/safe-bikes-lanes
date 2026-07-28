@@ -2716,6 +2716,12 @@ function navUpdateTrip(remainingM, straight = false) {
         navSpeed > 0.8 ? `${((navSpeed * 3600) / 1000).toFixed(0)} km/h` : "";
 }
 function navUpdateBanner(distToNext, remainingM) {
+    // Once arrived, leave the arrival message up: the next fix a second later
+    // used to overwrite it with the last turn instruction, so the rider never
+    // actually saw that they'd got there. (Cleared on reroute/resume, which
+    // resets navArrived.)
+    if (navArrived)
+        return;
     const m = navManeuvers[navNext];
     el("nav-icon").textContent = m?.icon ?? "⬆";
     el("nav-dist").textContent =
