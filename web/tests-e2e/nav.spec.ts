@@ -272,15 +272,19 @@ test("tapping the map mid-ride asks before it throws the route away", async ({ p
   await context.setGeolocation({ longitude: coords[5]?.[0] ?? 0, latitude: coords[5]?.[1] ?? 0 });
   await page.waitForTimeout(600);
 
-  // decline: the ride carries on untouched
-  page.once("dialog", (d) => void d.dismiss());
+  // asked in-page, not via window.confirm (which blocked the whole page and
+  // froze guidance until answered)
   await page.mouse.click(700, 620);
-  await page.waitForTimeout(400);
+  await expect(page.locator("#nav-ask")).toBeVisible();
+
+  // decline: the ride carries on untouched
+  await page.locator("#nav-ask-no").click();
+  await expect(page.locator("#nav-ask")).toBeHidden();
   await expect(page.locator("#nav-banner")).toBeVisible();
 
   // accept: the ride ends and the planner comes back
-  page.once("dialog", (d) => void d.accept());
   await page.mouse.click(700, 620);
+  await page.locator("#nav-ask-yes").click();
   await expect(page.locator("#nav-banner")).not.toBeVisible();
 });
 
