@@ -319,3 +319,42 @@ test("a mis-tapped detour can be abandoned immediately", async ({ page }) => {
   await expect(page.locator("#nav-resume")).toBeHidden();
   await expect(page.locator("#nav-banner")).toBeVisible();
 });
+
+test("the view looks ahead, not at where you've been", async ({ page }) => {
+  const path = await startRide(page);
+  await ride(page, path, { speedKmh: 12, timeScale: 30, untilM: 250 });
+  const dot = await page.evaluate(() => {
+    const el = document.querySelector(".nav-dot") as HTMLElement | null;
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return { y: r.top + r.height / 2, h: window.innerHeight };
+  });
+  expect(dot).not.toBeNull();
+  if (!dot) return;
+  // the rider should sit well below the middle, so the screen is mostly the
+  // road ahead — dead-centre left ~60% of it showing ground already covered
+  expect(dot.y / dot.h).toBeGreaterThan(0.55);
+});
+
+test("guidance names what an unnamed way actually is", async ({ page }) => {
+  test.slow();
+  const path = await startRide(page);
+  const log = await ride(page, path, { speedKmh: 14, timeScale: 60 });
+  // "the path" was said 72 times on one long ride and can't be acted on
+  const vague = log.spoken.filter((s) => /onto the path\b/.test(s));
+  expect(vague).toHaveLength(0);
+  // and nothing tells you to turn onto the way you're already on
+  for (const s of log.spoken) {
+    const m = /(?:turn|continue|slight|sharp) \w* ?(?:left|right)? ?onto (.+?)(?:,|$)/.exec(s);
+    if (m) expect(s).not.toMatch(new RegExp(`onto ${m[1]}, then \\\\w+ \\\\w+ onto ${m[1]}$`));
+  }
+  // no three-part chains
+  expect(log.spoken.filter((s) => (s.match(/, then /g) ?? []).length > 1)).toHaveLength(0);
+});
+
+test("a solo rider isn't told to gather up the kids", async ({ page }) => {
+  test.slow();
+  const path = await startRide(page, "#s=-71.122258,42.396748&e=-71.086705,42.362552&m=solo");
+  const log = await ride(page, path, { speedKmh: 16, timeScale: 60, untilM: 4000 });
+  expect(log.spoken.filter((s) => /gather up/i.test(s))).toHaveLength(0);
+});

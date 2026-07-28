@@ -51,6 +51,22 @@ function classifyTurn(delta) {
         return { icon: arrow.turn, word: `turn ${side}` };
     return { icon: arrow.sharp, word: `sharp ${side}` };
 }
+/** What to call a way with no name, by what kind of way it is. */
+function unnamedTarget(cls) {
+    switch (cls) {
+        case "path":
+            return "the bike path";
+        case "separated":
+            return "the separated lane";
+        case "buffered":
+        case "lane":
+            return "the bike lane";
+        case "service":
+            return "the service road";
+        default:
+            return "the side street";
+    }
+}
 /** Generate maneuvers at feature boundaries: turns and street-name changes. */
 export function buildManeuvers(payload) {
     const feats = payload.geojson.features;
@@ -82,11 +98,17 @@ export function buildManeuvers(payload) {
         const nameChanged = nxtName !== "" && nxtName !== curName;
         if (turn === null && !nameChanged)
             continue;
-        // suppress boundary noise: same name and only a gentle bend
-        if (turn === null && !nameChanged)
+        // A path split into differently-named-but-identical segments produced
+        // "continue onto Community Path" while already on the Community Path, and
+        // "turn right onto X, then turn left onto X" — instructions that carry no
+        // information. Only announce a same-name boundary if it's a real turn.
+        if (!nameChanged && turn === null)
             continue;
         const at = nxtCs[0];
-        const target = nxtName || "the path";
+        // Unnamed ways were all "the path", which was said 72 times on one ride and
+        // is not something you can act on. Describe what it is instead, from the
+        // segment's protection class.
+        const target = nxtName || unnamedTarget(nxt.properties.cls);
         if (turn === null) {
             maneuvers.push({
                 atM: cum,
@@ -124,7 +146,10 @@ export function buildManeuvers(payload) {
     const merged = [];
     for (const m of maneuvers) {
         const prev = merged[merged.length - 1];
-        if (prev && m.atM - prev.atM < 15 && m.text !== "destination") {
+        // one "then" only: chains of three were unfollowable ("turn right onto the
+        // bike path, then turn left onto the bike path, then continue onto
+        // Soldiers Field Road")
+        if (prev && m.atM - prev.atM < 15 && m.text !== "destination" && !prev.voice.includes(", then ")) {
             prev.text = m.text;
             prev.voice = `${prev.voice}, then ${m.voice}`;
         }

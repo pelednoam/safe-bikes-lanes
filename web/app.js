@@ -636,7 +636,7 @@ function renderOptions() {
         // breakdown below it already spells out protected/quiet/climb
         stats.textContent =
             o.id === selectedId
-                ? `${fmtDist(s.meters)} · ${s.minutes} min`
+                ? `${fmtDist(s.meters)} · ${s.minutes} min · ${s.pct_protected}% protected`
                 : `${fmtDist(s.meters)} · ${s.minutes} min · ${s.pct_protected}% protected` +
                     ` · ↗ ${s.climb_m ?? 0} m`;
         body.append(name, stats);
@@ -2636,8 +2636,12 @@ const THEN_CHAIN_M = 45;
  * so being genuinely off-route is visible rather than hidden). */
 const SNAP_DISPLAY_M = 25;
 /** Follow-camera zooms: cruising, and tightened near a maneuver. */
-const NAV_ZOOM_CRUISE = 16.4;
-const NAV_ZOOM_TURN = 17.4;
+// Both land in the same raster-tile zoom bucket on purpose: cruising at 16.4
+// fetched z16 tiles and every one of ~150 turns then fetched a fresh z17 set
+// and back again, which measured out at roughly 120 MB of basemap over a 42 km
+// ride. Staying inside one bucket removes that churn.
+const NAV_ZOOM_CRUISE = 16.6;
+const NAV_ZOOM_TURN = 17.3;
 const NAV_ZOOM_TURN_M = 90;
 const NAV_PITCH = 50;
 /** After the rider stops touching the map, the camera takes itself back —
@@ -2955,6 +2959,11 @@ function hereLabel(lon, lat) {
     const cls = router?.edgeClassAt(lon, lat);
     return cls ? `on a ${cls.replace(/_/g, " ")}` : "at this spot";
 }
+/** "gather up" is what you say to children. A solo rider heard it 32 times on
+ * one ride, which is both odd and easy to stop listening to. */
+function ridePhrasing(voice) {
+    return profileId === "solo" ? voice.replace(/\bgather up\b/gi, "take care") : voice;
+}
 /** A bearing as something sayable ("north-east"), for telling an off-route
  * rider which way the new route runs. */
 function compassPoint(deg) {
@@ -2996,7 +3005,15 @@ function navAnimate() {
             Math.abs(angleDelta(map.getBearing(), navBearingShown)) > 0.05 ||
             Math.abs(zoom - curZoom) > 0.002;
         if (moved) {
-            map.jumpTo({ center: navPosShown, bearing: navBearingShown, zoom, pitch: NAV_PITCH });
+            // Padding pushes the rider down the screen so the view is mostly the road
+            // AHEAD: centred, ~60% of the display was ground already covered.
+            map.jumpTo({
+                center: navPosShown,
+                bearing: navBearingShown,
+                zoom,
+                pitch: NAV_PITCH,
+                padding: { top: Math.round(map.getCanvas().clientHeight * 0.34), bottom: 0, left: 0, right: 0 },
+            });
         }
     }
     navRaf = requestAnimationFrame(navAnimate);
@@ -3207,10 +3224,10 @@ function navOnFix(fix) {
     }
     const alert = navAlerts[navAlertNext];
     if (alert && alert.atM - snap.alongM <= 100) {
-        speak(alert.voice, "safety");
+        speak(ridePhrasing(alert.voice), "safety");
         vibrate([100, 80, 100]);
         // and put it on screen, held until we're past the hazard
-        showRideAlert(`⚠ ${alert.voice}`);
+        showRideAlert(`⚠ ${ridePhrasing(alert.voice)}`);
         navAlertUntilM = alert.atM + 30;
         navAlertNext++;
     }
@@ -3296,6 +3313,11 @@ async function startNav() {
     el("nav-banner").classList.remove("expanded");
     el("nav-recenter").style.display = "none";
     map.setLayoutProperty("route-done", "visibility", "visible");
+    // the network is drawn in the same palette as the route; while riding, the
+    // line you're following has to be the obvious one
+    for (const layer of ["network", "network-unconfirmed"]) {
+        map.setPaintProperty(layer, "line-opacity", 0.35);
+    }
     try {
         wakeLock = await navigator.wakeLock.request("screen");
     }
@@ -3337,6 +3359,7 @@ function exitNav() {
     document.body.classList.remove("navigating");
     el("nav-banner").style.display = "none";
     map.setLayoutProperty("route-done", "visibility", "none");
+    applyBasemap(); // restores the network's normal opacity
     getSource("route-done").setData(emptyFC());
     const threeD = el("show-3d").checked;
     map.easeTo({ pitch: threeD ? 60 : 0, bearing: 0, duration: 800 });
