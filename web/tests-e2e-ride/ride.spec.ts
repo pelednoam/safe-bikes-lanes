@@ -10,6 +10,7 @@ import { installRider, ride } from "./rider.js";
 declare global {
   interface Window {
     _map?: MLMap;
+    __navAlertsSeen?: number;
     __rider: {
       spoken: string[];
       fixCount: number;
@@ -192,4 +193,57 @@ test("a ride interrupted by a reload is saved, not lost", async ({ page }) => {
   );
   expect(rides.length).toBeGreaterThan(0);
   expect(rides[0]?.meters ?? 0).toBeGreaterThan(200);
+});
+
+test("safety warnings are shown, not just spoken, and survive muting", async ({ page }) => {
+  test.slow();
+  const path = await startRide(page);
+  // mute first: a muted phone used to get no crossing warning at all
+  await page.locator("#nav-toggle").click();
+  await page.locator("#nav-mute").click();
+  await ride(page, path, { speedKmh: 12, timeScale: 30, untilM: 2500 });
+  // the ride passes busy crossings on this route; at least one was displayed
+  const seen = await page.evaluate(() => window.__navAlertsSeen ?? 0);
+  expect(seen).toBeGreaterThan(0);
+});
+
+test("a wrong turn says 'rerouting' once, not on every attempt", async ({ page }) => {
+  test.slow();
+  const path = await startRide(page);
+  // stand off-route: the old fixed cooldown re-announced every 10 s forever
+  let sawOffRouteAlert = false;
+  await ride(page, path, {
+    speedKmh: 12,
+    timeScale: 1,
+    fixHz: 2,
+    untilM: 420,
+    divertAtM: 200,
+    divertM: 220,
+    onFix: async () => {
+      // sample while we're actually off the line — it correctly clears again
+      // once the rider rejoins, which is where this ride ends
+      if (!sawOffRouteAlert) {
+        sawOffRouteAlert = await page.locator("#nav-alert").isVisible();
+      }
+    },
+  });
+  const spoken = await page.evaluate(() => window.__rider.spoken);
+  const reroutes = spoken.filter((s) => /rerouting|going your way/i.test(s));
+  expect(reroutes.length).toBeLessThanOrEqual(2);
+  // the rider was told they were off route rather than left on "adjusting…"
+  expect(sawOffRouteAlert).toBe(true);
+});
+
+test("joining a route part-way doesn't machine-gun the milestones", async ({ page }) => {
+  const path = await startRide(page);
+  // first fix lands ~4 km along, as after a car/train leg
+  const at = path[Math.floor(path.length * 0.45)] as [number, number];
+  await page.evaluate(
+    (p) => window.__rider.setFix({ lon: p[0], lat: p[1], speed: 3, heading: 0, accuracy: 8 }),
+    at,
+  );
+  await page.waitForTimeout(600);
+  const spoken = await page.evaluate(() => window.__rider.spoken);
+  const chimes = spoken.filter((s) => /kilometers? done/i.test(s));
+  expect(chimes.length).toBeLessThanOrEqual(1);
 });

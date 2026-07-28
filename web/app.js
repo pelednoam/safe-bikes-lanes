@@ -2669,6 +2669,14 @@ let navUserZoom = false;
 let navInteracting = false;
 let navRefollowTimer;
 let navImplausibleFixes = 0;
+/** Consecutive reroute attempts, for backing off between them. */
+let navRerouteTries = 0;
+/** Wall clock of the last spoken reroute, so one wrong turn says it once. */
+let navRerouteSpokenAt = 0;
+/** A persistent wrong turn is mentioned occasionally, not nagged: the riders'
+ * logs had "rerouting." nine times in one deviation, with the ETA strobing
+ * between the routed and straight-line estimates. */
+const REROUTE_ANNOUNCE_MIN_MS = 45000;
 /** Persist the in-progress ride every N fixes (cheap; finish() only reads). */
 const STASH_EVERY_FIXES = 20;
 let navFixesSinceStash = 0;
@@ -2690,23 +2698,73 @@ function finishAndSaveRide() {
     if (!ride)
         return;
     saveRide(ride);
-    speak(`ride saved. ${(ride.meters / 1000).toFixed(1)} kilometers.`);
+    speak(`ride saved. ${(ride.meters / 1000).toFixed(1)} kilometers.`, "chat");
 }
 function vibrate(pattern) {
     if ("vibrate" in navigator)
         navigator.vibrate(pattern);
 }
-function speak(text) {
+const PRIORITY_RANK = { safety: 3, turn: 2, chat: 1 };
+/** Roughly how long a spoken line takes, to space the queue out. */
+const SPEECH_MS_PER_CHAR = 62;
+const SPEECH_MIN_MS = 900;
+let speechQueue = [];
+let speaking = false;
+function speechDuration(text) {
+    return Math.max(SPEECH_MIN_MS, text.length * SPEECH_MS_PER_CHAR);
+}
+function drainSpeech() {
+    if (speaking)
+        return;
+    const next = speechQueue.shift();
+    if (!next)
+        return;
+    speaking = true;
+    const done = () => {
+        speaking = false;
+        drainSpeech();
+    };
+    void nativeSpeak(next.text)
+        .then((spokenNatively) => {
+        if (spokenNatively || !("speechSynthesis" in window)) {
+            window.setTimeout(done, speechDuration(next.text));
+            return;
+        }
+        const utter = new SpeechSynthesisUtterance(next.text);
+        utter.rate = 1.05;
+        utter.onend = done;
+        utter.onerror = done;
+        window.speechSynthesis.speak(utter);
+        // belt and braces: some engines never fire onend
+        window.setTimeout(() => {
+            if (speaking)
+                done();
+        }, speechDuration(next.text) + 1500);
+    })
+        .catch(done);
+}
+function speak(text, priority = "turn") {
     if (navMuted)
         return;
-    void nativeSpeak(text).then((spoken) => {
-        if (spoken || !("speechSynthesis" in window))
-            return;
+    // drop encouragement when there's real guidance waiting, and never let a
+    // lower-priority line delay a safety call
+    if (priority === "chat" && speechQueue.length > 0)
+        return;
+    if (speechQueue.some((u) => u.text === text))
+        return;
+    speechQueue.push({ text, priority });
+    speechQueue = speechQueue
+        .map((u, i) => ({ u, i }))
+        .sort((a, b) => PRIORITY_RANK[b.u.priority] - PRIORITY_RANK[a.u.priority] || a.i - b.i)
+        .map(({ u }) => u);
+    drainSpeech();
+}
+/** Abandon anything queued (ride over, or muted). */
+function clearSpeech() {
+    speechQueue = [];
+    speaking = false;
+    if ("speechSynthesis" in window)
         window.speechSynthesis.cancel();
-        const utter = new SpeechSynthesisUtterance(text);
-        utter.rate = 1.05;
-        window.speechSynthesis.speak(utter);
-    });
 }
 function rebuildNavFromSelected() {
     const sel = options.find((o) => o.id === selectedId);
@@ -2760,8 +2818,40 @@ function toFix(pos) {
         speed: pos.coords.speed,
     };
 }
+/** Losing GPS used to be silent, put "location unavailable — check permissions"
+ * over the street name (clipped mid-sentence at 220 px), and leave the big
+ * distance frozen looking live. Code 2 is a signal drop, not a permission
+ * problem, and the rider needs to hear about it. */
+let gpsLostSpokenAt = 0;
+function onLocationError(err) {
+    const denied = err.code === 1;
+    showRideAlert(denied ? "⚠ location permission denied" : "⚠ GPS signal lost", "gps");
+    if (!denied) {
+        const now = Date.now();
+        if (now - gpsLostSpokenAt > 20000) {
+            gpsLostSpokenAt = now;
+            speak("lost g p s signal. keep following the road.", "safety");
+        }
+    }
+}
 function navOnPosition(pos) {
     navOnFix(toFix(pos));
+}
+/** A warning the rider can SEE. The spoken version is the primary channel, but
+ * it is useless muted or over kids' chatter, and a safety app must not depend on
+ * audio alone. Cleared automatically once it's behind us. */
+let navAlertUntilM = 0;
+function showRideAlert(text, kind = "hazard") {
+    if (kind === "hazard")
+        window.__navAlertsSeen = (window.__navAlertsSeen ?? 0) + 1;
+    const box = el("nav-alert");
+    box.textContent = text;
+    box.classList.toggle("gps", kind === "gps");
+    box.style.display = "block";
+}
+function hideRideAlert() {
+    el("nav-alert").style.display = "none";
+    navAlertUntilM = 0;
 }
 /** Ask the rider something without stopping the ride. window.confirm blocks
  * the page, so guidance, the follow camera and the recorder all froze until it
@@ -2777,6 +2867,12 @@ let navAskYes = null;
 function closeAsk() {
     el("nav-ask").style.display = "none";
     navAskYes = null;
+}
+/** A bearing as something sayable ("north-east"), for telling an off-route
+ * rider which way the new route runs. */
+function compassPoint(deg) {
+    const names = ["north", "north-east", "east", "south-east", "south", "south-west", "west", "north-west"];
+    return names[Math.round(((deg % 360) + 360) % 360 / 45) % 8] ?? "on";
 }
 /** Shortest signed angle a -> b, in degrees. */
 function angleDelta(a, b) {
@@ -2851,6 +2947,8 @@ function navOnFix(fix) {
         navImplausibleFixes = 0;
     }
     navLastPos = [lon, lat];
+    if (el("nav-alert").classList.contains("gps"))
+        hideRideAlert();
     // smoothed ground speed, for timing the turn calls
     const now = Date.now();
     if (fix.speed !== null && fix.speed !== undefined && fix.speed >= 0) {
@@ -2912,13 +3010,28 @@ function navOnFix(fix) {
         // follow the rider's own direction while they're off the line
         if (navHeading !== null)
             navBearingTarget = navHeading;
+        // and say so on screen for as long as it's true — the riders' logs showed
+        // "adjusting…" sitting there with no other indication
+        showRideAlert("⚠ off route", "gps");
         const now = Date.now();
-        if (navOffCount >= OFF_ROUTE_STRIKES && navDest && now - navLastRerouteAt > REROUTE_COOLDOWN_MS) {
+        // Back off between attempts. A rider standing in a car park can sit >40 m
+        // from every routable way, so the old fixed 10 s cooldown re-routed forever
+        // and said "rerouting." on every attempt while the banner stayed stuck on
+        // "adjusting…" — a loop at exactly the moment you most need a sentence.
+        const wait = REROUTE_COOLDOWN_MS * Math.min(2 ** navRerouteTries, 6);
+        if (navOffCount >= OFF_ROUTE_STRIKES && navDest && now - navLastRerouteAt > wait) {
             navOffCount = 0;
             navLastRerouteAt = now;
             const useMyWay = navMyWay && navHeading !== null;
-            speak(useMyWay ? "okay, going your way." : "rerouting.");
-            vibrate([80, 60, 80]);
+            // Rate-limit the announcement by wall time, not by attempt count: a
+            // successful reroute puts the rider "on" the new line for a fix, which
+            // reset the counter, so continuing the same wrong turn kept re-announcing.
+            if (now - navRerouteSpokenAt > REROUTE_ANNOUNCE_MIN_MS) {
+                navRerouteSpokenAt = now;
+                speak(useMyWay ? "okay, going your way." : "rerouting.", "turn");
+                vibrate([80, 60, 80]);
+            }
+            navRerouteTries++;
             try {
                 const bias = useMyWay && navHeading !== null
                     ? router.headingBias([lon, lat], navHeading)
@@ -2928,19 +3041,34 @@ function navOnFix(fix) {
                 if (first) {
                     selectOption(first.id);
                     rebuildNavFromSelected();
+                    // tell the rider a new way exists and which way it goes, instead of
+                    // leaving "adjusting…" up while a fresh route sits undrawn-to
+                    const back = navTrack ? trackBearingAhead(navTrack, 0, 0) : null;
+                    showRideAlert(back === null
+                        ? "⚠ off route — new route ready"
+                        : `⚠ off route — head ${compassPoint(back)} to rejoin`, "gps");
                 }
             }
             catch {
-                el("nav-street").textContent = "off route — can't reroute here";
+                showRideAlert("⚠ off route — no way back from here", "gps");
             }
         }
         return;
     }
     navOffCount = 0;
+    navRerouteTries = 0;
+    if (el("nav-alert").classList.contains("gps"))
+        hideRideAlert();
     navHint = snap.idx;
     // advance past maneuvers we've already ridden through
     while (navNext < navManeuvers.length - 1 && (navManeuvers[navNext]?.atM ?? 0) < snap.alongM - 20) {
         navNext++;
+        navAnnounceStage = 0;
+    }
+    // ...and go back if the rider overshot and doubled back. navNext only ever
+    // advanced, so a turn you missed and returned to was never called again.
+    while (navNext > 0 && (navManeuvers[navNext - 1]?.atM ?? 0) > snap.alongM + 20) {
+        navNext--;
         navAnnounceStage = 0;
     }
     const next = navManeuvers[navNext];
@@ -2950,8 +3078,19 @@ function navOnFix(fix) {
     // destination) so the banner and voice come back
     if (navArrived && remaining > ARRIVAL_CLEAR_M)
         navArrived = false;
-    navUpdateBanner(distToNext, remaining);
-    if (next) {
+    // A useless fix still drove the headline distance, which read "now" three
+    // times inside 20 m and then jumped back to 100 m. Hold the last good
+    // reading and say the signal is poor instead of inventing precision.
+    const poorFix = fix.accuracy > MAX_GPS_ACCURACY_M;
+    if (poorFix) {
+        showRideAlert("⚠ GPS signal poor", "gps");
+    }
+    else {
+        if (el("nav-alert").classList.contains("gps"))
+            hideRideAlert();
+        navUpdateBanner(distToNext, remaining);
+    }
+    if (next && !poorFix) {
         // chain a turn that lands right after this one ("left, then right") so a
         // quick pair isn't two calls on top of each other
         const after = navManeuvers[navNext + 1];
@@ -2979,18 +3118,31 @@ function navOnFix(fix) {
     }
     const alert = navAlerts[navAlertNext];
     if (alert && alert.atM - snap.alongM <= 100) {
-        speak(alert.voice);
+        speak(alert.voice, "safety");
         vibrate([100, 80, 100]);
+        // and put it on screen, held until we're past the hazard
+        showRideAlert(`⚠ ${alert.voice}`);
+        navAlertUntilM = alert.atM + 30;
         navAlertNext++;
     }
+    else if (navAlertUntilM > 0 && snap.alongM > navAlertUntilM) {
+        hideRideAlert();
+    }
     // kid morale: kilometer milestones and the halfway mark
+    // Catch up silently on the first fix: joining a route part-way (a train leg,
+    // a cold GPS, a replan) fired "1 kilometer done… 20 kilometers done" one per
+    // second before any guidance.
+    if (navNextKm === 1 && snap.alongM > 1500) {
+        navNextKm = Math.floor(snap.alongM / 1000) + 1;
+        navHalfway = snap.alongM >= navTrack.totalM / 2;
+    }
     if (snap.alongM >= navNextKm * 1000) {
-        speak(`${navNextKm} kilometer${navNextKm > 1 ? "s" : ""} done. nice riding!`);
+        speak(`${navNextKm} kilometer${navNextKm > 1 ? "s" : ""} done. nice riding!`, "chat");
         navNextKm++;
     }
     if (!navHalfway && navTrack.totalM > 1500 && snap.alongM >= navTrack.totalM / 2) {
         navHalfway = true;
-        speak("halfway there!");
+        speak("halfway there!", "chat");
     }
     if (remaining < 15 && !navArrived) {
         navArrived = true;
@@ -3036,6 +3188,9 @@ async function startNav() {
     navUserZoom = false;
     navSpeed = 0;
     navLastFixAt = 0;
+    navRerouteTries = 0;
+    navRerouteSpokenAt = 0;
+    navImplausibleFixes = 0;
     navBearingShown = map.getBearing();
     navBearingTarget = 0;
     navZoomTarget = NAV_ZOOM_CRUISE;
@@ -3055,15 +3210,13 @@ async function startNav() {
         // native app: background watcher keeps GPS + voice alive with the
         // screen off (shows a persistent notification while navigating)
         navBgWatcherId = await startBackgroundWatcher("Family Bike Router", "Turn-by-turn navigation is running", navOnFix, (message) => {
-            el("nav-street").textContent = message;
+            showRideAlert(`⚠ ${message}`, "gps");
         });
     }
     if (navBgWatcherId === null) {
-        navWatchId = navigator.geolocation.watchPosition(navOnPosition, () => {
-            el("nav-street").textContent = "location unavailable — check permissions";
-        }, { enableHighAccuracy: true, maximumAge: 1000, timeout: 15000 });
+        navWatchId = navigator.geolocation.watchPosition(navOnPosition, (err) => onLocationError(err), { enableHighAccuracy: true, maximumAge: 1000, timeout: 15000 });
     }
-    speak("navigation started");
+    speak("navigation started", "chat");
 }
 function exitNav() {
     finishAndSaveRide();
@@ -3079,12 +3232,12 @@ function exitNav() {
     void wakeLock?.release().catch(() => undefined);
     wakeLock = null;
     closeAsk();
+    hideRideAlert();
     window.clearTimeout(navRefollowTimer);
     navStopAnimation();
     navDot?.remove();
     navDot = null;
-    if ("speechSynthesis" in window)
-        window.speechSynthesis.cancel();
+    clearSpeech();
     document.body.classList.remove("navigating");
     el("nav-banner").style.display = "none";
     map.setLayoutProperty("route-done", "visibility", "none");
@@ -3283,8 +3436,8 @@ el("nav-toggle").addEventListener("click", () => {
 el("nav-mute").addEventListener("click", () => {
     navMuted = !navMuted;
     el("nav-mute").textContent = navMuted ? "🔇" : "🔊";
-    if (navMuted && "speechSynthesis" in window)
-        window.speechSynthesis.cancel();
+    if (navMuted)
+        clearSpeech();
 });
 el("nav-recenter").addEventListener("click", () => {
     navFollowing = true;

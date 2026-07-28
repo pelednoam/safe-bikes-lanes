@@ -310,6 +310,12 @@
   #nav-extra { display:none; }
   #nav-banner.expanded #nav-extra { display:block; }
   #nav-recenter { margin-top:8px; }
+  #nav-alert {
+    margin-top:8px; padding:7px 10px; border-radius:var(--r-sm);
+    background:var(--s-busy); color:#fff; font-size:15px; font-weight:700;
+    line-height:1.2;
+  }
+  #nav-alert.gps { background:var(--s-shar); color:#231a08; }
   #nav-ask { margin-top:9px; border-top:1px solid var(--line); padding-top:9px; }
   #nav-ask-text { font-size:14px; font-weight:600; margin-bottom:7px; }
   #nav-ask .row { gap:8px; }
@@ -380,6 +386,9 @@
     <span id="nav-remaining"></span>
     <span id="nav-speed"></span>
   </div>
+  <!-- safety warnings were voice-only, so a muted phone (or two chatty kids)
+       meant no warning at all before a busy crossing -->
+  <div id="nav-alert" style="display:none"></div>
   <button id="nav-recenter" style="display:none">⌖ recenter</button>
   <!-- controls stay folded away so the banner doesn't cover the map; the turn
        and the ETA above are always visible -->

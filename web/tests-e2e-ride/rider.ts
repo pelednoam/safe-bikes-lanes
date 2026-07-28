@@ -118,7 +118,13 @@ export async function installRider(page: Page): Promise<void> {
     Object.defineProperty(window, "speechSynthesis", {
       configurable: true,
       value: {
-        speak: (u: { text?: string }) => rider.spoken.push(String(u?.text ?? u)),
+        speak: (u: { text?: string; onend?: () => void }) => {
+          rider.spoken.push(String(u?.text ?? u));
+          // complete the utterance so the app's speech queue drains: the app
+          // waits for onend, and a stub that never fires it made the queue lag
+          // far behind a time-compressed ride
+          setTimeout(() => u?.onend?.(), 5);
+        },
         cancel: () => undefined,
       },
     });
