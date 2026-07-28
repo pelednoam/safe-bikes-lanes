@@ -2216,6 +2216,11 @@ for (const [cls] of AVOIDABLE) {
             avoidTypes.delete(cls);
         localStorage.setItem("avoidTypes", JSON.stringify([...avoidTypes]));
         syncAvoidSummary();
+        // Write the permalink NOW, not just when the reroute finishes: the URL is
+        // parsed on load and overrides the stored preferences, so a reload (or a
+        // shared link) in the seconds after ticking a box used to resurrect the
+        // previous set and silently drop the change.
+        updateHash();
         void requestRoute();
     });
 }
