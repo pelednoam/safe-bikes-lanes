@@ -97,6 +97,31 @@ export class RideRecorder {
   }
 }
 
+/** Key holding the ride currently underway. finish() only reads accumulated
+ * state, so it can be snapshotted repeatedly; a ride was previously only ever
+ * written on arrival or an explicit exit, so a hardware Back, a reload or a
+ * crash lost the whole thing. */
+const IN_PROGRESS_KEY = "rideInProgress";
+
+export function stashInProgress(ride: RideSummary | null): void {
+  if (ride === null) localStorage.removeItem(IN_PROGRESS_KEY);
+  else localStorage.setItem(IN_PROGRESS_KEY, JSON.stringify(ride));
+}
+
+/** Recover a ride that was underway when the app went away, and clear it.
+ * Returns null when there was nothing worth keeping. */
+export function takeInProgress(): RideSummary | null {
+  const raw = localStorage.getItem(IN_PROGRESS_KEY);
+  localStorage.removeItem(IN_PROGRESS_KEY);
+  if (raw === null) return null;
+  try {
+    const ride = JSON.parse(raw) as RideSummary;
+    return typeof ride?.id === "string" && typeof ride.meters === "number" ? ride : null;
+  } catch {
+    return null;
+  }
+}
+
 export function loadRides(): RideSummary[] {
   try {
     const raw = localStorage.getItem(STORE_KEY);

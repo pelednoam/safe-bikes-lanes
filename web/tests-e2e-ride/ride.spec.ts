@@ -126,3 +126,70 @@ test("stopped at a light: the view stays put and the ETA holds", async ({ page }
   expect(spin).toBeLessThan(25);
   expect(after.trip).toMatch(/min/);
 });
+
+test("a single teleporting fix can't end the ride", async ({ page }) => {
+  test.slow();
+  // A phone re-acquiring off a cell tower emits one fix far from the rider. It
+  // used to latch "arrived!" — banner frozen and voice dead for the rest of the
+  // ride, plus a fabricated distance written to history.
+  const path = await startRide(page);
+  await ride(page, path, { speedKmh: 12, timeScale: 30, untilM: 300 });
+  const end = path[path.length - 1] as [number, number];
+  await page.evaluate(
+    (p) => window.__rider.setFix({ lon: p[0], lat: p[1], speed: 3, heading: 0, accuracy: 8 }),
+    end,
+  );
+  await page.waitForTimeout(400);
+  // ride on from where we actually were
+  const log = await ride(page, path, { speedKmh: 12, timeScale: 30, untilM: 600 });
+  await expect(page.locator("#nav-street")).not.toContainText(/arrived/i);
+  expect(log.spoken.join(" | ")).not.toMatch(/you have arrived/i);
+  // guidance is still live
+  await expect(page.locator("#nav-remaining")).toContainText(/min/);
+});
+
+test("Escape doesn't wipe the trip mid-ride", async ({ page }) => {
+  const path = await startRide(page);
+  await ride(page, path, { speedKmh: 12, timeScale: 30, untilM: 200 });
+  const before = await page.evaluate(() => window.location.hash);
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(300);
+  // route, markers and permalink all survive; the ride is still on
+  expect(await page.evaluate(() => window.location.hash)).toBe(before);
+  const coords = await page.evaluate(() => {
+    const src = window._map?.getSource("route") as { _data?: GeoJSON.FeatureCollection } | undefined;
+    return (src?._data?.features ?? []).length;
+  });
+  expect(coords).toBeGreaterThan(0);
+  await expect(page.locator("#nav-banner")).toBeVisible();
+});
+
+test("tapping the map asks in-page without freezing guidance", async ({ page }) => {
+  const path = await startRide(page);
+  await ride(page, path, { speedKmh: 12, timeScale: 30, untilM: 150 });
+  await page.mouse.click(195, 640);
+  await expect(page.locator("#nav-ask")).toBeVisible();
+  // the ride keeps running while the question is on screen — window.confirm
+  // used to block the page entirely
+  const before = await page.locator("#nav-remaining").textContent();
+  await ride(page, path, { speedKmh: 12, timeScale: 30, untilM: 260 });
+  expect(await page.locator("#nav-remaining").textContent()).not.toBe(before);
+  // declining leaves the ride alone
+  await page.locator("#nav-ask-no").click();
+  await expect(page.locator("#nav-ask")).toBeHidden();
+  await expect(page.locator("#nav-banner")).toBeVisible();
+});
+
+test("a ride interrupted by a reload is saved, not lost", async ({ page }) => {
+  test.slow();
+  const path = await startRide(page);
+  await ride(page, path, { speedKmh: 14, timeScale: 40, untilM: 900 });
+  // simulate the hardware Back / a crash: the page just goes away
+  await page.reload();
+  await page.waitForFunction(() => window._map !== undefined, null, { timeout: 45_000 });
+  const rides = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("rideHistory") ?? "[]") as { meters: number }[],
+  );
+  expect(rides.length).toBeGreaterThan(0);
+  expect(rides[0]?.meters ?? 0).toBeGreaterThan(200);
+});

@@ -310,6 +310,11 @@
   #nav-extra { display:none; }
   #nav-banner.expanded #nav-extra { display:block; }
   #nav-recenter { margin-top:8px; }
+  #nav-ask { margin-top:9px; border-top:1px solid var(--line); padding-top:9px; }
+  #nav-ask-text { font-size:14px; font-weight:600; margin-bottom:7px; }
+  #nav-ask .row { gap:8px; }
+  #nav-ask button { flex:1; margin:0; min-height:44px; }
+  #nav-ask button.primary { width:auto; padding:11px; font-size:14.5px; }
   #nav-myway.active, #nav-net.active {
     background:var(--accent); color:#fff; border-color:var(--accent); }
   .nav-dot {
@@ -395,6 +400,15 @@
     </div>
   </div>
   <button id="nav-toggle" title="Ride controls" aria-expanded="false">⌄</button>
+  <!-- in-page ask: window.confirm blocks the JS thread, which froze guidance,
+       the follow camera and the ride recorder until it was answered -->
+  <div id="nav-ask" style="display:none">
+    <div id="nav-ask-text"></div>
+    <div class="row">
+      <button id="nav-ask-no" class="primary">Keep riding</button>
+      <button id="nav-ask-yes">End ride</button>
+    </div>
+  </div>
 </div>
 <div id="panel">
   <div id="sheet-handle" title="drag to resize"></div>

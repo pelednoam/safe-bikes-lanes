@@ -2,7 +2,7 @@ import { isNativeApp, isNewerAppVersion, nativeSpeak, startDownload, startBackgr
 import { bearingDeg, buildAlerts, buildManeuvers, buildTrack, distM, snapToTrack, sunsetTime, trackBearingAhead, trackSlice, } from "./nav.js";
 import { addHazard, buildReportText, downscalePhoto, getHazardPhoto, HAZARD_LABELS, listHazards, removeHazard, } from "./hazards.js";
 import { clearRecent, deletePlace, emojiFor, exportBackup, importBackup, listPlaces, listRecent, pushRecent, savePlace, } from "./places.js";
-import { clearRides, deleteRide, loadRides, RideRecorder, rideTotals, saveRide, } from "./rides.js";
+import { clearRides, deleteRide, loadRides, RideRecorder, rideTotals, saveRide, stashInProgress, takeInProgress, } from "./rides.js";
 import { initDataSource, loadJson, usingRemoteData } from "./data.js";
 import { buildCues, PROFILES, Router, toGPX } from "./router.js";
 import { NetworkTiles, TileStore } from "./tiles.js";
@@ -1908,9 +1908,13 @@ map.on("click", (e) => {
     // Mid-ride the map is for looking at, not re-planning: a stray tap on the
     // handlebars used to silently swap the route out from under the rider.
     if (navActive) {
-        if (!window.confirm("End the ride and plan a new route from here?"))
-            return;
-        exitNav();
+        askDuringRide("End this ride and route to the spot you tapped instead?", () => {
+            exitNav();
+            setPoint("end", e.lngLat);
+            syncOD();
+            void requestRoute();
+        });
+        return;
     }
     if (activeField === "start") {
         setPoint("start", e.lngLat);
@@ -2292,7 +2296,10 @@ document.addEventListener("keydown", (e) => {
         }
         if (shedMode)
             exitShedMode();
-        else
+        // never wipe the trip out from under an active ride: reset() cleared the
+        // route, markers and permalink while navigation kept talking, leaving the
+        // rider following a voice over a blank map with no way to recover it
+        else if (!navActive)
             el("reset").click();
     }
 });
@@ -2607,6 +2614,16 @@ const NAV_PITCH = 50;
  * otherwise one bump on the handlebars leaves the ride permanently off-centre
  * and you have to keep hunting for the recenter button. */
 const REFOLLOW_MS = 10000;
+/** A single fix this far from the last one is a re-acquisition artefact, not a
+ * bicycle. Accepting one near the destination used to latch "arrived!" — voice
+ * and banner dead for the rest of the ride. Several in a row are believed (the
+ * rider really did move, e.g. after a signal gap). */
+const MAX_FIX_JUMP_M = 500;
+const IMPLAUSIBLE_FIXES_BEFORE_TRUSTED = 3;
+/** Past this far from the end, we are plainly not at the destination any more,
+ * so a stale arrival state must clear (also covers starting a new ride while
+ * still standing at the old destination). */
+const ARRIVAL_CLEAR_M = 80;
 let navActive = false;
 let navWatchId = null;
 let navTrack = null;
@@ -2651,6 +2668,10 @@ let navUserZoom = false;
  * the rider's own pinch/scroll inertia short. */
 let navInteracting = false;
 let navRefollowTimer;
+let navImplausibleFixes = 0;
+/** Persist the in-progress ride every N fixes (cheap; finish() only reads). */
+const STASH_EVERY_FIXES = 20;
+let navFixesSinceStash = 0;
 /** Smoothed speed (m/s) used to time the turn calls. */
 let navSpeed = 0;
 let navLastFixAt = 0;
@@ -2665,6 +2686,7 @@ const RECORD_IDLE_STOP_MS = 10 * 60000;
 function finishAndSaveRide() {
     const ride = recorder?.finish(profileId);
     recorder = null;
+    stashInProgress(null);
     if (!ride)
         return;
     saveRide(ride);
@@ -2741,6 +2763,21 @@ function toFix(pos) {
 function navOnPosition(pos) {
     navOnFix(toFix(pos));
 }
+/** Ask the rider something without stopping the ride. window.confirm blocks
+ * the page, so guidance, the follow camera and the recorder all froze until it
+ * was answered — easy to miss at speed, and indistinguishable from a crash. */
+function askDuringRide(question, onYes) {
+    const box = el("nav-ask");
+    el("nav-ask-text").textContent = question;
+    box.style.display = "block";
+    el("nav-banner").classList.add("expanded");
+    navAskYes = onYes;
+}
+let navAskYes = null;
+function closeAsk() {
+    el("nav-ask").style.display = "none";
+    navAskYes = null;
+}
 /** Shortest signed angle a -> b, in degrees. */
 function angleDelta(a, b) {
     return ((((b - a) % 360) + 540) % 360) - 180;
@@ -2803,6 +2840,16 @@ function navOnFix(fix) {
         return;
     const lon = fix.lon;
     const lat = fix.lat;
+    // A lone huge jump is the phone re-acquiring off a tower, not the rider.
+    // Trust it only if it repeats, so we resync after a real signal gap.
+    if (navLastPos && distM(navLastPos, [lon, lat]) > MAX_FIX_JUMP_M) {
+        navImplausibleFixes++;
+        if (navImplausibleFixes < IMPLAUSIBLE_FIXES_BEFORE_TRUSTED)
+            return;
+    }
+    else {
+        navImplausibleFixes = 0;
+    }
     navLastPos = [lon, lat];
     // smoothed ground speed, for timing the turn calls
     const now = Date.now();
@@ -2829,6 +2876,11 @@ function navOnFix(fix) {
     if (!navPrevPos || distM(navPrevPos, [lon, lat]) > 3)
         navPrevPos = [lon, lat];
     recorder?.addPoint(Date.now(), lon, lat, router.edgeClassAt(lon, lat));
+    // keep the ride recoverable: Back, a reload or a crash used to lose it all
+    if (recorder && ++navFixesSinceStash >= STASH_EVERY_FIXES) {
+        navFixesSinceStash = 0;
+        stashInProgress(recorder.finish(profileId));
+    }
     const snap = snapToTrack(navTrack, lon, lat, navHint);
     // Draw the dot ON the route while we're plausibly on it — raw bike GPS
     // wanders 5-15 m, which visibly drifts the dot into buildings and across
@@ -2894,6 +2946,10 @@ function navOnFix(fix) {
     const next = navManeuvers[navNext];
     const distToNext = Math.max(0, (next?.atM ?? 0) - snap.alongM);
     const remaining = Math.max(0, navTrack.totalM - snap.alongM);
+    // un-latch a stale arrival (bad fix, or a new ride begun at the old
+    // destination) so the banner and voice come back
+    if (navArrived && remaining > ARRIVAL_CLEAR_M)
+        navArrived = false;
     navUpdateBanner(distToNext, remaining);
     if (next) {
         // chain a turn that lands right after this one ("left, then right") so a
@@ -3022,6 +3078,7 @@ function exitNav() {
     navBgWatcherId = null;
     void wakeLock?.release().catch(() => undefined);
     wakeLock = null;
+    closeAsk();
     window.clearTimeout(navRefollowTimer);
     navStopAnimation();
     navDot?.remove();
@@ -3211,6 +3268,12 @@ el("nav-exit").addEventListener("click", () => {
         stopRecording();
     else
         exitNav();
+});
+el("nav-ask-no").addEventListener("click", closeAsk);
+el("nav-ask-yes").addEventListener("click", () => {
+    const yes = navAskYes;
+    closeAsk();
+    yes?.();
 });
 el("nav-toggle").addEventListener("click", () => {
     const banner = el("nav-banner");
@@ -3467,6 +3530,13 @@ async function checkAppUpdate() {
     catch {
         // offline or first launch — try again next time
     }
+}
+// a ride interrupted by Back/reload/crash is saved on the next launch rather
+// than silently lost
+const interrupted = takeInProgress();
+if (interrupted !== null) {
+    saveRide(interrupted);
+    renderRides();
 }
 void checkAppUpdate();
 // service worker: register only on the website (PWA offline). In the native
