@@ -265,3 +265,57 @@ test("the saved ride distance matches the route, not GPS wander", async ({ page 
   expect(ridden).toBeGreaterThan(3000 * 0.85);
   expect(ridden).toBeLessThan(3000 * 1.15);
 });
+
+test("the ride controls are reachable and safe to press one-handed", async ({ page }) => {
+  const path = await startRide(page);
+  await ride(page, path, { speedKmh: 12, timeScale: 30, untilM: 150 });
+
+  // mute lives low on the right, in the easy thumb zone, at a real size
+  const mute = await page.locator("#nav-mute").boundingBox();
+  expect(mute?.width ?? 0).toBeGreaterThanOrEqual(48);
+  expect(mute?.height ?? 0).toBeGreaterThanOrEqual(48);
+  expect(mute?.y ?? 0).toBeGreaterThan(500);
+
+  // the whole banner opens the controls, not just a 27 px chevron
+  await expect(page.locator("#nav-extra")).not.toBeVisible();
+  await page.locator("#nav-banner").click({ position: { x: 40, y: 60 } });
+  await expect(page.locator("#nav-extra")).toBeVisible();
+
+  // every control is a thumb-sized target
+  const tools = await page.evaluate(() =>
+    [...document.querySelectorAll("#nav-tools button, #nav-buttons button")].map((b) => {
+      const r = b.getBoundingClientRect();
+      return { id: b.id, w: Math.round(r.width), h: Math.round(r.height) };
+    }),
+  );
+  expect(tools.length).toBeGreaterThan(5);
+  for (const t of tools) {
+    expect(t.w, `${t.id} width`).toBeGreaterThanOrEqual(44);
+    expect(t.h, `${t.id} height`).toBeGreaterThanOrEqual(44);
+  }
+
+  // MapLibre's own controls are out of the way (dead or harmful mid-ride)
+  expect(
+    await page.evaluate(() => {
+      const g = document.querySelector(".maplibregl-ctrl-group");
+      return g ? getComputedStyle(g).display : "none";
+    }),
+  ).toBe("none");
+
+  // ending the ride asks first — it used to be one tap next to mute
+  await page.locator("#nav-exit").click();
+  await expect(page.locator("#nav-ask")).toBeVisible();
+  await expect(page.locator("#nav-banner")).toBeVisible();
+});
+
+test("a mis-tapped detour can be abandoned immediately", async ({ page }) => {
+  const path = await startRide(page);
+  await ride(page, path, { speedKmh: 12, timeScale: 30, untilM: 150 });
+  await page.locator("#nav-banner").click({ position: { x: 40, y: 60 } });
+  await page.locator("#nav-water").click();
+  // the way back is offered at once, not only on arrival at the fountain
+  await expect(page.locator("#nav-resume")).toBeVisible();
+  await page.locator("#nav-resume").click();
+  await expect(page.locator("#nav-resume")).toBeHidden();
+  await expect(page.locator("#nav-banner")).toBeVisible();
+});

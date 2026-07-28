@@ -574,6 +574,10 @@ function renderOptionChips() {
     });
 }
 function selectOption(id) {
+    // While navigating, guidance follows its own copy of the track. Swapping the
+    // drawn route underneath (a mid-ride hazard mark re-plans) would show one
+    // line while the voice read another, so keep them in step.
+    const wasNavigating = navActive;
     const chosen = options.find((o) => o.id === id);
     if (!chosen)
         return;
@@ -590,6 +594,10 @@ function selectOption(id) {
     renderOptionChips();
     showSummary(chosen);
     updateHash();
+    if (wasNavigating && navActive) {
+        // keep the spoken guidance on the line that is actually drawn
+        rebuildNavFromSelected();
+    }
 }
 function renderOptions() {
     const box = el("options");
@@ -1801,9 +1809,12 @@ map.on("load", () => {
             const photoSlot = mapillaryToken !== "" ? `<div data-seg-photo></div>` : "";
             const html = `${badge}<b>${props.name ?? "unnamed"}</b><br>${label}${meaning}${stress}` +
                 `${crashes}${unconfirmed}${photoSlot}` +
-                `<br><small>right-click to mark as sketchy</small>`;
+                // "right-click" means nothing on a phone
+                `<br><small>${window.matchMedia("(hover: none)").matches
+                    ? "press and hold to mark as sketchy"
+                    : "right-click to mark as sketchy"}</small>`;
             if (!hoverPopup) {
-                hoverPopup = new maplibregl.Popup({ closeButton: false, closeOnClick: false });
+                hoverPopup = new maplibregl.Popup({ closeButton: true, closeOnClick: true });
                 hoverPopup.addTo(map);
             }
             hoverPopup.setLngLat(e.lngLat).setHTML(html);
@@ -1850,7 +1861,7 @@ map.on("load", () => {
         if (props.fac_m === undefined)
             return;
         hoverPopup?.remove();
-        hoverPopup = new maplibregl.Popup({ closeButton: false, closeOnClick: false })
+        hoverPopup = new maplibregl.Popup({ closeButton: true, closeOnClick: true })
             .setLngLat(e.lngLat)
             .setHTML(`🚴 ${props.fac_m} m of bike facilities in this block` +
             `<br><small>${props.prot_m ?? 0} m protected (path/separated)</small>`)
@@ -1868,7 +1879,7 @@ map.on("load", () => {
         if (props.elev === undefined)
             return;
         hoverPopup?.remove();
-        hoverPopup = new maplibregl.Popup({ closeButton: false, closeOnClick: false })
+        hoverPopup = new maplibregl.Popup({ closeButton: true, closeOnClick: true })
             .setLngLat(e.lngLat)
             .setHTML(`elevation ~${props.elev} m`)
             .addTo(map);
@@ -1938,7 +1949,12 @@ function openSketchyPopup(lngLat) {
     const star = document.createElement("button");
     star.textContent = "☆ save place…";
     box.appendChild(star);
-    const popup = new maplibregl.Popup().setLngLat(lngLat).setDOMContent(box).addTo(map);
+    // closeOnClick would kill this the instant the finger lifts (the lift itself
+    // generates a click), which made it untappable on a touchscreen
+    const popup = new maplibregl.Popup({ closeOnClick: false, closeButton: true })
+        .setLngLat(lngLat)
+        .setDOMContent(box)
+        .addTo(map);
     btn.addEventListener("click", () => {
         sketchyMarks.push(lngLat);
         saveSketchy(sketchyMarks);
@@ -2380,7 +2396,7 @@ function openHazardDialog(lon, lat) {
     preview.style.display = "none";
     preview.src = "";
     el("hazard-loc").textContent =
-        `at ${lat.toFixed(5)}, ${lon.toFixed(5)} — saved reports appear on the map and routes avoid them`;
+        `${hereLabel(lon, lat)} — saved reports appear on the map and routes avoid them`;
     el("hazard").showModal();
 }
 function pendingHazardReport() {
@@ -2423,7 +2439,10 @@ el("hazard-save").addEventListener("click", () => {
         el("hazard-loc").textContent = "could not save (storage unavailable)";
     });
 });
+// Share used to build a message and never save the report, leaving the dialog
+// open with no feedback — so a rider who tapped it kept nothing.
 el("hazard-share").addEventListener("click", () => {
+    el("hazard-save").click();
     const report = pendingHazardReport();
     if (!report)
         return;
@@ -2558,6 +2577,11 @@ el("rides-clear").addEventListener("click", () => {
 el("rides").addEventListener("click", (e) => {
     if (e.target === el("rides"))
         el("rides").close();
+});
+// tap-outside is the reflex on a phone; #hazard was the one dialog ignoring it
+el("hazard").addEventListener("click", (e) => {
+    if (e.target === el("hazard"))
+        el("hazard").close();
 });
 el("mapillary-save").addEventListener("click", () => {
     const token = el("mapillary-token").value.trim();
@@ -2791,8 +2815,10 @@ function navUpdateTrip(remainingM, straight = false) {
     const mins = Math.round((remainingM / 1000 / kmh) * 60);
     const eta = new Date(Date.now() + mins * 60000);
     const clock = eta.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    // "arrive" spelled out pushed this past the banner width, so it wrapped with
+    // "PM" alone on a second line and the banner's height twitched all ride
     el("nav-remaining").textContent =
-        `${straight ? "~" : ""}${fmtDist(remainingM)} · ${mins} min · arrive ${clock}`;
+        `${straight ? "~" : ""}${fmtDist(remainingM)} · ${mins} min · eta ${clock}`;
     el("nav-speed").textContent =
         navSpeed > 0.8 ? `${((navSpeed * 3600) / 1000).toFixed(0)} km/h` : "";
 }
@@ -2913,6 +2939,16 @@ function frameRoute(option) {
         duration: 700,
         maxZoom: 16,
     });
+}
+/** Where the rider is, in words. The hazard dialog used to print raw decimal
+ * degrees at them while the app already knew the street name. */
+function hereLabel(lon, lat) {
+    const street = el("nav-street").textContent?.trim();
+    if (navActive && street && !/^[-–]$/.test(street) && !/^⚠/.test(street)) {
+        return `on ${street}`;
+    }
+    const cls = router?.edgeClassAt(lon, lat);
+    return cls ? `on a ${cls.replace(/_/g, " ")}` : "at this spot";
 }
 /** A bearing as something sayable ("north-east"), for telling an off-route
  * rider which way the new route runs. */
@@ -3322,6 +3358,10 @@ function detourToNearest(kind) {
             navOriginalDest = navDest;
         navDest = poi.geometry.coordinates;
         rebuildNavFromSelected();
+        // offer the way back immediately: this used to appear only on ARRIVAL at
+        // the stop, so a mis-tapped detour couldn't be abandoned, and the voice
+        // said "tap resume" for a button that wasn't on screen
+        el("nav-resume").style.display = "block";
         const label = poi.properties.name || POI_META[kind]?.label || kind;
         speak(`detour: ${label} is ${fmtDist(first.payload.summary.meters)} away. follow the route.`);
     }
@@ -3352,6 +3392,7 @@ el("nav-resume").addEventListener("click", () => {
         navOriginalDest = null;
         rebuildNavFromSelected();
         el("nav-resume").style.display = "none";
+        hideRideAlert();
         speak("back on the way. let's go!");
     }
     catch {
@@ -3368,14 +3409,26 @@ el("nav-myway").addEventListener("click", () => {
         : "back to safest: reroutes return to the safest path.");
 });
 el("nav-hazard").addEventListener("click", () => {
-    if (!navLastPos)
+    if (!navLastPos) {
+        // it did nothing at all with no fix yet — a dead button with no feedback
+        showRideAlert("⚠ no position yet — can't mark this spot", "gps");
         return;
-    sketchyMarks.push(navLastPos);
-    saveSketchy(sketchyMarks);
-    applyAvoidPoints();
-    renderSketchy();
+    }
+    // Tapping again because nothing visible happened wrote a duplicate mark, and
+    // marks can only be removed from the planning panel, which is hidden while
+    // riding. Collapse repeats within a few metres.
+    const already = sketchyMarks.some((m) => distM(m, navLastPos) < 15);
+    if (!already) {
+        sketchyMarks.push(navLastPos);
+        saveSketchy(sketchyMarks);
+        applyAvoidPoints();
+        renderSketchy();
+    }
     vibrate([80]);
-    speak("marked. future routes will avoid this spot.");
+    speak("marked. future routes will avoid this spot.", "chat");
+    // confirm on screen too: muted, there was no sign it had worked
+    showRideAlert(already ? "⚠️ already marked here" : "⚠️ marked — routes will avoid it");
+    window.setTimeout(hideRideAlert, 4000);
 });
 // ---------------------------------------------------------------------------
 // free ride recording (no planned route): ● Record in the tool row
@@ -3472,10 +3525,12 @@ el("nav-btn").addEventListener("click", () => {
     void startNav();
 });
 el("nav-exit").addEventListener("click", () => {
-    if (recordMode)
+    if (recordMode) {
         stopRecording();
-    else
-        exitNav();
+        return;
+    }
+    // it used to end the ride outright, and sat 9 px from the mute button
+    askDuringRide("End the ride now?", exitNav);
 });
 el("nav-ask-no").addEventListener("click", closeAsk);
 el("nav-ask-yes").addEventListener("click", () => {
@@ -3483,10 +3538,23 @@ el("nav-ask-yes").addEventListener("click", () => {
     closeAsk();
     yes?.();
 });
-el("nav-toggle").addEventListener("click", () => {
+function toggleRideControls() {
     const banner = el("nav-banner");
     const open = banner.classList.toggle("expanded");
     el("nav-toggle").setAttribute("aria-expanded", String(open));
+}
+el("nav-toggle").addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleRideControls();
+});
+// The chevron was 27 px wide and the only way in to every ride control, with
+// 14 px of clear space before the map — so tap anywhere on the banner that
+// isn't itself a control.
+el("nav-banner").addEventListener("click", (e) => {
+    const t = e.target;
+    if (t.closest("button") || t.closest("#nav-ask"))
+        return;
+    toggleRideControls();
 });
 el("nav-mute").addEventListener("click", () => {
     navMuted = !navMuted;

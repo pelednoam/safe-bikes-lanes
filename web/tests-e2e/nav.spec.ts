@@ -61,7 +61,9 @@ test("navigation follows simulated GPS along the route", async ({ page, context 
 
   // the trip readout shows distance, minutes and an arrival clock time
   await expect(page.locator("#nav-remaining")).toContainText(/min/, { timeout: 15_000 });
-  await expect(page.locator("#nav-remaining")).toContainText(/arrive/);
+  // "eta 8:58 PM" rather than "arrive …": spelled out, it wrapped and made the
+  // banner's height twitch all ride
+  await expect(page.locator("#nav-remaining")).toContainText(/eta \d/);
   // and a turn instruction is displayed
   await expect(page.locator("#nav-dist")).not.toHaveText("–");
 });

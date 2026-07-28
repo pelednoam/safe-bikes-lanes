@@ -249,6 +249,9 @@
 
   /* ── Dialogs ───────────────────────────────────────────────────────── */
   #about, #rides, #hazard {
+    /* without border-box the 24 px padding pushed #hazard to 398 px on a 390 px
+       phone, so the dialog hung off the side of the screen */
+    box-sizing:border-box;
     max-width:560px; width:calc(100% - 40px); max-height:85vh;
     background:var(--solid); color:var(--ink); border:none; border-radius:var(--r-lg);
     padding:20px 24px; font-size:14px; font-family:var(--font);
@@ -267,6 +270,10 @@
   #rides td button { margin:0 2px 0 0; padding:2px 8px; font-size:12px; }
   #about-close, #rides-close, #hazard-close { position:absolute; top:12px; right:14px; margin:0; }
   #about ol { padding-left:18px; } #about li { margin:5px 0; }
+  /* the phone sizing rule only covered input[type=search], so the hazard note
+     and file pickers were 21 px tall — unhittable with a thumb */
+  #hazard input, #hazard select, #hazard textarea { min-height:40px; box-sizing:border-box; }
+  #hazard input[type="file"] { padding:8px; }
 
   /* ── Floating banners ──────────────────────────────────────────────── */
   #data-update, #update-banner {
@@ -296,8 +303,8 @@
               letter-spacing:-.015em; font-variant-numeric:tabular-nums; }
   #nav-street { font-size:16px; font-weight:600; color:var(--ink); max-width:220px;
                 overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  #nav-trip { display:flex; align-items:baseline; gap:10px; justify-content:center;
-              margin-top:3px; }
+  #nav-trip { display:flex; align-items:baseline; gap:9px; justify-content:center;
+              margin-top:3px; white-space:nowrap; min-height:19px; }
   #nav-remaining { font-size:15px; font-weight:600; font-variant-numeric:tabular-nums; }
   #nav-speed { font-size:13.5px; color:var(--muted); font-variant-numeric:tabular-nums; }
   #nav-buttons button { margin-top:7px; padding:5px 11px; }
@@ -309,7 +316,34 @@
   #nav-banner.expanded #nav-toggle { transform:rotate(180deg); }
   #nav-extra { display:none; }
   #nav-banner.expanded #nav-extra { display:block; }
-  #nav-recenter { margin-top:8px; }
+  #nav-quick {
+    display:none; position:absolute; right:12px; bottom:calc(88px + env(safe-area-inset-bottom));
+    z-index:7; flex-direction:column; gap:11px; align-items:flex-end;
+  }
+  body.navigating #nav-quick { display:flex; }
+  #nav-quick button {
+    width:56px; height:56px; margin:0; padding:0; border-radius:50%;
+    font-size:22px; line-height:1; background:var(--surface); color:var(--ink);
+    -webkit-backdrop-filter:blur(20px) saturate(1.5); backdrop-filter:blur(20px) saturate(1.5);
+    border:1px solid var(--line); box-shadow:var(--shadow);
+  }
+  #nav-resume { margin-top:9px; width:100%; min-height:44px; font-size:15px; }
+  /* MapLibre's own controls are dead or harmful mid-ride: the zoom buttons lose
+     to the follow camera (and hand zoom control away, killing zoom-to-turn),
+     the compass can't win against course-up, and the geolocate button adds a
+     second position dot and a second GPS watch. The attribution stays — it's a
+     licensing requirement. */
+  body.navigating .maplibregl-ctrl-group { display:none; }
+  /* nothing may cover the turn distance or the controls chevron */
+  body.navigating #update-banner, body.navigating #data-update { display:none !important; }
+  #nav-tools button {
+    display:inline-flex; flex-direction:column; align-items:center; gap:2px;
+    min-width:56px; min-height:52px; padding:6px 8px; font-size:10.5px;
+    font-weight:600; letter-spacing:.01em; margin:0 4px 8px 0;
+  }
+  #nav-tools button span { font-size:20px; line-height:1.05; }
+  #nav-buttons { margin-top:6px; border-top:1px solid var(--line); padding-top:9px; }
+  #nav-buttons button { margin-top:0; min-height:44px; padding:6px 14px; }
   #nav-alert {
     margin-top:8px; padding:7px 10px; border-radius:var(--r-sm);
     background:var(--s-busy); color:#fff; font-size:15px; font-weight:700;
@@ -374,6 +408,13 @@
   <a id="update-get" href="#" target="_blank" rel="noopener" style="margin:0;padding:5px 10px;border:1px solid var(--border);border-radius:6px;background:var(--btn-bg);color:var(--fg);text-decoration:none;cursor:pointer">⬇ install</a>
   <button id="update-dismiss" style="margin:0">later</button>
 </div>
+<!-- The two controls a rider needs while actually moving. They sit low on the
+     right, in the easy thumb zone: everything used to live at the top of the
+     screen behind a 27 px chevron, with 60% of the display holding nothing. -->
+<div id="nav-quick">
+  <button id="nav-recenter" aria-label="Recentre on me" title="Recentre on me" style="display:none">⌖</button>
+  <button id="nav-mute" aria-label="Voice on or off" title="Voice on or off">🔊</button>
+</div>
 <div id="nav-banner">
   <div id="nav-main">
     <span id="nav-icon">⬆</span>
@@ -389,23 +430,21 @@
   <!-- safety warnings were voice-only, so a muted phone (or two chatty kids)
        meant no warning at all before a busy crossing -->
   <div id="nav-alert" style="display:none"></div>
-  <button id="nav-recenter" style="display:none">⌖ recenter</button>
-  <!-- controls stay folded away so the banner doesn't cover the map; the turn
-       and the ETA above are always visible -->
+  <!-- always reachable: the voice says "tap resume", so it can't be behind a fold -->
+  <button id="nav-resume" style="display:none">▶ back to route</button>
+  <!-- the rest stays folded away so the banner doesn't cover the map -->
   <div id="nav-extra">
     <div id="nav-tools">
-      <button id="nav-water" title="detour to nearest water fountain">🚰</button>
-      <button id="nav-restroom" title="detour to nearest restroom">🚻</button>
-      <button id="nav-playground" title="detour to nearest playground">🛝</button>
-      <button id="nav-hazard" title="mark this spot as sketchy">⚠</button>
-      <button id="nav-report" title="report a hazard here (with photo)">📷</button>
-      <button id="nav-net" class="active" title="Hide the safety-network overlay">🗺 lanes</button>
-      <button id="nav-myway" title="Go with my street choice: when you deviate, reroutes continue in your direction instead of pulling you back">🧭 my way</button>
-      <button id="nav-resume" style="display:none">▶ resume ride</button>
+      <button id="nav-water" aria-label="Detour to the nearest water fountain" title="Detour to the nearest water fountain"><span>🚰</span>water</button>
+      <button id="nav-restroom" aria-label="Detour to the nearest restroom" title="Detour to the nearest restroom"><span>🚻</span>toilet</button>
+      <button id="nav-playground" aria-label="Detour to the nearest playground" title="Detour to the nearest playground"><span>🛝</span>park</button>
+      <button id="nav-hazard" aria-label="Mark this spot as sketchy" title="Mark this spot as sketchy"><span>⚠️</span>sketchy</button>
+      <button id="nav-report" aria-label="Report a hazard here, with a photo" title="Report a hazard here, with a photo"><span>📷</span>report</button>
+      <button id="nav-net" class="active" aria-label="Hide the safety-network overlay" title="Hide the safety-network overlay"><span>🗺️</span>lanes</button>
+      <button id="nav-myway" aria-label="Go with my street choice: reroutes continue in your direction" title="Go with my street choice: reroutes continue in your direction"><span>🧭</span>my way</button>
     </div>
     <div id="nav-buttons">
-      <button id="nav-mute" title="voice on/off">🔊</button>
-      <button id="nav-exit">✕ end</button>
+      <button id="nav-exit">✕ end ride</button>
     </div>
   </div>
   <button id="nav-toggle" title="Ride controls" aria-expanded="false">⌄</button>
