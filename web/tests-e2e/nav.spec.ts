@@ -200,6 +200,9 @@ test("the rider's own zoom is kept (no snapping back), recenter restores follow"
   page,
   context,
 }) => {
+  // wheels until the gesture registers, then waits for the zoom to settle —
+  // more than 60 s of steps on a loaded runner
+  test.slow();
   await startNav(page);
   const coords = await routeCoords(page);
   await context.setGeolocation({ longitude: coords[5]?.[0] ?? 0, latitude: coords[5]?.[1] ?? 0 });

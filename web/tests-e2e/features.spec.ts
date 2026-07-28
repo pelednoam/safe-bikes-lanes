@@ -354,11 +354,11 @@ test("saved places survive a wipe via backup and restore", async ({ page }) => {
   await openSection(page, "Preferences");
   await expect(page.locator("#places-list")).toContainText("Home");
 
-  const download = await Promise.race([
-    page.waitForEvent("download", { timeout: 15_000 }),
-    page.locator("#backup-save").click().then(() => null),
-  ]);
-  const file = download ? await download.path() : null;
+  // arm the listener before the click; racing them means the click can win and
+  // the download is lost
+  const downloadPromise = page.waitForEvent("download", { timeout: 30_000 });
+  await page.locator("#backup-save").click();
+  const file = await (await downloadPromise).path();
   expect(file).not.toBeNull();
   await expect(page.locator("#backup-note")).toContainText(/Backed up 1 saved place/);
 
