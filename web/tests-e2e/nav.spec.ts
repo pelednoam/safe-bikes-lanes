@@ -248,11 +248,15 @@ test("the rider's own zoom is kept (no snapping back), recenter restores follow"
   // isVisible() then click() is a race the button wins on a slow CI runner: it
   // hides itself between the two calls and the click waits out the timeout.
   await recenter.click({ timeout: 2500 }).catch(() => undefined);
+  // If the button had already gone, control comes back on the REFOLLOW_MS
+  // timer (10 s) and the camera then eases to the cruise zoom, so the wait
+  // below has to cover that path too — the runner caught it mid-ease.
   await context.setGeolocation({
     longitude: coords[13]?.[0] ?? 0,
     latitude: coords[13]?.[1] ?? 0,
   });
-  await expect.poll(() => page.evaluate(() => window._map?.getZoom() ?? 0), { timeout: 10_000 })
+  await expect
+    .poll(() => page.evaluate(() => window._map?.getZoom() ?? 0), { timeout: 25_000 })
     .toBeGreaterThan(zoomed + 0.5);
 });
 
