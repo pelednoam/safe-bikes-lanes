@@ -83,6 +83,20 @@ export async function getHazardPhoto(id: string): Promise<Blob | null> {
   return stored?.photo ?? null;
 }
 
+/** Set the category of an already-filed report.
+ *
+ * Reporting mid-ride files the position first and asks what it was afterwards,
+ * so the answer arrives after the record does. Missing reports are ignored: the
+ * rider may have let the question time out and deleted the mark. */
+export async function setHazardCategory(id: string, category: HazardCategory): Promise<void> {
+  const stored = await tx<StoredHazard | undefined>(
+    "readonly",
+    (s) => s.get(id) as IDBRequest<StoredHazard | undefined>,
+  );
+  if (!stored) return;
+  await tx("readwrite", (s) => s.put({ ...stored, category }));
+}
+
 export async function removeHazard(id: string): Promise<void> {
   await tx("readwrite", (s) => s.delete(id));
 }

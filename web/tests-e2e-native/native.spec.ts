@@ -40,10 +40,14 @@ async function nativeShim(page: Page): Promise<void> {
 }
 
 /** Failures the app handles by design: the data resolver tries the website and
- * falls back to the bundled copy, so an unreachable site is not an app error —
- * and the sandbox running these tests has no route to it. Anything else counts. */
+ * falls back to the bundled copy, and the reverse geocoder that names the ends
+ * is a nicety the app rides without — so an unreachable network is not an app
+ * error, and the sandbox running these tests has no route out. Anything else
+ * counts. */
 function isExpectedOfflineNoise(text: string): boolean {
-  return /pelednoam\.github\.io|ERR_FAILED|ERR_INTERNET_DISCONNECTED|CORS policy/.test(text);
+  return /pelednoam\.github\.io|nominatim|ERR_FAILED|ERR_INTERNET_DISCONNECTED|CORS policy/i.test(
+    text,
+  );
 }
 
 async function bootNative(page: Page): Promise<string[]> {

@@ -299,9 +299,10 @@
   #nav-main { display:flex; align-items:center; gap:11px; justify-content:center; }
   #nav-icon { font-size:38px; line-height:1; }
   #nav-texts { text-align:left; min-width:0; }
-  #nav-dist { font-family:var(--font-cond); font-size:34px; font-weight:700; line-height:1.02;
+  #nav-dist { font-family:var(--font-cond); font-size:31px; font-weight:700; line-height:1.03;
               letter-spacing:-.015em; font-variant-numeric:tabular-nums; }
-  #nav-street { font-size:16px; font-weight:600; color:var(--ink); max-width:220px;
+  #nav-street { font-family:var(--font-cond); font-size:21px; font-weight:600; line-height:1.12;
+                color:var(--ink); max-width:250px;
                 overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   #nav-trip { display:flex; align-items:baseline; gap:9px; justify-content:center;
               margin-top:3px; white-space:nowrap; min-height:19px; }
@@ -350,6 +351,13 @@
     line-height:1.2;
   }
   #nav-alert.gps { background:var(--s-shar); color:#231a08; }
+  #nav-classify { display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+                  justify-content:center; margin-top:8px; }
+  #nav-classify-q { font-size:13px; color:var(--muted); width:100%; }
+  #nav-classify button { display:flex; flex-direction:column; align-items:center; gap:2px;
+                         min-width:56px; min-height:52px; margin:0; padding:6px 8px;
+                         font-size:10.5px; font-weight:600; }
+  #nav-classify button span { font-size:19px; line-height:1; }
   #nav-ask { margin-top:9px; border-top:1px solid var(--line); padding-top:9px; }
   #nav-ask-text { font-size:14px; font-weight:600; margin-bottom:7px; }
   #nav-ask .row { gap:8px; }
@@ -430,6 +438,16 @@
   <!-- safety warnings were voice-only, so a muted phone (or two chatty kids)
        meant no warning at all before a busy crossing -->
   <div id="nav-alert" style="display:none"></div>
+  <!-- Reporting a hazard used to be a form — category, optional note, submit —
+       which is three taps and a read at 12 km/h. The report is filed the moment
+       you tap, and this row asks what it was afterwards. Ignore it and the
+       report stands as "other hazard". -->
+  <div id="nav-classify" style="display:none">
+    <span id="nav-classify-q">what was it?</span>
+    <button data-cat="surface" aria-label="Broken surface or glass"><span>🕳️</span>surface</button>
+    <button data-cat="blocked" aria-label="Blocked lane or path"><span>🚧</span>blocked</button>
+    <button data-cat="traffic" aria-label="Dangerous traffic spot"><span>🚗</span>traffic</button>
+  </div>
   <!-- always reachable: the voice says "tap resume", so it can't be behind a fold -->
   <button id="nav-resume" style="display:none">▶ back to route</button>
   <!-- the rest stays folded away so the banner doesn't cover the map -->
@@ -439,7 +457,7 @@
       <button id="nav-restroom" aria-label="Detour to the nearest restroom" title="Detour to the nearest restroom"><span>🚻</span>toilet</button>
       <button id="nav-playground" aria-label="Detour to the nearest playground" title="Detour to the nearest playground"><span>🛝</span>park</button>
       <button id="nav-hazard" aria-label="Mark this spot as sketchy" title="Mark this spot as sketchy"><span>⚠️</span>sketchy</button>
-      <button id="nav-report" aria-label="Report a hazard here, with a photo" title="Report a hazard here, with a photo"><span>📷</span>report</button>
+      <button id="nav-report" aria-label="Report a hazard here" title="Report a hazard here"><span>📷</span>report</button>
       <button id="nav-net" class="active" aria-label="Hide the safety-network overlay" title="Hide the safety-network overlay"><span>🗺️</span>lanes</button>
       <button id="nav-myway" aria-label="Go with my street choice: reroutes continue in your direction" title="Go with my street choice: reroutes continue in your direction"><span>🧭</span>my way</button>
     </div>

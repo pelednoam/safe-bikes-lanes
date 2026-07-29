@@ -260,11 +260,22 @@ test("the safety network is dimmed so the route is the obvious line", async ({ p
 test("the hazard dialog fits the phone and can be dismissed by tapping outside", async ({
   page,
 }) => {
-  const path = await startNav(page);
-  // it needs a fix to know where the hazard is
-  await ride(page, path, { speedKmh: 12, timeScale: 30, untilM: 120 });
-  await page.locator("#nav-banner").click({ position: { x: 40, y: 60 } });
-  await page.locator("#nav-report").click();
+  // The full form is the planning-map path now — riding files the report in one
+  // tap and asks afterwards (see the one-tap test). It still has to fit a phone,
+  // because that's the screen it's filled in on.
+  await plan(page);
+  const pt = await page.evaluate(() => {
+    const map = window._map;
+    if (!map) return null;
+    const hit = map.queryRenderedFeatures(undefined, { layers: ["network-hit"] })[0];
+    if (!hit || hit.geometry.type !== "LineString") return null;
+    const p = map.project(hit.geometry.coordinates[0] as [number, number]);
+    return { x: Math.round(p.x), y: Math.round(p.y) };
+  });
+  expect(pt).not.toBeNull();
+  if (!pt) return;
+  await page.mouse.click(pt.x, pt.y, { button: "right" });
+  await page.locator(".maplibregl-popup button", { hasText: "report hazard" }).click();
   const box = await page.locator("#hazard").boundingBox();
   expect(box).not.toBeNull();
   if (!box) return;
@@ -340,4 +351,132 @@ test("the street card can be dismissed and doesn't mention right-clicking on tou
     }
   }
   await ctx.close();
+});
+
+// ── the seven that were open after the first sweep ────────────────────────
+
+test("street names stay upright: the basemap's own labels are off while riding", async ({
+  page,
+}) => {
+  const path = await startNav(page);
+  await ride(page, path, { speedKmh: 12, timeScale: 30, untilM: 200 });
+  const vis = await page.evaluate(() => {
+    const m = window._map;
+    const v = (id: string): string =>
+      (m?.getLayoutProperty(id, "visibility") as string | undefined) ?? "visible";
+    return { osm: v("osm"), plain: v("osm-plain"), labels: v("street-labels") };
+  });
+  // raster tiles rotate as pictures, so their labels rode upside-down
+  expect(vis.osm).toBe("none");
+  expect(vis.plain).toBe("visible");
+  expect(vis.labels).toBe("visible");
+  // and ours are really drawn — the glyphs resolve and text is placed
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () =>
+            window._map?.queryRenderedFeatures(undefined, { layers: ["street-labels"] }).length ??
+            0,
+        ),
+      { timeout: 20_000 },
+    )
+    .toBeGreaterThan(0);
+  // leaving the ride puts the ordinary basemap back
+  await page.locator("#nav-banner").click({ position: { x: 40, y: 60 } });
+  await page.locator("#nav-exit").click();
+  await page.locator("#nav-ask-yes").click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => (window._map?.getLayoutProperty("osm", "visibility") as string) ?? "visible",
+      ),
+    )
+    .toBe("visible");
+});
+
+test("the street name reads as part of the instruction, not a caption", async ({ page }) => {
+  const path = await startNav(page);
+  await ride(page, path, { speedKmh: 12, timeScale: 30, untilM: 200 });
+  const size = await page.evaluate(() => {
+    const px = (id: string): number =>
+      parseFloat(getComputedStyle(document.getElementById(id) as HTMLElement).fontSize);
+    return { dist: px("nav-dist"), street: px("nav-street") };
+  });
+  // it was 16 px against 34 px: a caption beside a headline
+  expect(size.street).toBeGreaterThanOrEqual(19);
+  expect(size.street / size.dist).toBeGreaterThan(0.6);
+  // the distance is still the biggest thing, because it's the cue you act on
+  expect(size.dist).toBeGreaterThan(size.street);
+});
+
+test("reporting a hazard mid-ride is one tap, and the question comes after", async ({ page }) => {
+  const path = await startNav(page);
+  await ride(page, path, { speedKmh: 12, timeScale: 30, untilM: 200 });
+  await page.locator("#nav-banner").click({ position: { x: 40, y: 60 } });
+  await page.locator("#nav-report").click();
+  // no form at 12 km/h
+  await expect(page.locator("#hazard")).not.toHaveAttribute("open", "");
+  await expect(page.locator("#nav-alert")).toContainText(/reported/i);
+  const count = async (): Promise<number> =>
+    page.evaluate(
+      () =>
+        new Promise<number>((resolve) => {
+          const req = indexedDB.open("bike-hazards", 1);
+          req.onsuccess = () => {
+            const all = req.result.transaction("hazards", "readonly").objectStore("hazards").getAll();
+            all.onsuccess = () => {
+              resolve((all.result as unknown[]).length);
+            };
+          };
+          req.onerror = () => {
+            resolve(-1);
+          };
+        }),
+    );
+  await expect.poll(count, { timeout: 10_000 }).toBe(1);
+  // then it asks what it was, in one tap each
+  await expect(page.locator("#nav-classify")).toBeVisible();
+  const cats = page.locator("#nav-classify button");
+  expect(await cats.count()).toBe(3);
+  const boxes = [];
+  for (const b of await cats.all()) {
+    const box = await b.boundingBox();
+    expect(box?.height ?? 0).toBeGreaterThanOrEqual(48);
+    if (box) boxes.push(box);
+  }
+  // same mis-tap rule as the tool row: these are answered at 12 km/h
+  for (let i = 1; i < boxes.length; i++) {
+    const prev = boxes[i - 1];
+    const cur = boxes[i];
+    if (!prev || !cur) continue;
+    expect(cur.x - (prev.x + prev.width)).toBeGreaterThanOrEqual(8);
+  }
+  // tapping again before answering must not file a second report
+  await page.locator("#nav-report").click();
+  await expect(page.locator("#nav-alert")).toContainText(/already reported/i);
+  expect(await count()).toBe(1);
+
+  await page.locator('#nav-classify button[data-cat="surface"]').click();
+  await expect(page.locator("#nav-alert")).toContainText(/broken surface/i);
+  await expect(page.locator("#nav-classify")).toBeHidden();
+});
+
+test("the voice and the banner say the same distance", async ({ page }) => {
+  const path = await startNav(page);
+  const shown = new Set<string>();
+  await ride(page, path, {
+    speedKmh: 13,
+    timeScale: 25,
+    untilM: 1400,
+    onFix: async () => {
+      const t = (await page.locator("#nav-dist").textContent()) ?? "";
+      if (t !== "") shown.add(t.trim());
+    },
+  });
+  const spoken = await page.evaluate(() => window.__rider.spoken);
+  const said = spoken.flatMap((p) => [...p.matchAll(/in (\d+) meters/g)].map((m) => m[1] ?? ""));
+  expect(said.length).toBeGreaterThan(0);
+  // riders heard "in three hundred metres" against a banner reading 280 m
+  for (const n of said) expect([...shown]).toContain(`${n} m`);
 });

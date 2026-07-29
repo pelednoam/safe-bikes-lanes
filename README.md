@@ -135,5 +135,9 @@ cd web && npm run e2e:native  # emulated Capacitor WebView (native-only paths)
 
 OpenStreetMap © OpenStreetMap contributors (ODbL). Cambridge GIS, MassDOT/
 MassGIS, and Somerville layers are public open data. Crash data: MassDOT
-IMPACT. This is a personal planning tool; always use your own judgment on the
+IMPACT. Basemap tiles: OpenStreetMap and CARTO (the label-free styles are what
+a ride displays, so street names can be drawn upright at any bearing). Map
+label glyphs: Noto Sans (SIL Open Font License 1.1), prebuilt SDF ranges from
+openmaptiles/fonts, vendored in `web/fonts/glyphs/`. UI type: Barlow (SIL OFL
+1.1). This is a personal planning tool; always use your own judgment on the
 road.

@@ -40,6 +40,7 @@ import {
   HAZARD_LABELS,
   listHazards,
   removeHazard,
+  setHazardCategory,
 } from "./hazards.js";
 import type { RecentRoute, SavedPlace } from "./places.js";
 import {
@@ -162,6 +163,38 @@ function el<T extends HTMLElement>(id: string): T {
   return node as T;
 }
 
+/** Distance to the next turn, bucketed. The banner rounded to 10 m while the
+ * voice rounded to 50, so riders heard "in three hundred metres" against a
+ * banner reading 280 m and reported it as a bug. Both read this now, so the
+ * buckets have to be coarse enough to say out loud. */
+function navDistM(m: number): number {
+  if (m < 15) return 0; // "now"
+  if (m < 100) return Math.round(m / 10) * 10;
+  if (m < 500) return Math.round(m / 50) * 50;
+  return Math.round(m / 100) * 100;
+}
+
+/** Kilometres without a pointless decimal: "1 km", not "1.0 km". */
+function navKm(metres: number): string {
+  const km = metres / 1000;
+  return Number.isInteger(km) ? String(km) : km.toFixed(1);
+}
+
+function navDistText(m: number): string {
+  const r = navDistM(m);
+  if (r === 0) return "now";
+  return r < 1000 ? `${r} m` : `${navKm(r)} km`;
+}
+
+/** The same number, spoken. */
+function navDistVoice(m: number): string {
+  const r = navDistM(m);
+  if (r === 0) return "now";
+  if (r < 1000) return `${r} meters`;
+  const km = navKm(r);
+  return `${km} kilometer${km === "1" ? "" : "s"}`;
+}
+
 function fmtDist(m: number): string {
   return m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(1)} km`;
 }
@@ -200,6 +233,9 @@ const map: MLMap = new maplibregl.Map({
         attribution: "© OpenStreetMap contributors",
       },
     },
+    // vendored SDF glyph ranges (Noto Sans, Latin + Latin-1): the label layer
+    // below needs them, and hosting them ourselves keeps labels working offline
+    glyphs: "fonts/glyphs/{fontstack}/{range}.pbf",
     layers: [{ id: "osm", type: "raster", source: "osm" }],
   },
   center: [-71.105, 42.383],
@@ -505,11 +541,97 @@ function syncOD(): void {
   }
 }
 
+// ── what the ends are called ──────────────────────────────────────────────
+// A permalink (or a tap on the map) sets a destination that has no name, and
+// the field sat empty: the trip was drawn but the panel couldn't say where to,
+// and the voice announced "you have arrived" at nowhere in particular. Ask
+// Nominatim once per spot, remember the answer, and never make routing wait
+// for it — a name is a nicety, the route is the product.
+
+const REVGEO_KEY = "bike-revgeo-v1";
+/** Which fields we filled in ourselves, and may therefore overwrite. */
+const autoNamed = { start: false, end: false };
+
+/** ~11 m of precision: enough that nudging a pin reuses the cached name. */
+function revKey(lon: number, lat: number): string {
+  return `${lon.toFixed(4)},${lat.toFixed(4)}`;
+}
+
+function revCache(): Record<string, string> {
+  try {
+    return JSON.parse(localStorage.getItem(REVGEO_KEY) ?? "{}") as Record<string, string>;
+  } catch {
+    return {};
+  }
+}
+
+async function reverseGeocode(lon: number, lat: number): Promise<string | null> {
+  const key = revKey(lon, lat);
+  const cache = revCache();
+  const hit = cache[key];
+  if (hit !== undefined) return hit;
+  const url =
+    "https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18" +
+    `&lon=${lon.toFixed(6)}&lat=${lat.toFixed(6)}`;
+  const resp = await fetch(url, { headers: { Accept: "application/json" } });
+  if (!resp.ok) return null;
+  const j = (await resp.json()) as {
+    name?: string;
+    display_name?: string;
+    address?: Record<string, string>;
+  };
+  const a = j.address ?? {};
+  const street = [a["house_number"], a["road"]].filter((x) => x !== undefined).join(" ");
+  const label =
+    (j.name ?? "") ||
+    street ||
+    a["neighbourhood"] ||
+    a["suburb"] ||
+    a["city"] ||
+    (j.display_name ?? "").split(",")[0] ||
+    "";
+  if (label !== "") {
+    cache[key] = label;
+    try {
+      localStorage.setItem(REVGEO_KEY, JSON.stringify(cache));
+    } catch {
+      /* private mode: the name just won't be remembered */
+    }
+  }
+  return label === "" ? null : label;
+}
+
+/** Name an end in its field, unless the rider typed something there. */
+function nameEnd(kind: "start" | "end"): void {
+  const marker = kind === "start" ? start : end;
+  if (!marker) return;
+  const field = el<HTMLInputElement>(kind === "start" ? "from-field" : "search");
+  if (field.value.trim() !== "" && !autoNamed[kind]) return;
+  const { lng, lat } = marker.getLngLat();
+  const asked = revKey(lng, lat);
+  field.value = "";
+  autoNamed[kind] = false;
+  void reverseGeocode(lng, lat)
+    .then((label) => {
+      if (label === null) return;
+      // the pin may have moved on (or gone) while we were asking
+      const now = kind === "start" ? start : end;
+      if (!now) return;
+      const p = now.getLngLat();
+      if (revKey(p.lng, p.lat) !== asked) return;
+      if (field.value.trim() !== "") return;
+      field.value = label;
+      autoNamed[kind] = true;
+    })
+    .catch(() => undefined); // offline, or Nominatim rate-limiting us
+}
+
 function makeMarker(lngLat: LngLat | [number, number], color: string, label: string): Marker {
   const m = new maplibregl.Marker({ color, draggable: true });
   m.setLngLat(lngLat).addTo(map);
   m.getElement().title = `${label} (drag to move)`;
   m.on("dragend", () => {
+    nameEnd(label === "start" ? "start" : "end");
     void requestRoute();
   });
   return m;
@@ -526,6 +648,7 @@ function setPoint(kind: "start" | "end", lngLat: LngLat | [number, number]): voi
     else end = makeMarker(lngLat, "#d7191c", "end");
   }
   syncOD();
+  nameEnd(kind);
   void requestRoute();
 }
 
@@ -682,6 +805,51 @@ function renderOptionChips(): void {
   });
 }
 
+let panelPaintGen = 0;
+
+/** Run the panel's DOM writes once the route line is actually on the map.
+ *
+ * The line goes through MapLibre's worker (parse, re-tile, render) while the
+ * summary is a synchronous DOM write, so putting both in one task painted the
+ * numbers a frame or two before the route appeared — planners read the gap as
+ * the app having routed somewhere else and then corrected itself. */
+function paintPanelWithRoute(paint: () => void): void {
+  const gen = ++panelPaintGen;
+  let done = false;
+  let renders = 0;
+  let parsed = false;
+  const fire = (): void => {
+    if (done || gen !== panelPaintGen) return;
+    done = true;
+    map.off("render", onRender);
+    map.off("sourcedata", onData);
+    window.clearTimeout(soft);
+    window.clearTimeout(hard);
+    paint();
+  };
+  const onData = (): void => {
+    if (map.isSourceLoaded("route")) parsed = true;
+  };
+  // "the source is loaded" is not "the line is drawn" — the frame after parsing
+  // is the one that draws it. Waiting for rendered geometry is the real signal;
+  // a route that lands off-screen has none, so a couple of frames after the
+  // data parsed counts as the map having had its chance.
+  const onRender = (): void => {
+    renders++;
+    if (map.getLayer("route") === undefined) return;
+    if (map.queryRenderedFeatures(undefined, { layers: ["route"] }).length > 0) fire();
+    else if (parsed && renders > 2) fire();
+  };
+  map.on("sourcedata", onData);
+  map.on("render", onRender);
+  // a map that isn't rendering at all (hidden tab, no WebGL) must not hold the
+  // numbers hostage; a busy one gets until the hard stop to draw
+  const soft = window.setTimeout(() => {
+    if (renders === 0) fire();
+  }, 600);
+  const hard = window.setTimeout(fire, 3000);
+}
+
 function selectOption(id: RouteOption["id"]): void {
   // While navigating, guidance follows its own copy of the track. Swapping the
   // drawn route underneath (a mid-ride hazard mark re-plans) would show one
@@ -698,10 +866,14 @@ function selectOption(id: RouteOption["id"]): void {
     type: "FeatureCollection",
     features: altFeatures,
   } as GeoJSON.GeoJSON);
-  renderOptions();
-  renderOptionChips();
-  showSummary(chosen);
+  // the permalink is written now, not with the panel: a reload a beat after
+  // routing used to lose the trip
   updateHash();
+  paintPanelWithRoute(() => {
+    renderOptions();
+    renderOptionChips();
+    showSummary(chosen);
+  });
   if (wasNavigating && navActive) {
     // keep the spoken guidance on the line that is actually drawn
     rebuildNavFromSelected();
@@ -1196,6 +1368,8 @@ function planBetween(s: [number, number], e: [number, number]): void {
   else start = makeMarker(s, "#2b83ba", "start");
   if (end) end.setLngLat(e);
   else end = makeMarker(e, "#d7191c", "end");
+  nameEnd("start");
+  nameEnd("end");
   void requestRoute();
 }
 
@@ -1443,6 +1617,27 @@ map.on("load", () => {
     source: "carto-dark",
     layout: { visibility: "none" },
   });
+  // Label-free basemaps, used while navigating. Raster tiles rotate as
+  // pictures, so with the map turned to the heading the baked-in labels ride
+  // upside-down and slide off their own streets — riders read them as noise.
+  // The names come back as a real symbol layer (see "street-labels"), which
+  // MapLibre keeps upright at any bearing.
+  for (const [id, src, url] of [
+    ["osm-plain", "carto-plain", "https://basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png"],
+    [
+      "osm-dark-plain",
+      "carto-dark-plain",
+      "https://basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png",
+    ],
+  ] as const) {
+    map.addSource(src, {
+      type: "raster",
+      tiles: [url],
+      tileSize: 256,
+      attribution: "© OpenStreetMap contributors © CARTO",
+    });
+    map.addLayer({ id, type: "raster", source: src, layout: { visibility: "none" } });
+  }
   // MassGIS 2023 15-cm orthoimagery (free tile service)
   map.addSource("massgis-aerial", {
     type: "raster",
@@ -1801,6 +1996,35 @@ map.on("load", () => {
       "circle-stroke-width": 2.5,
     },
   });
+  // Street names, drawn from the safety network rather than the basemap, so
+  // they stay upright and on their street when the map turns to the heading.
+  // Only shown while navigating: the planning view has the basemap's own
+  // labels, which cover more than our network does.
+  map.addLayer({
+    id: "street-labels",
+    type: "symbol",
+    source: "network",
+    filter: ["all", ["has", "name"], ["!=", ["get", "name"], ""]],
+    minzoom: 14,
+    layout: {
+      visibility: "none",
+      "symbol-placement": "line",
+      "text-field": ["get", "name"],
+      "text-font": ["Noto Sans Regular"],
+      "text-size": ["interpolate", ["linear"], ["zoom"], 14, 11.5, 17, 14],
+      // keep names off tight corners, and don't repeat them every few metres
+      "text-max-angle": 35,
+      "symbol-spacing": 260,
+      "text-padding": 3,
+      "text-letter-spacing": 0.01,
+    },
+    paint: {
+      "text-color": "#1d2430",
+      "text-halo-color": "rgba(255,255,255,0.92)",
+      "text-halo-width": 1.7,
+      "text-halo-blur": 0.3,
+    },
+  });
   map.addSource("pois", { type: "geojson", data: emptyFC() });
   map.addLayer({
     id: "pois",
@@ -2108,9 +2332,18 @@ map.on("click", (e: MapMouseEvent) => {
   }
 });
 
-// touch devices have no right-click: a long-press on a street opens the
-// same "mark sketchy" popup
+/** The one open spot-menu, so a second right-click (or long-press) replaces it
+ * instead of stacking a second card on the map. */
+let sketchyPopup: Popup | null = null;
+
+// touch devices have no right-click: a long-press on a street opens this same
+// "mark sketchy" popup (wired below the definition)
 function openSketchyPopup(lngLat: [number, number]): void {
+  sketchyPopup?.remove();
+  sketchyPopup = null;
+  // the hover card describes the same street; two cards over one spot is noise
+  hoverPopup?.remove();
+  hoverPopup = null;
   const box = document.createElement("div");
   const btn = document.createElement("button");
   btn.textContent = "⚠ mark this spot as sketchy";
@@ -2127,6 +2360,10 @@ function openSketchyPopup(lngLat: [number, number]): void {
     .setLngLat(lngLat)
     .setDOMContent(box)
     .addTo(map);
+  sketchyPopup = popup;
+  popup.on("close", () => {
+    if (sketchyPopup === popup) sketchyPopup = null;
+  });
   btn.addEventListener("click", () => {
     sketchyMarks.push(lngLat);
     saveSketchy(sketchyMarks);
@@ -2328,6 +2565,13 @@ el<HTMLButtonElement>("swap").addEventListener("click", () => {
   const s = start.getLngLat();
   start.setLngLat(end.getLngLat());
   end.setLngLat(s);
+  // the names swap with the pins, or the fields describe the trip backwards
+  const from = el<HTMLInputElement>("from-field");
+  const to = el<HTMLInputElement>("search");
+  [from.value, to.value] = [to.value, from.value];
+  [autoNamed.start, autoNamed.end] = [autoNamed.end, autoNamed.start];
+  fromCurrent = false;
+  syncOD();
   void requestRoute();
 });
 
@@ -2486,6 +2730,15 @@ function attachSearch(input: HTMLInputElement, target: "start" | "end"): void {
 }
 attachSearch(el<HTMLInputElement>("search"), "end");
 attachSearch(el<HTMLInputElement>("from-field"), "start");
+// once you type over a name we filled in, it's yours and we leave it alone
+for (const [kind, id] of [
+  ["start", "from-field"],
+  ["end", "search"],
+] as const) {
+  el<HTMLInputElement>(id).addEventListener("input", () => {
+    autoNamed[kind] = false;
+  });
+}
 
 document.addEventListener("keydown", (e: KeyboardEvent) => {
   if (e.key === "Escape") {
@@ -2662,9 +2915,75 @@ el<HTMLButtonElement>("hazard-close").addEventListener("click", () => {
   el<HTMLDialogElement>("hazard").close();
 });
 
+// ── reporting a hazard mid-ride: file first, ask after ────────────────────
+// The dialog (category, note, photo) is still how you report from the planning
+// map, where you can read and type. Riding, it was three taps and a form at
+// 12 km/h, so nobody used it.
+
+let classifyId: string | null = null;
+let classifyTimer: number | undefined;
+
+function hideClassify(): void {
+  window.clearTimeout(classifyTimer);
+  classifyId = null;
+  el<HTMLDivElement>("nav-classify").style.display = "none";
+}
+
+async function quickReport(): Promise<void> {
+  if (!navActive) {
+    if (navLastPos) openHazardDialog(navLastPos[0], navLastPos[1]);
+    return;
+  }
+  const at = navLastPos;
+  if (!at) {
+    showRideAlert("⚠️ no position yet — can't report from here", "gps");
+    window.setTimeout(hideRideAlert, 4000);
+    return;
+  }
+  // tapping again because nothing visible happened used to file a second report
+  const near = hazards.find((hz) => distM([hz.lon, hz.lat], at) < 20);
+  const id = near?.id ?? `${Date.now()}`;
+  if (!near) {
+    try {
+      await addHazard(
+        { id, t: Date.now(), lon: at[0], lat: at[1], category: "other", note: "", hasPhoto: false },
+        null,
+      );
+      await refreshHazards();
+    } catch {
+      showRideAlert("⚠️ could not save the report", "gps");
+      window.setTimeout(hideRideAlert, 4000);
+      return;
+    }
+  }
+  classifyId = id;
+  vibrate([80]);
+  speak("reported. routes will avoid this spot.", "chat");
+  showRideAlert(near ? "📷 already reported here" : "📷 reported — routes will avoid it");
+  window.setTimeout(hideRideAlert, 4000);
+  el<HTMLDivElement>("nav-classify").style.display = "flex";
+  window.clearTimeout(classifyTimer);
+  // long enough to answer at the next light, short enough to stop nagging
+  classifyTimer = window.setTimeout(hideClassify, 20_000);
+}
+
 el<HTMLButtonElement>("nav-report").addEventListener("click", () => {
-  if (navLastPos) openHazardDialog(navLastPos[0], navLastPos[1]);
+  void quickReport();
 });
+
+for (const btn of document.querySelectorAll<HTMLButtonElement>("#nav-classify button")) {
+  btn.addEventListener("click", () => {
+    const cat = btn.dataset["cat"] as HazardCategory | undefined;
+    const id = classifyId;
+    hideClassify();
+    if (cat === undefined || id === null) return;
+    void setHazardCategory(id, cat)
+      .then(refreshHazards)
+      .catch(() => undefined);
+    showRideAlert(`✓ logged as ${HAZARD_LABELS[cat]}`);
+    window.setTimeout(hideRideAlert, 3000);
+  });
+}
 
 // ---------------------------------------------------------------------------
 // ride history dialog
@@ -3064,8 +3383,7 @@ function navUpdateBanner(distToNext: number, remainingM: number): void {
   if (navArrived) return;
   const m = navManeuvers[navNext];
   el<HTMLElement>("nav-icon").textContent = m?.icon ?? "⬆";
-  el<HTMLElement>("nav-dist").textContent =
-    distToNext < 15 ? "now" : fmtDist(Math.round(distToNext / 10) * 10);
+  el<HTMLElement>("nav-dist").textContent = navDistText(distToNext);
   el<HTMLElement>("nav-street").textContent = m?.text ?? "";
   navUpdateTrip(remainingM);
 }
@@ -3447,14 +3765,20 @@ function navOnFix(fix: NativeFix): void {
       navAnnounceStage < 2 &&
       distToNext <= announceDist(ANNOUNCE_NEAR_S, ANNOUNCE_NEAR_CLAMP)
     ) {
-      speak(arrivalPhrase(next.voice, Math.round(distToNext / 10) * 10) ?? `in ${Math.round(distToNext / 10) * 10} meters, ${next.voice}${chain}`);
+      speak(
+        arrivalPhrase(next.voice, navDistM(distToNext)) ??
+          `in ${navDistVoice(distToNext)}, ${next.voice}${chain}`,
+      );
       vibrate([100]);
       navAnnounceStage = 2;
     } else if (
       navAnnounceStage < 1 &&
       distToNext <= announceDist(ANNOUNCE_FAR_S, ANNOUNCE_FAR_CLAMP)
     ) {
-      speak(arrivalPhrase(next.voice, Math.round(distToNext / 50) * 50) ?? `in ${Math.round(distToNext / 50) * 50} meters, ${next.voice}`);
+      speak(
+        arrivalPhrase(next.voice, navDistM(distToNext)) ??
+          `in ${navDistVoice(distToNext)}, ${next.voice}`,
+      );
       navAnnounceStage = 1;
     }
   }
@@ -3558,11 +3882,9 @@ async function startNav(): Promise<void> {
   el<HTMLDivElement>("nav-banner").classList.remove("expanded");
   el<HTMLButtonElement>("nav-recenter").style.display = "none";
   map.setLayoutProperty("route-done", "visibility", "visible");
-  // the network is drawn in the same palette as the route; while riding, the
-  // line you're following has to be the obvious one
-  for (const layer of ["network", "network-unconfirmed"]) {
-    map.setPaintProperty(layer, "line-opacity", 0.35);
-  }
+  // label-free basemap, our own upright labels, and the network dimmed behind
+  // the route — all of which applyBasemap decides from navActive
+  applyBasemap();
   try {
     wakeLock = await navigator.wakeLock.request("screen");
   } catch {
@@ -3605,6 +3927,7 @@ function exitNav(): void {
   void wakeLock?.release().catch(() => undefined);
   wakeLock = null;
   closeAsk();
+  hideClassify();
   hideRideAlert();
   window.clearTimeout(navRefollowTimer);
   navStopAnimation();
@@ -3954,9 +4277,11 @@ function tileXY(lon: number, lat: number, z: number): [number, number] {
 
 function routeTileUrls(track: Track): string[] {
   const dark = document.body.classList.contains("dark");
+  // the label-free tiles, because those are the ones a ride displays; caching
+  // the labelled set left the map blank exactly when it was needed offline
   const template = dark
-    ? "https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"
-    : "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
+    ? "https://basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png"
+    : "https://basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png";
   const urls = new Set<string>();
   for (const z of [13, 14, 15, 16]) {
     // sample the track densely enough that no tile is skipped at this zoom
@@ -4030,24 +4355,53 @@ function applyBasemap(): void {
   const dark = document.body.classList.contains("dark");
   const aerial = el<HTMLInputElement>("show-aerial").checked;
   const netOn = el<HTMLInputElement>("show-net").checked;
+  // while riding, the map is turned to the heading: drop the basemap's baked
+  // labels and draw our own, which stay the right way up
+  const plain = navActive;
   const setVis = (): void => {
-    map.setLayoutProperty("aerial", "visibility", aerial ? "visible" : "none");
-    map.setLayoutProperty("osm-dark", "visibility", !aerial && dark ? "visible" : "none");
-    map.setLayoutProperty("osm", "visibility", !aerial && !dark ? "visible" : "none");
-    map.setPaintProperty("route-casing", "line-color", dark || aerial ? "#9db8ff" : "#1440a0");
-    map.setPaintProperty("alts", "line-color", dark || aerial ? "#ccc" : "#777");
+    // Skip layers that aren't added yet: this runs during map load too, from
+    // whichever data callback lands first, and setLayoutProperty throws on an
+    // unknown id — which took the calling chain (and the route panel) with it.
+    const vis = (id: string, on: boolean): void => {
+      if (map.getLayer(id) !== undefined) {
+        map.setLayoutProperty(id, "visibility", on ? "visible" : "none");
+      }
+    };
+    vis("aerial", aerial);
+    vis("osm-dark", !aerial && dark && !plain);
+    vis("osm", !aerial && !dark && !plain);
+    vis("osm-dark-plain", !aerial && dark && plain);
+    vis("osm-plain", !aerial && !dark && plain);
+    // not gated on the network toggle: with the basemap's labels gone, hiding
+    // the network would leave a map with no names on it at all
+    vis("street-labels", plain);
+    if (map.getLayer("street-labels") !== undefined) {
+      map.setPaintProperty("street-labels", "text-color", dark || aerial ? "#f2f5fa" : "#1d2430");
+      map.setPaintProperty(
+        "street-labels",
+        "text-halo-color",
+        dark || aerial ? "rgba(10,14,22,0.9)" : "rgba(255,255,255,0.92)",
+      );
+    }
+    if (map.getLayer("route-casing") !== undefined) {
+      map.setPaintProperty("route-casing", "line-color", dark || aerial ? "#9db8ff" : "#1440a0");
+    }
+    if (map.getLayer("alts") !== undefined) {
+      map.setPaintProperty("alts", "line-color", dark || aerial ? "#ccc" : "#777");
+    }
     // over photos the lanes need contrast: dark halo + thicker, solid lines
-    map.setLayoutProperty(
-      "network-casing",
-      "visibility",
-      aerial && netOn ? "visible" : "none",
-    );
+    vis("network-casing", aerial && netOn);
     const width: unknown = aerial
       ? ["interpolate", ["linear"], ["zoom"], 12, 2.0, 16, 5.0]
       : ["interpolate", ["linear"], ["zoom"], 12, 1.2, 16, 3.5];
     for (const layer of ["network", "network-unconfirmed"]) {
+      if (map.getLayer(layer) === undefined) continue;
       map.setPaintProperty(layer, "line-width", width);
-      map.setPaintProperty(layer, "line-opacity", aerial ? 0.95 : 0.75);
+      // the network is drawn in the same palette as the route, so while riding
+      // it steps back: the line you're following has to be the obvious one.
+      // This lives here rather than in startNav because any later call would
+      // otherwise undo the dim.
+      map.setPaintProperty(layer, "line-opacity", plain ? 0.35 : aerial ? 0.95 : 0.75);
     }
   };
   // map.loaded() is false whenever tiles are streaming, and "load" fires only

@@ -9,6 +9,7 @@ import type { Map as MLMap } from "maplibre-gl";
 declare global {
   interface Window {
     _map?: MLMap;
+    __paint: { txt: string; len: number }[];
   }
 }
 
@@ -37,6 +38,36 @@ async function at(page: Page, lon: number, lat: number): Promise<{ x: number; y:
     },
     [lon, lat] as [number, number],
   );
+}
+
+/** Screen pixels that sit on the safety network, for hover/right-click tests. */
+async function streetPointsOnScreen(page: Page): Promise<{ x: number; y: number }[]> {
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () =>
+            window._map?.queryRenderedFeatures(undefined, { layers: ["network-hit"] }).length ?? 0,
+        ),
+      { timeout: 30_000 },
+    )
+    .toBeGreaterThan(0);
+  return page.evaluate(() => {
+    const map = window._map;
+    if (!map) return [];
+    const all = map.queryRenderedFeatures(undefined, { layers: ["network-hit"] });
+    const stride = Math.max(1, Math.floor(all.length / 60));
+    return all
+      .filter((_, i) => i % stride === 0)
+      .flatMap((f) =>
+        f.geometry.type === "LineString"
+          ? f.geometry.coordinates
+              .map((c) => map.project(c as [number, number]))
+              .filter((p) => p.x > 400 && p.x < 1150 && p.y > 80 && p.y < 700)
+              .map((p) => ({ x: Math.round(p.x), y: Math.round(p.y) }))
+          : [],
+      );
+  });
 }
 
 async function routeMeters(page: Page): Promise<number> {
@@ -261,4 +292,95 @@ test("reset clears the plan when not navigating", async ({ page }) => {
   await expect(page.locator(".option-card")).toHaveCount(0);
   await expect(page.locator(".maplibregl-marker:not(.opt-chip)")).toHaveCount(0);
   expect(await page.evaluate(() => window.location.hash)).toBe("");
+});
+
+test("a second right-click replaces the spot menu instead of stacking one", async ({ page }) => {
+  await boot(page, HOME_VIEW);
+  const pts = await streetPointsOnScreen(page);
+  expect(pts.length).toBeGreaterThan(0);
+  const a = pts[0];
+  const b = pts[Math.min(6, pts.length - 1)];
+  if (!a || !b) return;
+  await page.mouse.click(a.x, a.y, { button: "right" });
+  await expect(page.locator(".maplibregl-popup")).toHaveCount(1);
+  await page.mouse.click(b.x, b.y, { button: "right" });
+  // two cards over one map, and only one of them described the spot you meant
+  await expect(page.locator(".maplibregl-popup")).toHaveCount(1);
+  await expect(page.locator(".maplibregl-popup")).toContainText(/sketchy/i);
+});
+
+test("the route line is on the map by the time the numbers are", async ({ page }) => {
+  // A warm map: the first route of a session also waits on basemap tiles, and
+  // under load that can outlast any cap the panel could reasonably wait for
+  // (it gives up after 3 s and shows the numbers, which is the right call).
+  // Switching options is where riders saw the gap anyway.
+  await boot(page, "#s=-71.122258,42.396748&e=-71.086705,42.362552&m=young_kids");
+  const cards = page.locator(".option-card");
+  await expect(cards.first()).toBeVisible({ timeout: 30_000 });
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () => window._map?.queryRenderedFeatures(undefined, { layers: ["route"] }).length ?? 0,
+        ),
+      { timeout: 30_000 },
+    )
+    .toBeGreaterThan(0);
+
+  // watch the summary distance and note what the map holds at that moment
+  await page.evaluate(() => {
+    const painted = (): number =>
+      window._map?.queryRenderedFeatures(undefined, { layers: ["route"] }).length ?? 0;
+    window.__paint = [];
+    new MutationObserver(() => {
+      const txt = document.getElementById("s-dist")?.textContent ?? "";
+      if (txt.trim() !== "") window.__paint.push({ txt, len: painted() });
+    }).observe(document.getElementById("s-dist") as Node, {
+      childList: true,
+      characterData: true,
+      subtree: true,
+    });
+  });
+  const before = await routeMeters(page);
+  await cards.last().click();
+  await expect(cards.last()).toHaveClass(/selected/);
+  await expect.poll(async () => routeMeters(page), { timeout: 15_000 }).not.toBe(before);
+
+  const seen = await page.evaluate(() => window.__paint);
+  expect(seen.length).toBeGreaterThan(0);
+  // the numbers used to land a frame or two before the line was drawn, which
+  // reads as the app having routed somewhere else and then corrected itself
+  for (const s of seen) expect(s.len, `route drawn when "${s.txt}" appeared`).toBeGreaterThan(0);
+});
+
+test("a destination set from a link gets a name, and a typed one is left alone", async ({
+  page,
+}) => {
+  // the geocoder is a nicety, so it's stubbed: what's under test is that the
+  // field gets filled at all, and that it never overwrites what you typed
+  await page.route(/nominatim\.openstreetmap\.org\/reverse/, (route) => {
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ name: "Kendall/MIT", display_name: "Kendall/MIT, Cambridge" }),
+    });
+  });
+  await boot(page, "#s=-71.122258,42.396748&e=-71.086705,42.362552&m=young_kids");
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
+  // it used to open with an empty field and a route to nowhere named
+  await expect(page.locator("#search")).toHaveValue("Kendall/MIT", { timeout: 15_000 });
+
+  // type your own and it stands, even after the pin moves
+  await page.locator("#search").fill("the bakery");
+  const marker = page.locator(".maplibregl-marker:not(.opt-chip)").last();
+  const box = await marker.boundingBox();
+  if (!box) return;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  for (let i = 1; i <= 8; i++) {
+    await page.mouse.move(box.x + box.width / 2 + i * 8, box.y + box.height / 2 - i * 5);
+    await page.waitForTimeout(20);
+  }
+  await page.mouse.up();
+  await page.waitForTimeout(1500);
+  await expect(page.locator("#search")).toHaveValue("the bakery");
 });
