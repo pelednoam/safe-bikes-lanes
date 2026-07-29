@@ -245,7 +245,9 @@ test("the rider's own zoom is kept (no snapping back), recenter restores follow"
   // Hand control back. The button is the explicit way, but the camera also
   // takes itself back after ~10 s, so it may already have gone — either way
   // the zoom must return, which is what the next assertion checks.
-  if (await recenter.isVisible()) await recenter.click();
+  // isVisible() then click() is a race the button wins on a slow CI runner: it
+  // hides itself between the two calls and the click waits out the timeout.
+  await recenter.click({ timeout: 2500 }).catch(() => undefined);
   await context.setGeolocation({
     longitude: coords[13]?.[0] ?? 0,
     latitude: coords[13]?.[1] ?? 0,
