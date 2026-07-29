@@ -2906,6 +2906,8 @@ let navUserZoom = false;
 let navInteracting = false;
 let navRefollowTimer: number | undefined;
 let navImplausibleFixes = 0;
+/** Smoothed pace actually being ridden, held through stops. */
+let navPaceKmh: number | null = null;
 /** Consecutive reroute attempts, for backing off between them. */
 let navRerouteTries = 0;
 /** Wall clock of the last spoken reroute, so one wrong turn says it once. */
@@ -3034,7 +3036,15 @@ function rebuildNavFromSelected(): boolean {
  * flies) so the number is honest rather than frozen at its last on-route value. */
 function navUpdateTrip(remainingM: number, straight = false): void {
   // ETA off measured pace when we have it, profile pace before then
-  const kmh = navSpeed > 1.0 ? (navSpeed * 3600) / 1000 : PROFILES[profileId].paceKmh;
+  // Hold the last measured pace through a stop. Flipping to the profile's pace
+  // whenever navSpeed dropped below 1 m/s swung the arrival time by ~6 minutes
+  // at every red light, which is useless if you're asking "do we make the 3
+  // o'clock thing?".
+  if (navSpeed > 1.0) {
+    const measured = (navSpeed * 3600) / 1000;
+    navPaceKmh = navPaceKmh === null ? measured : navPaceKmh * 0.7 + measured * 0.3;
+  }
+  const kmh = navPaceKmh ?? PROFILES[profileId].paceKmh;
   const mins = Math.round((remainingM / 1000 / kmh) * 60);
   const eta = new Date(Date.now() + mins * 60_000);
   const clock = eta.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
@@ -3537,6 +3547,7 @@ async function startNav(): Promise<void> {
   navLastFixAt = 0;
   navRerouteTries = 0;
   navRerouteSpokenAt = 0;
+  navPaceKmh = null;
   navImplausibleFixes = 0;
   navBearingShown = map.getBearing();
   navBearingTarget = 0;
@@ -3576,6 +3587,9 @@ async function startNav(): Promise<void> {
       { enableHighAccuracy: true, maximumAge: 1000, timeout: 15000 },
     );
   }
+  // absorb one Back press: on Android the hardware button is a thumb-brush from
+  // ending the ride, and there was no guard of any kind
+  history.pushState({ navigating: true }, "");
   speak("navigation started", "chat");
 }
 
@@ -3853,6 +3867,13 @@ el<HTMLButtonElement>("nav-recenter").addEventListener("click", () => {
   navUserZoom = false; // hand the zoom back to the follow camera
   el<HTMLButtonElement>("nav-recenter").style.display = "none";
 });
+window.addEventListener("popstate", () => {
+  if (!navActive) return;
+  // stay on the ride and ask, rather than silently leaving it
+  history.pushState({ navigating: true }, "");
+  askDuringRide("End the ride?", exitNav);
+});
+
 map.on("dragstart", () => {
   if (navActive) {
     navFollowing = false;
