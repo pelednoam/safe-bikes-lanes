@@ -104,18 +104,44 @@ export function isNewerAppVersion(current, latest) {
     const l = num(latest);
     return c !== null && l !== null && l > c;
 }
+let lastTtsError = null;
+/** Why the last native speak() failed, for the voice test to report. Silence is
+ * the worst possible failure mode for spoken guidance, so it has to be
+ * explainable rather than just absent. */
+export function lastNativeSpeechError() {
+    return lastTtsError;
+}
 /** Native text-to-speech (works with the screen off, unlike the WebView's
  * speechSynthesis). Returns false when unavailable so callers can fall back. */
 export async function nativeSpeak(text) {
     const plugin = ttsPlugin();
-    if (plugin === null)
+    if (plugin === null) {
+        lastTtsError = "no native speech plugin";
         return false;
+    }
     try {
         await plugin.stop().catch(() => undefined);
-        await plugin.speak({ text, rate: 1.05 });
+        // lang and volume are explicit: the Android engine rejects speak() when the
+        // device's default language has no voice data installed, and that rejection
+        // used to drop us to the WebView — which has no voices at all on Android,
+        // so the ride simply went quiet with nothing said about it.
+        await plugin.speak({ text, rate: 1.05, lang: "en-US", volume: 1.0 });
+        lastTtsError = null;
         return true;
     }
-    catch {
+    catch (err) {
+        lastTtsError = err instanceof Error ? err.message : String(err);
         return false;
+    }
+}
+/** Voices the WebView itself can offer. Zero on Android, which is the point. */
+export function webVoiceCount() {
+    if (!("speechSynthesis" in window))
+        return 0;
+    try {
+        return window.speechSynthesis.getVoices().length;
+    }
+    catch {
+        return 0;
     }
 }

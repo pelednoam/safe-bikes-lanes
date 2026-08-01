@@ -156,6 +156,65 @@ test("tapping install actually requests the APK", async ({ page }) => {
   await expect(page.locator("#update-text")).toContainText(/notification/i);
 });
 
+// ── voice ─────────────────────────────────────────────────────────────────
+// The stubs above make speech look like it works. On a real Android phone it
+// can fail three ways that are identical from the saddle — no engine, no voice
+// data for the language, or the WebView's voiceless speechSynthesis — and none
+// of them announce themselves. These cover the reporting.
+
+/** Native shim whose speech engine refuses, like a phone with no voice data. */
+async function mutePhone(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const noop = async (): Promise<void> => undefined;
+    window.Capacitor = {
+      isNativePlatform: () => true,
+      registerPlugin: (name: string) => {
+        if (name === "TextToSpeech") {
+          return {
+            speak: async () => {
+              throw new Error("Language is not supported");
+            },
+            stop: noop,
+          };
+        }
+        if (name === "Browser") return { open: noop };
+        if (name === "BackgroundGeolocation") {
+          return { addWatcher: async () => "w", removeWatcher: noop, openSettings: noop };
+        }
+        return {};
+      },
+    } as unknown as Window["Capacitor"];
+    // Android's WebView: the API is there, the voices are not
+    Object.defineProperty(window, "speechSynthesis", {
+      configurable: true,
+      value: { speak: () => undefined, cancel: () => undefined, getVoices: () => [], speaking: false },
+    });
+  });
+}
+
+test("the voice test says which engine spoke", async ({ page }) => {
+  await nativeShim(page);
+  await page.goto("/");
+  await page.waitForFunction(() => window._map !== undefined, null, { timeout: 60_000 });
+  await page.locator("summary", { hasText: "Voice" }).first().click();
+  await page.locator("#voice-test").click();
+  await expect(page.locator("#voice-status")).toContainText(/phone's own voice engine/i);
+  // and it points at the volume that actually matters
+  await expect(page.locator("#voice-status")).toContainText(/MEDIA volume/i);
+});
+
+test("a phone with no voice data is told what to fix, not left silent", async ({ page }) => {
+  await mutePhone(page);
+  await page.goto("/");
+  await page.waitForFunction(() => window._map !== undefined, null, { timeout: 60_000 });
+  await page.locator("summary", { hasText: "Voice" }).first().click();
+  await page.locator("#voice-test").click();
+  // the engine's own reason, and where to fix it
+  await expect(page.locator("#voice-status")).toContainText(/no usable voice/i);
+  await expect(page.locator("#voice-status")).toContainText(/Language is not supported/);
+  await expect(page.locator("#voice-status")).toContainText(/Text-to-speech/i);
+});
+
 test("fresh-data download shows the progress banner then clears", async ({ page }) => {
   await nativeShim(page);
   // remote data build is newer -> app downloads layers from the "website",

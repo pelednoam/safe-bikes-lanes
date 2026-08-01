@@ -126,6 +126,10 @@ export async function installRider(page: Page): Promise<void> {
           setTimeout(() => u?.onend?.(), 5);
         },
         cancel: () => undefined,
+        // a real engine reports both of these; without them the app can't tell
+        // a working browser from Android's voiceless WebView
+        speaking: false,
+        getVoices: () => [{ name: "stub", lang: "en-US" }],
       },
     });
     Object.defineProperty(window, "SpeechSynthesisUtterance", {

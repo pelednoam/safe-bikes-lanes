@@ -1,4 +1,4 @@
-import { isNativeApp, isNewerAppVersion, nativeSpeak, startDownload, startBackgroundWatcher, stopBackgroundWatcher, } from "./native.js";
+import { isNativeApp, isNewerAppVersion, lastNativeSpeechError, nativeSpeak, startDownload, startBackgroundWatcher, stopBackgroundWatcher, webVoiceCount, } from "./native.js";
 import { bearingDeg, buildAlerts, buildManeuvers, buildTrack, distM, snapToTrack, sunsetTime, trackBearingAhead, trackSlice, } from "./nav.js";
 import { addHazard, buildReportText, downscalePhoto, getHazardPhoto, HAZARD_LABELS, listHazards, removeHazard, setHazardCategory, } from "./hazards.js";
 import { clearRecent, deletePlace, emojiFor, exportBackup, importBackup, listPlaces, listRecent, pushRecent, savePlace, } from "./places.js";
@@ -3078,22 +3078,97 @@ function drainSpeech() {
     };
     void nativeSpeak(next.text)
         .then((spokenNatively) => {
-        if (spokenNatively || !("speechSynthesis" in window)) {
+        if (spokenNatively) {
             window.setTimeout(done, speechDuration(next.text));
             return;
         }
+        // typed as always-present, but a WebView can leave it undefined
+        const synth = window.speechSynthesis;
+        if (!synth) {
+            noteVoiceUnavailable();
+            window.setTimeout(done, 0);
+            return;
+        }
         const utter = new SpeechSynthesisUtterance(next.text);
+        let ended = false;
+        const finish = () => {
+            ended = true;
+            done();
+        };
         utter.rate = 1.05;
-        utter.onend = done;
-        utter.onerror = done;
-        window.speechSynthesis.speak(utter);
+        utter.onend = finish;
+        utter.onerror = finish;
+        synth.speak(utter);
+        // The WebView's speechSynthesis exists on Android but ships no voices:
+        // speak() returns without a sound, without an error, and without ever
+        // firing onend. Ask whether anything is actually being said rather than
+        // counting voices, which browsers report late on a cold start.
+        window.setTimeout(() => {
+            if (!ended && synth.speaking !== true)
+                noteVoiceUnavailable();
+        }, 400);
         // belt and braces: some engines never fire onend
         window.setTimeout(() => {
             if (speaking)
-                done();
+                finish();
         }, speechDuration(next.text) + 1500);
     })
         .catch(done);
+}
+/** Say a line and report which engine actually said it.
+ *
+ * "I can't hear it" has several causes that look identical from the saddle —
+ * no engine installed, media volume down, audio on a Bluetooth device in a
+ * pannier — and none of them announce themselves. This turns the question into
+ * an answer before the ride rather than after it. */
+async function runVoiceTest() {
+    const box = el("voice-status");
+    const line = "Voice test. In 200 meters, turn left onto the path.";
+    box.textContent = "testing…";
+    if (await nativeSpeak(line)) {
+        box.textContent =
+            "✓ spoken by the phone's own voice engine — the one that keeps working " +
+                "with the screen off. Heard nothing? Press volume-up while it plays " +
+                "(that sets MEDIA volume), and check nothing is grabbing the audio over " +
+                "Bluetooth.";
+        return;
+    }
+    const err = lastNativeSpeechError();
+    const voices = webVoiceCount();
+    if (voices === 0) {
+        box.textContent =
+            `✗ this phone has no usable voice${err !== null ? ` (${err})` : ""}. ` +
+                "Android: Settings → Accessibility → Text-to-speech output — install or " +
+                "enable an engine and its English voice data. The app can't supply one.";
+        return;
+    }
+    const utter = new SpeechSynthesisUtterance(line);
+    utter.rate = 1.05;
+    window.speechSynthesis.speak(utter);
+    box.textContent = isNativeApp()
+        ? `▶ spoken by the browser engine (${voices} voices), but the app's own ` +
+            `engine failed${err !== null ? `: ${err}` : ""} — that's the one that ` +
+            "works with the screen off, so turns would go quiet in your pocket."
+        : `▶ spoken by the browser (${voices} voices). In the phone app a native ` +
+            "engine is used instead, so it keeps talking with the screen off.";
+}
+el("voice-test").addEventListener("click", () => {
+    void runVoiceTest();
+});
+/** Told the rider once this ride that there is no voice. */
+let voiceWarned = false;
+function noteVoiceUnavailable() {
+    if (voiceWarned)
+        return;
+    voiceWarned = true;
+    const why = lastNativeSpeechError();
+    console.warn("voice unavailable", why ?? "no voices");
+    if (!navActive)
+        return;
+    // silence is the worst failure a spoken guide can have: a rider who thinks
+    // the voice is coming stops watching the screen
+    showRideAlert("🔇 no voice on this phone — watch the screen for turns", "gps");
+    window.setTimeout(hideRideAlert, 8000);
 }
 function speak(text, priority = "turn") {
     if (navMuted)
@@ -3632,6 +3707,7 @@ async function startNav() {
     navRerouteSpokenAt = 0;
     navPaceKmh = null;
     navImplausibleFixes = 0;
+    voiceWarned = false;
     navBearingShown = map.getBearing();
     navBearingTarget = 0;
     navZoomTarget = NAV_ZOOM_CRUISE;

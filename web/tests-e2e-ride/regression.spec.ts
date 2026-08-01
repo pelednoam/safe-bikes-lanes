@@ -34,8 +34,11 @@ const DAVIS_KENDALL = "#s=-71.122258,42.396748&e=-71.086705,42.362552&m=young_ki
 async function plan(page: Page, hash = DAVIS_KENDALL): Promise<[number, number][]> {
   await installRider(page);
   await page.goto(`/${hash}`);
+  // Booting a WebGL map is a resource wait, not a behavioural one: four workers
+  // run four of them at once here and the runner is slower still, so whichever
+  // test happens to boot last was failing at 45 s while passing in 16 s alone.
   await page.waitForFunction(() => window._map !== undefined && window._map.loaded(), null, {
-    timeout: 45_000,
+    timeout: 90_000,
   });
   await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
   return page.evaluate(() => {
@@ -264,6 +267,18 @@ test("the hazard dialog fits the phone and can be dismissed by tapping outside",
   // tap and asks afterwards (see the one-tap test). It still has to fit a phone,
   // because that's the screen it's filled in on.
   await plan(page);
+  // the network has to be painted before a pixel of it can be right-clicked:
+  // asking once, straight after boot, is a race this test kept losing under load
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () =>
+            window._map?.queryRenderedFeatures(undefined, { layers: ["network-hit"] }).length ?? 0,
+        ),
+      { timeout: 60_000 },
+    )
+    .toBeGreaterThan(0);
   const pt = await page.evaluate(() => {
     const map = window._map;
     if (!map) return null;
@@ -320,7 +335,7 @@ test("the street card can be dismissed and doesn't mention right-clicking on tou
   const page = await ctx.newPage();
   await page.goto("/");
   await page.waitForFunction(() => window._map !== undefined && window._map.loaded(), null, {
-    timeout: 45_000,
+    timeout: 90_000,
   });
   await expect
     .poll(
@@ -370,7 +385,9 @@ test("street names stay upright: the basemap's own labels are off while riding",
   expect(vis.osm).toBe("none");
   expect(vis.plain).toBe("visible");
   expect(vis.labels).toBe("visible");
-  // and ours are really drawn — the glyphs resolve and text is placed
+  // and ours are really drawn — the glyphs resolve and text is placed. Another
+  // resource wait: a glyph fetch plus symbol placement, on a machine running
+  // four of these at once, where a 16 s test stretches past a minute.
   await expect
     .poll(
       () =>
@@ -379,7 +396,7 @@ test("street names stay upright: the basemap's own labels are off while riding",
             window._map?.queryRenderedFeatures(undefined, { layers: ["street-labels"] }).length ??
             0,
         ),
-      { timeout: 20_000 },
+      { timeout: 60_000 },
     )
     .toBeGreaterThan(0);
   // leaving the ride puts the ordinary basemap back
@@ -479,4 +496,32 @@ test("the voice and the banner say the same distance", async ({ page }) => {
   expect(said.length).toBeGreaterThan(0);
   // riders heard "in three hundred metres" against a banner reading 280 m
   for (const n of said) expect([...shown]).toContain(`${n} m`);
+});
+
+test("a phone that can't speak says so instead of just going quiet", async ({ page }) => {
+  // Android's WebView has speechSynthesis but no voices: speak() returns
+  // without a sound, without an error, and never fires onend. The ride used to
+  // continue in silence, which reads exactly like "no turn coming up".
+  await installRider(page);
+  await page.addInitScript(() => {
+    Object.defineProperty(window, "speechSynthesis", {
+      configurable: true,
+      value: {
+        speak: () => undefined,
+        cancel: () => undefined,
+        getVoices: () => [],
+        speaking: false,
+      },
+    });
+  });
+  await page.goto(`/${DAVIS_KENDALL}`);
+  await page.waitForFunction(() => window._map !== undefined && window._map.loaded(), null, {
+    timeout: 90_000,
+  });
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
+  await page.locator("#nav-btn").click();
+  await expect(page.locator("#nav-alert")).toContainText(/no voice/i, { timeout: 15_000 });
+  await expect(page.locator("#nav-alert")).toContainText(/watch the screen/i);
+  // and guidance carries on rather than stalling behind a queue that never drains
+  await expect(page.locator("#nav-dist")).not.toBeEmpty();
 });

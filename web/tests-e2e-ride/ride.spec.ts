@@ -34,7 +34,7 @@ async function startRide(page: Page, hash = DAVIS_KENDALL): Promise<[number, num
   await installRider(page);
   await page.goto(`/${hash}`);
   await page.waitForFunction(() => window._map !== undefined && window._map.loaded(), null, {
-    timeout: 45_000,
+    timeout: 90_000,
   });
   await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
   const path = await page.evaluate(() => {
@@ -191,7 +191,7 @@ test("a ride interrupted by a reload is saved, not lost", async ({ page }) => {
   await ride(page, path, { speedKmh: 14, timeScale: 40, untilM: 900 });
   // simulate the hardware Back / a crash: the page just goes away
   await page.reload();
-  await page.waitForFunction(() => window._map !== undefined, null, { timeout: 45_000 });
+  await page.waitForFunction(() => window._map !== undefined, null, { timeout: 90_000 });
   const rides = await page.evaluate(() =>
     JSON.parse(localStorage.getItem("rideHistory") ?? "[]") as { meters: number }[],
   );
