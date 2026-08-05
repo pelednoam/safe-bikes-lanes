@@ -6,8 +6,10 @@ output stops being an argument a city can act on, so it is asserted directly on
 hand-built graphs rather than on real data.
 """
 
+import csv
 import json
 import math
+import pickle
 import tempfile
 from pathlib import Path
 from typing import NamedTuple
@@ -792,3 +794,165 @@ def test_map_slice_keeps_the_top_of_every_measure(
     assert "c59" in chosen
     # and the overall leader is still there
     assert "c0" in chosen
+
+
+# ── the export surface, and the module end to end ──────────────────────────
+
+
+def test_load_towns_handles_both_polygon_shapes_and_a_missing_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raw = tmp_path / "raw-towns"
+    raw.mkdir()
+    monkeypatch.setattr(config, "RAW_DIR", raw)
+    assert priorities.load_towns() == []  # not fetched yet: no towns, no crash
+
+    ring = [[-71.11, 42.37], [-71.09, 42.37], [-71.09, 42.39], [-71.11, 42.37]]
+    (raw / "towns.geojson").write_text(
+        json.dumps(
+            {
+                "type": "FeatureCollection",
+                "features": [
+                    {
+                        "geometry": {"type": "Polygon", "coordinates": [ring]},
+                        "properties": {"town": "Simpleton"},
+                    },
+                    {
+                        "geometry": {"type": "MultiPolygon", "coordinates": [[ring], [ring]]},
+                        "properties": {"town": "Islandia"},
+                    },
+                    {"geometry": {"type": "Point", "coordinates": [0, 0]}, "properties": {}},
+                ],
+            }
+        )
+    )
+    towns = dict(priorities.load_towns())
+    assert set(towns) == {"Simpleton", "Islandia"}
+    assert len(towns["Islandia"]) == 2  # both parts kept
+
+
+def test_csv_carries_every_project_and_blanks_what_wasnt_measured(tmp_path: Path) -> None:
+    """A city sorts this in a spreadsheet, so the columns have to be complete
+    and empty where nothing was measured rather than zero."""
+    cands = [
+        priorities.Candidate(
+            pid="c1", name="A St", kind="corridor", cls="busy_street", length_m=100.0,
+            crashes=2, join_m=1000.0,
+        ),
+        priorities.Candidate(
+            pid="c2", name="B St", kind="spot_fix", cls="busy_street", length_m=20.0
+        ),
+    ]
+    out = tmp_path / "p.csv"
+    priorities.write_csv(out, cands)
+    rows = list(csv.DictReader(out.open()))
+    assert [r["pid"] for r in rows] == ["c1", "c2"]
+    assert rows[0]["rank"] == "1"
+    assert rows[0]["crashes"] == "2"
+    assert rows[0]["pop_gaining"] == ""  # not measured, not "0"
+    assert rows[1]["kind"] == "spot_fix"
+    assert rows[1]["towns"] == "-"
+    assert set(priorities.CSV_COLUMNS) <= set(rows[0])
+
+
+def test_spot_fix_points_are_exported_for_the_map(tmp_path: Path) -> None:
+    spot = priorities.Candidate(
+        pid="s1", name="Pinch", kind="spot_fix", cls="busy_street", length_m=14.0
+    )
+    spot.parts = [[(-71.1, 42.38), (-71.0999, 42.3801)]]
+    corridor = priorities.Candidate(
+        pid="c1", name="Long", kind="corridor", cls="busy_street", length_m=400.0
+    )
+    corridor.parts = [[(-71.2, 42.4), (-71.19, 42.4)]]
+    priorities.export_spot_fixes(tmp_path, [spot, corridor])
+    fc = json.loads((tmp_path / "severance.geojson").read_text())
+    # only spot fixes, and as points a city can see at city zoom
+    assert len(fc["features"]) == 1
+    assert fc["features"][0]["geometry"]["type"] == "Point"
+    assert fc["features"][0]["properties"]["pid"] == "s1"
+
+
+def test_meta_records_provenance_and_refuses_to_call_a_proxy_a_headcount(
+    tmp_path: Path,
+) -> None:
+    cands = [
+        priorities.Candidate(
+            pid="c1", name="A", kind="corridor", cls="busy_street", length_m=100.0
+        )
+    ]
+    priorities.write_meta(
+        tmp_path, cands, shown_count=1, islands={0: 5000.0, 1: 100.0},
+        destinations=7, pop=np.array([1.0, 2.0]), pop_is_real=False,
+        stranded=1.0, stranded_pct=50.0,
+    )
+    meta = json.loads((tmp_path / "priorities_meta.json").read_text())
+    assert meta["population"]["is_headcount"] is False
+    assert "PROXY" in meta["population"]["source"]
+    assert meta["islands"]["substantial"] == 1  # the 100 m fragment doesn't count
+    assert meta["access"]["stranded_pct"] == 50
+    # the caveats a city will be asked about must ship with the numbers
+    assert len(meta["limits"]) >= 4
+    assert any("not measurement" in limit for limit in meta["limits"])
+    assert meta["model"]["kid_safe_max_multiplier"] == config.SAFE_MULT_MAX
+
+
+def test_build_runs_end_to_end_on_a_small_network(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The orchestration itself, on a graph small enough to pickle in a test.
+
+    Everything below build() is unit-tested, but nothing checked that the parts
+    fit together and that a run produces the four files the app and the export
+    packet read.
+    """
+    data = tmp_path / "data"
+    raw = data / "raw"
+    raw.mkdir(parents=True)
+    monkeypatch.setattr(config, "DATA_DIR", data)
+    monkeypatch.setattr(config, "RAW_DIR", raw)
+
+    b = GraphBuilder()
+    for i, x in ((0, 0), (1, 200), (2, 400), (3, 414), (4, 614), (5, 814)):
+        b.node(i, x)
+    b.edge(0, 1, 200, "quiet_street", "West St")
+    b.edge(1, 2, 200, "quiet_street", "West St")
+    b.edge(2, 3, 14, "busy_street", "The Pinch")
+    b.edge(3, 4, 200, "quiet_street", "East St")
+    b.edge(4, 5, 200, "quiet_street", "East St")
+    with (data / "graph.pkl").open("wb") as fh:
+        pickle.dump(b.g, fh)
+
+    lon, lat = _lonlat(814)
+    (raw / "pois.geojson").write_text(
+        json.dumps(
+            {
+                "type": "FeatureCollection",
+                "features": [
+                    {
+                        "type": "Feature",
+                        "geometry": {"type": "Point", "coordinates": [lon, lat]},
+                        "properties": {"kind": "school"},
+                    }
+                ],
+            }
+        )
+    )
+
+    out = priorities.build()
+    assert out, "a severed network must yield at least one project"
+    web = data.parent / "web" / "data"
+    for name in ("priorities.geojson", "priorities.csv", "access.geojson",
+                 "priorities_meta.json", "severance.geojson"):
+        assert (web / name).exists(), f"{name} missing"
+
+    # the pinch is the project, and it's a spot fix
+    top = out[0]
+    assert top.name == "The Pinch"
+    assert top.kind == "spot_fix"
+    assert top.access_computed
+
+    # and the files agree with what build() returned
+    fc = json.loads((web / "priorities.geojson").read_text())
+    assert fc["features"][0]["properties"]["pid"] == top.pid
+    meta = json.loads((web / "priorities_meta.json").read_text())
+    assert meta["candidates"] == len(out)

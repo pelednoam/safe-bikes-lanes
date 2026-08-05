@@ -8,3 +8,8 @@ web/node_modules/
 test-results/
 data/*
 !data/overrides.geojson
+
+# coverage output
+.coverage
+coverage/
+htmlcov/

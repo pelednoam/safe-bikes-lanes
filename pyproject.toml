@@ -15,6 +15,35 @@ dependencies = [
     "uvicorn[standard]",
 ]
 
+[dependency-groups]
+# dev-only: coverage measurement for the pipeline's logic
+dev = ["pytest", "pytest-cov"]
+
+[tool.coverage.run]
+source = ["pipeline"]
+
+[tool.coverage.report]
+# Scripts whose bodies are network calls and file shuffling: their pure logic is
+# tested (see tests/test_fetch.py, tests/test_export_web.py), their __main__
+# orchestration is not, and pretending otherwise with a mocked-out shell would
+# add lines to the count without adding confidence.
+omit = [
+    "pipeline/aerial_audit.py",
+    "pipeline/mapillary_check.py",
+    "pipeline/review_page.py",
+    "pipeline/verify_towns3.py",
+    "pipeline/elevation.py",
+    "pipeline/aerial.py",
+]
+# Ratchet, not a target: raise it when the number rises, never lower it to pass.
+# build_graph's build() is the floor here — it needs osmnx, the network and a
+# real extract, so its 24% is the honest cost of not faking a graph build.
+fail_under = 65
+exclude_also = [
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
+
 [tool.mypy]
 python_version = "3.12"
 files = ["pipeline", "server", "tests"]

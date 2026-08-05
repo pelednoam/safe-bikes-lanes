@@ -171,3 +171,87 @@ describe("bboxOf", () => {
     expect(padded.north).toBeGreaterThan(42.38);
   });
 });
+
+// ── the corridor walk ───────────────────────────────────────────────────────
+// ensureCorridor decides which slice of the graph a route can see. Too narrow
+// and the router silently returns a worse route (a narrowed corridor once took
+// a Wellesley->Revere trip from 50% protected to 34%); too wide and a phone
+// pulls megabytes it doesn't need. Tested through the public surface, by
+// recording which tiles get asked for.
+
+describe("ensureCorridor", () => {
+  /** A 6x6 world of 1-degree tiles from (0,0), and a loader that records asks. */
+  function store(): { s: TileStore; asked: string[] } {
+    const asked: string[] = [];
+    const tiles: string[] = [];
+    for (let c = 0; c < 6; c++) for (let r = 0; r < 6; r++) tiles.push(`${c}_${r}`);
+    const s = new TileStore(async <T,>(name: string): Promise<T> => {
+      if (name.endsWith("manifest.json")) {
+        return {
+          originLon: 0, originLat: 0, tileDeg: 1,
+          classes: ["quiet_street"], tiles,
+        } as T;
+      }
+      asked.push(name);
+      return { nodes: [], nodeIds: [], edges: [], names: [], geoms: [] } as T;
+    });
+    return { s, asked };
+  }
+
+  const key = (name: string): string => name.replace("tiles/", "").replace(".json", "");
+
+  it("covers every cell the line passes through, not just its ends", async () => {
+    const { s, asked } = store();
+    await s.loadManifest();
+    await s.ensureCorridor(
+      [
+        [0.5, 0.5],
+        [4.5, 0.5],
+      ],
+      0,
+    );
+    const keys = asked.map(key);
+    // the ends
+    expect(keys).toContain("0_0");
+    expect(keys).toContain("4_0");
+    // and the cells between them, which a naive endpoints-only walk would skip
+    expect(keys).toContain("1_0");
+    expect(keys).toContain("2_0");
+    expect(keys).toContain("3_0");
+  });
+
+  it("widens by whole cells with the margin", async () => {
+    const tight = store();
+    await tight.s.loadManifest();
+    await tight.s.ensureCorridor([[2.5, 2.5]], 0);
+    expect(tight.asked).toHaveLength(1);
+
+    const wide = store();
+    await wide.s.loadManifest();
+    await wide.s.ensureCorridor([[2.5, 2.5]], 1);
+    expect(wide.asked).toHaveLength(9); // one ring of neighbours
+  });
+
+  it("never asks for a tile the manifest doesn't list", async () => {
+    const { s, asked } = store();
+    await s.loadManifest();
+    // out at sea, far outside the published 6x6
+    await s.ensureCorridor([[40, 40]], 2);
+    expect(asked).toEqual([]);
+  });
+
+  it("reports whether anything new arrived", async () => {
+    const { s } = store();
+    await s.loadManifest();
+    expect(await s.ensureCorridor([[2.5, 2.5]], 0)).toBe(true);
+    // asking again for the same cell loads nothing new
+    expect(await s.ensureCorridor([[2.5, 2.5]], 0)).toBe(false);
+  });
+
+  it("handles an empty route without asking for anything", async () => {
+    const { s, asked } = store();
+    await s.loadManifest();
+    expect(await s.ensureCorridor([], 1)).toBe(false);
+    expect(asked).toEqual([]);
+  });
+});

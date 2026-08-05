@@ -2,10 +2,13 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import {
+  clearRecent,
   emojiFor,
   exportBackup,
   importBackup,
   listPlaces,
+  listRecent,
+  pushRecent,
   recentWithNew,
   savePlace,
 } from "../src/places.js";
@@ -101,5 +104,55 @@ describe("backup / restore", () => {
     localStorage.clear();
     importBackup({ app: "family-bike-router", data: { evilKey: "x", savedPlaces: "[]" } });
     expect(localStorage.getItem("evilKey")).toBeNull();
+  });
+});
+
+// ── recent routes ──────────────────────────────────────────────────────────
+// The other half of the panel's memory, and the only part of it that trims
+// itself. Untested until now.
+
+describe("recent routes", () => {
+  beforeEach(() => {
+    globalThis.localStorage = new MemoryStorage() as Storage;
+  });
+
+  // endpoints identify a recent route, not the label — two trips between the
+  // same two points are the same trip however they're named
+  const route = (label: string, n = label.length): RecentRoute => ({
+    label,
+    s: [-71.12, 42.39],
+    e: [-71.08 - n / 1000, 42.36],
+    km: 5,
+    grade: "A",
+    t: 0,
+  });
+
+  it("remembers newest first", () => {
+    pushRecent(route("one", 1));
+    pushRecent(route("two", 2));
+    expect(listRecent().map((r) => r.label)).toEqual(["two", "one"]);
+  });
+
+  it("moves a repeat to the top instead of duplicating it", () => {
+    // riding the same trip twice shouldn't fill the list with it
+    pushRecent(route("home", 1));
+    pushRecent(route("school", 2));
+    pushRecent(route("home", 1)); // same two ends: a repeat, not a new trip
+    expect(listRecent().map((r) => r.label)).toEqual(["home", "school"]);
+  });
+
+  it("trims itself so the panel can't grow without bound", () => {
+    for (let i = 0; i < 30; i++) pushRecent(route(`trip ${i}`, i));
+    const kept = listRecent();
+    expect(kept.length).toBeLessThanOrEqual(8); // MAX_RECENT
+    expect(kept[0]?.label).toBe("trip 29"); // the newest survives
+  });
+
+  it("clears, and reads nothing from an empty or corrupt store", () => {
+    pushRecent(route("one", 1));
+    clearRecent();
+    expect(listRecent()).toEqual([]);
+    localStorage.setItem("recentRoutes", "{not json");
+    expect(listRecent()).toEqual([]);
   });
 });

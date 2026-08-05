@@ -1,7 +1,7 @@
 // Tests for ride recording and history stats.
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
-import { RideRecorder, rideTotals } from "../src/rides.js";
+import { RideRecorder, rideTotals, stashInProgress, takeInProgress } from "../src/rides.js";
 import type { RideSummary } from "../src/rides.js";
 
 const LAT = 42.38;
@@ -124,5 +124,117 @@ describe("distance measurement under GPS wander", () => {
     const measured = measure(20, 5, 5000);
     expect(measured).toBeGreaterThan(5000 * 0.9);
     expect(measured).toBeLessThan(5000 * 1.1);
+  });
+});
+
+// ── the along-route path, and the crash-recovery stash ──────────────────────
+// The distance model was wrong twice before this shape landed (a distance-gated
+// window measured 32% long, then step-summing 22% long), and none of the
+// along-route branches had a test.
+
+class MemoryStorage {
+  private store = new Map<string, string>();
+  getItem(k: string): string | null {
+    return this.store.get(k) ?? null;
+  }
+  setItem(k: string, v: string): void {
+    this.store.set(k, v);
+  }
+  removeItem(k: string): void {
+    this.store.delete(k);
+  }
+  clear(): void {
+    this.store.clear();
+  }
+}
+
+describe("distance along a known route", () => {
+  it("measures from the first fix, which only starts the clock", () => {
+    // The first addPoint initialises and returns, so its alongM is a datum and
+    // not a distance. Easy to misread, and it changes every expectation here.
+    const r = new RideRecorder();
+    r.addPoint(0, LON, LAT, "quiet_street", 500);
+    expect(r.metersSoFar).toBe(0);
+    // the second fix becomes the datum — the first returns before the
+    // along-route branch is even reached — so distance starts at the third
+    r.addPoint(1000, LON, LAT, "quiet_street", 900);
+    expect(r.metersSoFar).toBe(0);
+    r.addPoint(2000, LON, LAT, "quiet_street", 1300);
+    expect(r.metersSoFar).toBe(400);
+  });
+
+  it("counts forward progress and ignores drift backwards", () => {
+    const r = new RideRecorder();
+    // GPS wander moves the along-track position back and forth; only the
+    // high-water mark counts, or wander ratchets the total upwards
+    for (const [t, along] of [
+      [0, 0], [1000, 50], [2000, 40], [3000, 90], [4000, 85], [5000, 200],
+    ] as const) {
+      r.addPoint(t, LON, LAT, "quiet_street", along);
+    }
+    // 50 is the datum (the first counted fix), 200 the high-water mark
+    expect(r.metersSoFar).toBe(150);
+  });
+
+  it("banks the ridden distance when a reroute rebases the track", () => {
+    const r = new RideRecorder();
+    r.addPoint(0, LON, LAT, "quiet_street", 0); // datum
+    r.addPoint(1000, LON, LAT, "quiet_street", 800);
+    r.addPoint(2000, LON, LAT, "quiet_street", 1500);
+    // rerouted: the new track's positions start again from near zero
+    r.addPoint(3000, LON, LAT, "quiet_street", 10);
+    r.addPoint(4000, LON, LAT, "quiet_street", 300);
+    // 700 banked from the first track (1500 - 800), 290 on the second
+    expect(r.metersSoFar).toBe(990);
+  });
+
+  it("attributes forward progress to the class ridden", () => {
+    const r = new RideRecorder();
+    r.addPoint(0, LON, LAT, "path", 0); // datum
+    r.addPoint(1000, LON, LAT, "path", 500);
+    r.addPoint(2000, LON, LAT, "path", 1500);
+    r.addPoint(3000, LON, LAT, "busy_street", 2000);
+    const summary = r.finish("young_kids");
+    expect(summary).not.toBeNull();
+    if (!summary) return;
+    expect(summary.byClass["path"]).toBe(1000);
+    expect(summary.byClass["busy_street"]).toBe(500);
+    expect(summary.pctProtected).toBeGreaterThan(60);
+  });
+});
+
+describe("a ride interrupted by the app going away", () => {
+  beforeEach(() => {
+    (globalThis as unknown as { localStorage: MemoryStorage }).localStorage =
+      new MemoryStorage();
+  });
+
+  it("comes back once, then is gone", () => {
+    const ride: RideSummary = {
+      id: "r1", startedAt: "2026-08-05T10:00:00.000Z", meters: 4200, durationS: 900,
+      movingS: 800, byClass: {}, pctProtected: 50, pctQuiet: 20,
+      profile: "young_kids", polyline: [],
+    };
+    stashInProgress(ride);
+    expect(takeInProgress()?.meters).toBe(4200);
+    // taking it clears it: a recovered ride must not resurrect on every launch
+    expect(takeInProgress()).toBeNull();
+  });
+
+  it("returns nothing rather than throwing on junk", () => {
+    expect(takeInProgress()).toBeNull();
+    localStorage.setItem("rideInProgress", "{not json");
+    expect(takeInProgress()).toBeNull();
+    localStorage.setItem("rideInProgress", JSON.stringify({ id: 7 }));
+    expect(takeInProgress()).toBeNull();
+  });
+
+  it("clears the stash when there's nothing underway", () => {
+    stashInProgress({
+      id: "r2", startedAt: "x", meters: 1, durationS: 1, movingS: 1, byClass: {},
+      pctProtected: 0, pctQuiet: 0, profile: "solo", polyline: [],
+    });
+    stashInProgress(null);
+    expect(takeInProgress()).toBeNull();
   });
 });

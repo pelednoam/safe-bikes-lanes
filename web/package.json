@@ -16,6 +16,8 @@
   "devDependencies": {
     "@capacitor/cli": "^8.4.2",
     "@playwright/test": "^1.61.1",
+    "@vitest/coverage-v8": "^4.1.10",
+    "fake-indexeddb": "^6.2.5",
     "maplibre-gl": "^4.7.1",
     "playwright": "^1.61.1",
     "typescript": "^5.6.0",
