@@ -34,25 +34,6 @@ import config
 import networkx as nx
 
 # ---------------------------------------------------------------------------
-# geometry helpers (kept local: the pipeline's other modules use geopandas for
-# joins, but this one walks the graph and only needs distances and midpoints)
-# ---------------------------------------------------------------------------
-
-_M_PER_DEG_LAT = 110_540.0
-
-
-def _m_per_deg_lon(lat: float) -> float:
-    return 111_320.0 * math.cos(math.radians(lat))
-
-
-def meters_between(a: tuple[float, float], b: tuple[float, float]) -> float:
-    """Planar distance in metres, good to well under a metre at this latitude."""
-    dx = (a[0] - b[0]) * _m_per_deg_lon((a[1] + b[1]) / 2)
-    dy = (a[1] - b[1]) * _M_PER_DEG_LAT
-    return math.hypot(dx, dy)
-
-
-# ---------------------------------------------------------------------------
 # candidates
 # ---------------------------------------------------------------------------
 
@@ -81,6 +62,10 @@ class Candidate:
     dest_unlocked: int = 0
     pop_gaining: float = 0.0
     resident_m_saved: float = 0.0
+    # Whether the accessibility pass actually ran. Without it those three fields
+    # are zero, and a zero in a column called "residents gaining access" reads as
+    # "this project helps nobody" rather than "not measured yet".
+    access_computed: bool = False
     score: float = 0.0
     components: dict[str, float] = field(default_factory=dict)
     group: str = ""
@@ -145,13 +130,19 @@ def safe_islands(graph: nx.MultiDiGraph) -> tuple[dict[int, int], dict[int, floa
                 safe.add_edge(u, v, length=length)
 
     island_of: dict[int, int] = {}
-    island_m: dict[int, float] = defaultdict(float)
+    island_m: dict[int, float] = {}
     for iid, comp in enumerate(nx.connected_components(safe)):
+        sub = safe.subgraph(comp)
+        metres = sum(float(d["length"]) for _, _, d in sub.edges(data=True))
+        if metres <= 0:
+            # a node with no kid-safe edge at all. Counting these as islands
+            # inflated the headline: 44,643 "islands" was really 34,734, with
+            # 9,909 bare junctions padding it out.
+            continue
         for n in comp:
             island_of[n] = iid
-        sub = safe.subgraph(comp)
-        island_m[iid] = sum(float(d["length"]) for _, _, d in sub.edges(data=True))
-    return island_of, dict(island_m)
+        island_m[iid] = metres
+    return island_of, island_m
 
 
 def _street_key(data: dict[str, Any]) -> tuple[str, str]:
@@ -170,22 +161,26 @@ def find_candidates(graph: nx.MultiDiGraph) -> list[Candidate]:
     not one — they are separate projects, and merging them would inflate both
     the cost and the claimed benefit.
     """
-    unsafe = nx.Graph()
+    # Group by street identity, then split each group into connected runs.
+    # Deduplicated on (endpoints, key) so the two directions of a two-way street
+    # count once, while two parallel ways between the same junctions both count —
+    # an earlier simple-Graph pass collapsed those into one and lost their length.
+    seen: set[tuple[int, int, int]] = set()
+    by_street: defaultdict[tuple[str, str], list[tuple[int, int, int]]] = defaultdict(list)
     for u, v, k, data in graph.edges(keys=True, data=True):
         if is_kid_safe(data):
             continue
-        unsafe.add_edge(u, v, key=k, data=data)
-
-    # group edges by street identity, then split each group into connected runs
-    by_street: defaultdict[tuple[str, str], list[tuple[int, int, int]]] = defaultdict(list)
-    for u, v, d in unsafe.edges(data=True):
-        by_street[_street_key(d["data"])].append((u, v, d["key"]))
+        eid = (min(u, v), max(u, v), k)
+        if eid in seen:
+            continue
+        seen.add(eid)
+        by_street[_street_key(data)].append((u, v, k))
 
     candidates: list[Candidate] = []
     for (name, cls), edges in sorted(by_street.items()):
-        run = nx.Graph()
-        run.add_edges_from((u, v) for u, v, _k in edges)
-        edge_key = {(min(u, v), max(u, v)): k for u, v, k in edges}
+        run = nx.MultiGraph()
+        for u, v, k in edges:
+            run.add_edge(u, v, key=(u, v, k))
         for comp in nx.connected_components(run):
             sub = run.subgraph(comp)
             length = 0.0
@@ -194,9 +189,9 @@ def find_candidates(graph: nx.MultiDiGraph) -> list[Candidate]:
             pressure = 0.0
             parts: list[list[tuple[float, float]]] = []
             members: list[tuple[int, int, int]] = []
-            for u, v in sub.edges():
-                k = edge_key[(min(u, v), max(u, v))]
-                data = graph.get_edge_data(u, v, k) or graph.get_edge_data(v, u, k)
+            for _a, _b, key in sub.edges(keys=True):
+                u, v, k = key
+                data = graph.get_edge_data(u, v, k)
                 if data is None:
                     continue
                 seg_m = float(data["length"])
@@ -269,6 +264,12 @@ def score_severance(
             cand.join_m = 0.0
 
 
+def _ring_bbox(ring: list[tuple[float, float]]) -> tuple[float, float, float, float]:
+    xs = [p[0] for p in ring]
+    ys = [p[1] for p in ring]
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
 def load_towns() -> list[tuple[str, list[list[tuple[float, float]]]]]:
     """Town polygons as (name, rings). Empty when the source wasn't fetched."""
     path = config.RAW_DIR / "towns.geojson"
@@ -314,17 +315,27 @@ def assign_towns(
     """Tag each candidate with the town(s) its midpoint and ends fall in."""
     if not towns:
         return
+    # bbox per ring first: 5,675 candidates x 137 towns x every ring vertex is
+    # the slowest thing here, and a bbox rejects nearly all of it
+    boxed = [
+        (town, [(ring, _ring_bbox(ring)) for ring in rings])
+        for town, rings in towns
+    ]
     for cand in candidates:
-        if not cand.coords:
+        coords = cand.coords
+        if not coords:
             continue
-        probes = [cand.coords[0], cand.coords[len(cand.coords) // 2], cand.coords[-1]]
+        probes = [coords[0], coords[len(coords) // 2], coords[-1]]
         found: list[str] = []
         for probe in probes:
-            for town, rings in towns:
-                if any(_in_ring(probe, ring) for ring in rings):
-                    if town not in found:
+            x, y = probe
+            for town, rings in boxed:
+                if town in found:
+                    continue
+                for ring, (x0, y0, x1, y1) in rings:
+                    if x0 <= x <= x1 and y0 <= y <= y1 and _in_ring(probe, ring):
                         found.append(town)
-                    break
+                        break
         cand.towns = found
 
 
@@ -366,8 +377,14 @@ def group_alternatives(candidates: list[Candidate]) -> None:
     """
     groups: defaultdict[str, list[Candidate]] = defaultdict(list)
     for cand in candidates:
-        pair = "-".join(str(i) for i in sorted(cand.islands[:2]))
-        cand.group = f"{cand.name}|{cand.cls}|{pair}"
+        if len(cand.islands) < 2:
+            # Nothing to be an alternative *to*: with no island pair, every
+            # same-named candidate would have grouped together and reported
+            # unrelated streets in different towns as each other's options.
+            cand.group = cand.pid
+        else:
+            pair = "-".join(str(i) for i in sorted(cand.islands[:2]))
+            cand.group = f"{cand.name}|{cand.cls}|{pair}"
         groups[cand.group].append(cand)
     for members in groups.values():
         for cand in members:
@@ -465,9 +482,13 @@ def to_geojson(candidates: list[Candidate]) -> dict[str, Any]:
                     ),
                     "crash_pressure": cand.crash_pressure,
                     "join_m": cand.join_m,
-                    "dest_unlocked": cand.dest_unlocked,
-                    "pop_gaining": round(cand.pop_gaining, 1),
-                    "resident_m_saved": round(cand.resident_m_saved, 1),
+                    "dest_unlocked": cand.dest_unlocked if cand.access_computed else None,
+                    "pop_gaining": (
+                        round(cand.pop_gaining, 1) if cand.access_computed else None
+                    ),
+                    "resident_m_saved": (
+                        round(cand.resident_m_saved, 1) if cand.access_computed else None
+                    ),
                     "cost_proxy": round(cand.cost_proxy),
                     "score": cand.score,
                     "group": cand.group,
@@ -499,8 +520,10 @@ def write_csv(path: Any, candidates: list[Candidate]) -> None:
                     f"{cand.join_m:.0f}",
                     cand.crashes if cand.crashes_known else "",
                     f"{cand.crashes_per_km:.2f}" if cand.crashes_known else "",
-                    cand.dest_unlocked, f"{cand.pop_gaining:.0f}",
-                    f"{cand.resident_m_saved:.0f}", f"{cand.cost_proxy:.0f}",
+                    cand.dest_unlocked if cand.access_computed else "",
+                    f"{cand.pop_gaining:.0f}" if cand.access_computed else "",
+                    f"{cand.resident_m_saved:.0f}" if cand.access_computed else "",
+                    f"{cand.cost_proxy:.0f}",
                     cand.group_size,
                     summary_sentence(cand),
                 ]
@@ -515,8 +538,9 @@ def build(limit: int | None = None) -> list[Candidate]:
 
     island_of, island_m = safe_islands(graph)
     big = sorted(island_m.values(), reverse=True)[:5]
+    substantial = sum(1 for m in island_m.values() if m >= 200)
     print(
-        f"kid-safe islands: {len(island_m)} "
+        f"kid-safe islands: {len(island_m)} ({substantial} of 200 m or more) "
         f"(largest: {', '.join(f'{m / 1000:.1f} km' for m in big)})"
     )
 
@@ -534,7 +558,11 @@ def build(limit: int | None = None) -> list[Candidate]:
     if limit is not None:
         candidates = candidates[:limit]
 
-    out_dir = config.DATA_DIR
+    # web/data, not data/: that is what publish-data.sh tars into the release
+    # asset the site and the APK both extract. Writing to data/ would have left
+    # the app's layer with nothing to load in production.
+    out_dir = config.DATA_DIR.parent / "web" / "data"
+    out_dir.mkdir(parents=True, exist_ok=True)
     write_csv(out_dir / "priorities.csv", candidates)
     # The map layer carries the top slice: all 5,675 candidates came to ~7 MB,
     # heavier than the display network the app loads by viewport. The CSV keeps

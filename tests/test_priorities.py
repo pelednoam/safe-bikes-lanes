@@ -247,8 +247,65 @@ def test_towns_are_assigned_from_a_polygon() -> None:
     assert cands[0].towns == ["Testville"]  # left as-is rather than cleared
 
 
-def test_meters_between_is_sane() -> None:
-    assert priorities.meters_between(_lonlat(0), _lonlat(100)) == pytest.approx(100.0, abs=0.5)
-    assert priorities.meters_between((-71.1, 42.38), (-71.1, 42.381)) == pytest.approx(
-        110.5, abs=1.0
+def test_isolated_junctions_are_not_islands() -> None:
+    """A node with no kid-safe edge is a junction, not an island. Counting them
+    reported 44,643 islands where there were 34,734, padded by 9,909 bare nodes."""
+    b = GraphBuilder()
+    for i in range(4):
+        b.node(i, i * 100)
+    b.edge(0, 1, 100, "quiet_street", "Safe St")
+    b.edge(2, 3, 100, "busy_street", "Loud Rd")  # its nodes touch nothing safe
+    island_of, island_m = priorities.safe_islands(b.g)
+    assert len(island_m) == 1
+    assert all(m > 0 for m in island_m.values())
+    # the unsafe street's nodes belong to no island
+    assert 2 not in island_of
+    assert 3 not in island_of
+
+
+def test_parallel_ways_both_count_toward_length() -> None:
+    """Two ways between the same junctions are two streets. A simple-Graph pass
+    collapsed them and undercounted the corridor."""
+    b = GraphBuilder()
+    b.node(0, 0)
+    b.node(1, 300)
+    b.edge(0, 1, 300, "busy_street", "Twin Rd")           # key 0
+    b.edge(0, 1, 300, "busy_street", "Twin Rd")           # key 1: the other carriageway
+    cands = [c for c in priorities.find_candidates(b.g) if c.name == "Twin Rd"]
+    assert len(cands) == 1
+    assert cands[0].length_m == pytest.approx(600.0)
+    assert len(cands[0].edges) == 2
+
+
+def test_unmeasured_metrics_are_blank_not_zero(tmp_path: object) -> None:
+    """Before the accessibility pass runs, "residents gaining access" must be
+    empty rather than 0 — a zero there reads as "this helps nobody"."""
+    cand = priorities.Candidate(
+        pid="c1", name="A St", kind="corridor", cls="busy_street", length_m=100.0
     )
+    assert not cand.access_computed
+    props = priorities.to_geojson([cand])["features"][0]["properties"]
+    assert props["pop_gaining"] is None
+    assert props["resident_m_saved"] is None
+    assert props["dest_unlocked"] is None
+
+
+def test_candidates_with_no_island_pair_are_not_each_others_alternatives() -> None:
+    """Grouping on an absent island pair made unrelated same-named streets in
+    different towns report as options for one another."""
+    a = priorities.Candidate(
+        pid="c1", name="Main St", kind="corridor", cls="busy_street", length_m=100.0
+    )
+    b_ = priorities.Candidate(
+        pid="c2", name="Main St", kind="corridor", cls="busy_street", length_m=100.0
+    )
+    priorities.group_alternatives([a, b_])
+    assert a.group != b_.group
+    assert a.group_size == 1 and b_.group_size == 1
+
+    # but two ways across the same gap on the same street are alternatives
+    a.islands = [7, 9]
+    b_.islands = [9, 7]
+    priorities.group_alternatives([a, b_])
+    assert a.group == b_.group
+    assert a.group_size == 2

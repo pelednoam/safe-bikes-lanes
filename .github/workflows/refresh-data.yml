@@ -35,6 +35,11 @@ jobs:
       - name: Export web data
         working-directory: pipeline
         run: python export_web.py
+      - name: Rank where-to-build projects
+        working-directory: pipeline
+        # reads data/graph.pkl, writes web/data/priorities.{geojson,csv}, which
+        # publish-data.sh tars into the release asset the app extracts
+        run: python priorities.py
       - name: Cache aerial + terrain tiles
         uses: actions/cache@v4
         with:
