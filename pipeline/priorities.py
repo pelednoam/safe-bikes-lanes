@@ -23,15 +23,23 @@ with the weighting and re-sort.
 from __future__ import annotations
 
 import csv
+import datetime
 import json
 import math
 import pickle
+import time
 from collections import defaultdict
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import config
 import networkx as nx
+import numpy as np
+from scipy.sparse import coo_matrix
+from scipy.sparse.csgraph import dijkstra
+from shapely import STRtree
+from shapely.geometry import MultiPolygon, Point, Polygon
 
 # ---------------------------------------------------------------------------
 # candidates
@@ -57,6 +65,7 @@ class Candidate:
 
     # filled in by the analyses
     islands: list[int] = field(default_factory=list)
+    small_island: int = -1  # the side a build would connect: the smaller of the two
     join_m: float = 0.0  # safe metres joined by building this
     join_names: list[str] = field(default_factory=list)
     dest_unlocked: int = 0
@@ -66,6 +75,9 @@ class Candidate:
     # are zero, and a zero in a column called "residents gaining access" reads as
     # "this project helps nobody" rather than "not measured yet".
     access_computed: bool = False
+    # whether pop_gaining is people or a street-length proxy, so the sentence
+    # this project prints can't imply a headcount that wasn't counted
+    pop_is_headcount: bool = False
     score: float = 0.0
     components: dict[str, float] = field(default_factory=dict)
     group: str = ""
@@ -258,6 +270,7 @@ def score_severance(
         )
         cand.islands = [iid for iid, _ in real]
         if len(real) >= 2:
+            cand.small_island = min(real[0], real[1], key=lambda kv: kv[1])[0]
             cand.join_m = round(min(real[0][1], real[1][1]), 1)
             cand.join_names = [f"{real[0][1] / 1000:.1f} km", f"{real[1][1] / 1000:.1f} km"]
         else:
@@ -446,6 +459,25 @@ def summary_sentence(cand: Candidate) -> str:
             if joined
             else f"unlocks {cand.join_m / 1000:.1f} km of kid-safe streets"
         )
+    if cand.access_computed and (cand.dest_unlocked or cand.pop_gaining > 0):
+        reach: list[str] = []
+        if cand.dest_unlocked:
+            thing = "school, playground or library" if cand.dest_unlocked == 1 else (
+                "schools, playgrounds and libraries"
+            )
+            # "reaches 35 schools" was the first wording and it overclaimed: the
+            # 35 are what sits on the network being joined, most already
+            # reachable by the people already on it. What the project does is
+            # open that network to the other side.
+            reach.append(f"opens a network with {cand.dest_unlocked} {thing} on it")
+        if cand.pop_gaining > 0 and cand.pop_is_headcount:
+            # this one is measured directly: people who cross from "nothing in
+            # reach" to "in reach" when the corridor is rebuilt
+            reach.append(f"about {cand.pop_gaining:,.0f} residents gain a safe route")
+        elif cand.pop_gaining > 0:
+            reach.append("more homes gain a safe route")
+        if reach:
+            bits.append("; ".join(reach))
     if cand.crashes_known and cand.crashes:
         plural = "es" if cand.crashes != 1 else ""
         bits.append(f"{cand.crashes} bike crash{plural} since 2021")
@@ -553,6 +585,36 @@ def build(limit: int | None = None) -> list[Candidate]:
 
     assign_towns(candidates, load_towns())
     group_alternatives(candidates)
+
+    # accessibility: what each candidate would put in reach, and for whom
+    net = Network(graph)
+    pop, pop_is_real = node_population(graph, net)
+    if not pop_is_real:
+        print(
+            "  no census layer — weighting by residential street length instead; "
+            "resident counts are reported as a proxy, not as people"
+        )
+    destinations = destination_nodes(graph, net)
+    print(
+        f"  {len(destinations)} destinations (schools, playgrounds, libraries), "
+        f"{pop.sum():,.0f} {'residents' if pop_is_real else 'proxy weight'} on the network"
+    )
+    started = time.monotonic()
+    before = score_accessibility(
+        graph, candidates, net, pop, destinations, island_of, pop_is_real
+    )
+    print(
+        f"  measured all {len(candidates)} candidates in "
+        f"{time.monotonic() - started:.0f}s (no screening needed)"
+    )
+    stranded = float(np.sum(pop[before >= config.ACCESS_BUDGET_M]))
+    stranded_pct = 100 * stranded / max(float(pop.sum()), 1.0)
+    print(
+        f"  today {stranded:,.0f} of {pop.sum():,.0f} ({stranded_pct:.0f}%) have no "
+        f"school, playground or library within {config.ACCESS_BUDGET_M:,.0f} m of "
+        "perceived distance (unsafe streets are priced in, not banned)"
+    )
+
     score_all(candidates)
     candidates.sort(key=lambda c: c.score, reverse=True)
     if limit is not None:
@@ -563,6 +625,7 @@ def build(limit: int | None = None) -> list[Candidate]:
     # the app's layer with nothing to load in production.
     out_dir = config.DATA_DIR.parent / "web" / "data"
     out_dir.mkdir(parents=True, exist_ok=True)
+    export_coverage(graph, net, pop, before, pop_is_real, out_dir)
     write_csv(out_dir / "priorities.csv", candidates)
     # The map layer carries the top slice: all 5,675 candidates came to ~7 MB,
     # heavier than the display network the app loads by viewport. The CSV keeps
@@ -571,6 +634,9 @@ def build(limit: int | None = None) -> list[Candidate]:
     (out_dir / "priorities.geojson").write_text(
         json.dumps(to_geojson(shown), separators=(",", ":"), allow_nan=False)
     )
+    write_meta(out_dir, candidates, shown_count=len(shown), islands=island_m,
+               destinations=len(destinations), pop=pop, pop_is_real=pop_is_real,
+               stranded=stranded, stranded_pct=stranded_pct)
     dropped = len(candidates) - len(shown)
     print(
         f"wrote priorities.csv ({len(candidates)} projects) and "
@@ -589,6 +655,413 @@ def build(limit: int | None = None) -> list[Candidate]:
         if shown_top == 10:
             break
     return candidates
+
+
+
+
+# ---------------------------------------------------------------------------
+# accessibility: what a project would put in reach, and for whom
+#
+# One multi-source Dijkstra from every destination, on the transposed graph,
+# gives each node its perceived cost to the *nearest* school, playground or
+# library. That single array answers two of the four criteria: how much closer a
+# project brings people to somewhere worth going, and how many people can't
+# reach anywhere at all today.
+# ---------------------------------------------------------------------------
+
+
+class Network:
+    """The graph as a sparse matrix, with the bookkeeping to re-cost one
+    corridor at a time and put it back."""
+
+    def __init__(self, graph: nx.MultiDiGraph) -> None:
+        self.index: dict[int, int] = {n: i for i, n in enumerate(graph.nodes)}
+        # Parallel arcs collapse to the cheapest: for a shortest path only the
+        # best one can ever matter, and coo->csr would otherwise SUM them.
+        best: dict[tuple[int, int], float] = {}
+        for u, v, data in graph.edges(data=True):
+            key = (self.index[u], self.index[v])
+            w = float(data["weight"])
+            if key not in best or w < best[key]:
+                best[key] = w
+        n = len(self.index)
+        rows = np.fromiter((k[0] for k in best), dtype=np.int32, count=len(best))
+        cols = np.fromiter((k[1] for k in best), dtype=np.int32, count=len(best))
+        data_arr = np.fromiter(best.values(), dtype=np.float64, count=len(best))
+        # transposed: distance FROM every node TO the nearest source
+        self.matrix = coo_matrix((data_arr, (cols, rows)), shape=(n, n)).tocsr()
+        # where each arc's weight lives in the CSR data array, so a candidate can
+        # be re-costed in place instead of rebuilding a 887k-arc matrix each time
+        indptr = self.matrix.indptr
+        starts = np.repeat(np.arange(n, dtype=np.int32), np.diff(indptr))
+        self.pos: dict[tuple[int, int], int] = {
+            (int(a), int(b)): i
+            for i, (a, b) in enumerate(zip(starts, self.matrix.indices, strict=True))
+        }
+
+    def node_count(self) -> int:
+        return len(self.index)
+
+    def cost_to_nearest(self, sources: list[int]) -> np.ndarray:
+        """Perceived metres from every node to its nearest source."""
+        if not sources:
+            return np.full(self.node_count(), np.inf)
+        result: np.ndarray = dijkstra(
+            self.matrix, indices=np.asarray(sources, dtype=np.int32), min_only=True
+        )
+        return result
+
+    def apply_weights(self, weights: dict[int, float]) -> dict[int, float]:
+        """Set arc weights in place, returning the old ones to restore with.
+
+        In place because the alternative is rebuilding an 887k-arc matrix per
+        candidate, which costs more than the search it feeds.
+        """
+        previous = {slot: float(self.matrix.data[slot]) for slot in weights}
+        for slot, weight in weights.items():
+            self.matrix.data[slot] = weight
+        return previous
+
+
+def upgraded_weights(
+    graph: nx.MultiDiGraph, net: Network, cand: Candidate
+) -> dict[int, float]:
+    """What the candidate's arcs would cost once built.
+
+    Modelled as the target class's multiplier on its true length, dropping the
+    crash factor and the crossing penalty — those are what the build addresses,
+    and carrying them would credit a protected lane with the danger it removes.
+    """
+    mult = config.CLASS_MULTIPLIER[config.UPGRADE_CLASS]
+    out: dict[int, float] = {}
+    for u, v, k in cand.edges:
+        data = graph.get_edge_data(u, v, k)
+        if data is None:
+            continue
+        weight = float(data["length"]) * mult
+        iu, iv = net.index.get(u), net.index.get(v)
+        if iu is None or iv is None:
+            continue
+        for key in ((iv, iu), (iu, iv)):
+            slot = net.pos.get(key)
+            if slot is not None:
+                out[slot] = weight
+    return out
+
+
+def load_population() -> list[tuple[int, Any]]:
+    """Census block groups as (people, shapely polygon). Empty when unfetched."""
+    path = config.RAW_DIR / "population.geojson"
+    if not path.exists():
+        return []
+    fc = json.loads(path.read_text())
+    out: list[tuple[int, Any]] = []
+    for feat in fc.get("features", []):
+        pop = int(feat.get("properties", {}).get("pop", 0) or 0)
+        geom = feat.get("geometry") or {}
+        if geom.get("type") != "MultiPolygon":
+            continue
+        polys = [
+            Polygon(ring[0])
+            for ring in geom.get("coordinates", [])
+            if ring and len(ring[0]) >= 4
+        ]
+        if not polys:
+            continue
+        shape = polys[0] if len(polys) == 1 else MultiPolygon(polys)
+        out.append((pop, shape))
+    return out
+
+
+def node_population(graph: nx.MultiDiGraph, net: Network) -> tuple[np.ndarray, bool]:
+    """People per graph node, and whether it is real census data.
+
+    A block group's residents are spread over the nodes inside it rather than
+    dropped at its centroid: a centroid can easily land on the far side of the
+    very arterial whose severance we are measuring, which would credit or blame
+    the wrong project.
+
+    Falls back to residential street length when the census layer is missing —
+    the same shape of answer, but a proxy, and the caller relabels every output
+    that says "residents" so nothing claims to have counted people it didn't.
+    """
+    weights = np.zeros(net.node_count(), dtype=np.float64)
+    blocks = load_population()
+    if not blocks:
+        # deduplicated: a two-way street is two directed edges, and counting
+        # both doubled every proxy weight
+        seen: set[tuple[int, int, int]] = set()
+        for u, v, k, data in graph.edges(keys=True, data=True):
+            if not is_kid_safe(data):
+                continue
+            eid = (min(u, v), max(u, v), k)
+            if eid in seen:
+                continue
+            seen.add(eid)
+            half = float(data["length"]) / 2.0
+            for n in (u, v):
+                i = net.index.get(n)
+                if i is not None:
+                    weights[i] += half
+        return weights, False
+
+    node_ids = list(graph.nodes)
+    points = [Point(float(graph.nodes[n]["x"]), float(graph.nodes[n]["y"])) for n in node_ids]
+    tree = STRtree(points)
+    unplaced = 0
+    for pop, shape in blocks:
+        if pop <= 0:
+            continue
+        inside = tree.query(shape, predicate="covers")
+        if len(inside) == 0:
+            # a block group with no street node in it (water, or a sparse
+            # boundary sliver): give its people to the closest node rather than
+            # dropping them from the analysis
+            nearest = tree.nearest(shape.centroid)
+            if nearest is None:
+                unplaced += pop
+                continue
+            inside = np.asarray([nearest])
+        share = pop / len(inside)
+        for j in inside:
+            i = net.index.get(node_ids[int(j)])
+            if i is not None:
+                weights[i] += share
+    if unplaced:
+        print(f"  warning: {unplaced} residents could not be placed on the network")
+    return weights, True
+
+
+def destination_nodes(graph: nx.MultiDiGraph, net: Network) -> list[int]:
+    """Graph nodes nearest to each school, playground and library."""
+    path = config.RAW_DIR / "pois.geojson"
+    if not path.exists():
+        return []
+    fc = json.loads(path.read_text())
+    node_ids = list(graph.nodes)
+    points = [Point(float(graph.nodes[n]["x"]), float(graph.nodes[n]["y"])) for n in node_ids]
+    tree = STRtree(points)
+    out: set[int] = set()
+    for feat in fc.get("features", []):
+        if feat.get("properties", {}).get("kind") not in config.DESTINATION_KINDS:
+            continue
+        geom = feat.get("geometry") or {}
+        coords = geom.get("coordinates")
+        if geom.get("type") != "Point" or not coords:
+            continue
+        j = tree.nearest(Point(float(coords[0]), float(coords[1])))
+        if j is None:
+            continue
+        i = net.index.get(node_ids[int(j)])
+        if i is not None:
+            out.add(i)
+    return sorted(out)
+
+
+def score_accessibility(
+    graph: nx.MultiDiGraph,
+    candidates: list[Candidate],
+    net: Network,
+    pop: np.ndarray,
+    destinations: list[int],
+    island_of: dict[int, int],
+    pop_is_real: bool = False,
+) -> np.ndarray:
+    """Measure every candidate against the network as it stands.
+
+    Returns the baseline cost-to-nearest-destination array, which the coverage
+    layer reuses. Each candidate gets:
+
+      resident_m_saved  people x perceived metres they'd save reaching somewhere
+      pop_gaining       people who cross from "nowhere in reach" to "in reach"
+      dest_unlocked     destinations sitting in the smaller island it connects
+    """
+    budget = config.ACCESS_BUDGET_M
+    clamp = budget * config.ACCESS_CLAMP_MULT
+    before = np.minimum(net.cost_to_nearest(destinations), clamp)
+    was_stranded = before >= budget
+
+    # destinations per island, for "what does connecting this side reach"
+    dest_per_island: defaultdict[int, int] = defaultdict(int)
+    reverse = {i: n for n, i in net.index.items()}
+    for d in destinations:
+        iid = island_of.get(reverse[d])
+        if iid is not None:
+            dest_per_island[iid] += 1
+
+    for cand in candidates:
+        upgrade = upgraded_weights(graph, net, cand)
+        if not upgrade:
+            continue
+        previous = net.apply_weights(upgrade)
+        after = np.minimum(net.cost_to_nearest(destinations), clamp)
+        net.apply_weights(previous)
+
+        saved = np.maximum(before - after, 0.0)
+        cand.resident_m_saved = float(np.dot(pop, saved))
+        cand.pop_gaining = float(np.sum(pop[was_stranded & (after < budget)]))
+        if cand.small_island >= 0:
+            cand.dest_unlocked = dest_per_island.get(cand.small_island, 0)
+        cand.access_computed = True
+        cand.pop_is_headcount = pop_is_real
+    return before
+
+
+def export_coverage(
+    graph: nx.MultiDiGraph,
+    net: Network,
+    pop: np.ndarray,
+    before: np.ndarray,
+    pop_is_real: bool,
+    out_dir: Path,
+) -> None:
+    """Where people can't reach a school or park safely, as map cells.
+
+    The ranked list says what to build; this says who is stuck today, which is
+    the question a council member asks about their own ward.
+    """
+    cell = config.ACCESS_CELL_DEG
+    budget = config.ACCESS_BUDGET_M
+    acc: defaultdict[tuple[int, int], list[float]] = defaultdict(lambda: [0.0, 0.0])
+    for node, i in net.index.items():
+        weight = float(pop[i])
+        if weight <= 0:
+            continue
+        key = (
+            math.floor(float(graph.nodes[node]["x"]) / cell),
+            math.floor(float(graph.nodes[node]["y"]) / cell),
+        )
+        bucket = acc[key]
+        bucket[0] += weight
+        if before[i] < budget:
+            bucket[1] += weight
+
+    feats: list[dict[str, Any]] = []
+    for (cx, cy), (total, served) in sorted(acc.items()):
+        if total <= 0:
+            continue
+        share = served / total
+        west, south = cx * cell, cy * cell
+        feats.append(
+            {
+                "type": "Feature",
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [
+                        [
+                            [round(west, 5), round(south, 5)],
+                            [round(west + cell, 5), round(south, 5)],
+                            [round(west + cell, 5), round(south + cell, 5)],
+                            [round(west, 5), round(south + cell, 5)],
+                            [round(west, 5), round(south, 5)],
+                        ]
+                    ],
+                },
+                "properties": {
+                    "pct_served": round(100 * share),
+                    "residents": round(total) if pop_is_real else None,
+                    # what the number means, carried with the data so a reader
+                    # can't mistake a street-length proxy for a headcount
+                    "weight_kind": "residents" if pop_is_real else "residential_street_m",
+                    "band": "good" if share >= 0.8 else "partial" if share >= 0.4 else "poor",
+                },
+            }
+        )
+    path = out_dir / "access.geojson"
+    path.write_text(
+        json.dumps({"type": "FeatureCollection", "features": feats}, separators=(",", ":"))
+    )
+    stuck = sum(1 for f in feats if f["properties"]["band"] == "poor")
+    print(f"wrote access.geojson ({len(feats)} cells, {stuck} poorly served)")
+
+
+
+
+def write_meta(
+    out_dir: Path,
+    candidates: list[Candidate],
+    *,
+    shown_count: int,
+    islands: dict[int, float],
+    destinations: int,
+    pop: np.ndarray,
+    pop_is_real: bool,
+    stranded: float,
+    stranded_pct: float,
+) -> None:
+    """Where every number in this module came from, and what it doesn't mean.
+
+    A city will be asked "where did that figure come from" the first time it
+    quotes one, and a ranking whose provenance lives only in a git history is
+    not usable in that room. The app reads this for its methodology note and
+    the export packet prints it.
+    """
+    meta = {
+        "built": datetime.datetime.now(datetime.UTC).isoformat()[:10],
+        "candidates": len(candidates),
+        "mapped": shown_count,
+        "islands": {
+            "fragments": len(islands),
+            "substantial": sum(1 for m in islands.values() if m >= 200),
+            "largest_km": [round(m / 1000, 1) for m in sorted(islands.values(), reverse=True)[:5]],
+        },
+        "destinations": destinations,
+        "destination_kinds": list(config.DESTINATION_KINDS),
+        "population": {
+            "total": round(float(pop.sum())),
+            "source": (
+                "US Census 2020 block groups (POP100), spread over the street nodes"
+                " inside each block group"
+                if pop_is_real
+                else "PROXY: residential street length, because the census layer"
+                " was unavailable — figures are not headcounts"
+            ),
+            "is_headcount": pop_is_real,
+        },
+        "access": {
+            "budget_m": config.ACCESS_BUDGET_M,
+            "budget_note": (
+                "perceived metres, which is real distance times the street's stress"
+                " multiplier — about 2.5 km on a path or 1.8 km on quiet streets,"
+                " roughly 15 minutes at a young-kids pace"
+            ),
+            "stranded": round(stranded),
+            "stranded_pct": round(stranded_pct),
+        },
+        "model": {
+            "kid_safe_max_multiplier": config.SAFE_MULT_MAX,
+            "kid_safe_note": (
+                "path, separated, buffered, quiet and service streets. A painted"
+                " lane (3.0) is deliberately excluded: it is not a route for an"
+                " eight-year-old"
+            ),
+            "upgrade_class": config.UPGRADE_CLASS,
+            "upgrade_note": (
+                "a candidate is costed as if rebuilt to this class, dropping its"
+                " crash factor and crossing penalty — those are what the build"
+                " addresses"
+            ),
+            "weights": dict(config.PRIORITY_WEIGHTS),
+        },
+        "limits": [
+            "Scores are comparative within this run, not absolute: they answer"
+            " which of these first, never how good this is.",
+            "Benefit figures are model output, not measurement. They assume"
+            " people ride the safest available route and that a rebuilt street"
+            " reaches the target class along its whole length.",
+            "Severance gain counts the smaller of the two networks a project"
+            " joins, so connecting a stub to the region-wide network is credited"
+            " with the stub.",
+            "The cost column is an order-of-magnitude proxy (length times a unit"
+            " rate), not an estimate: real costs move by an order of magnitude"
+            " with drainage, parking removal and signals.",
+            "Crash counts come from MassDOT IMPACT 2021-2026 and reflect"
+            " reported crashes on streets people already ride, which is not the"
+            " same as danger on streets they avoid.",
+        ],
+    }
+    (out_dir / "priorities_meta.json").write_text(json.dumps(meta, indent=1))
+    print(f"wrote priorities_meta.json ({'census' if pop_is_real else 'proxy'} population)")
 
 
 if __name__ == "__main__":

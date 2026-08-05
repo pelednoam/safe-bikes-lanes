@@ -15,6 +15,7 @@ Verdicts (heuristic — a reviewer worklist, not ground truth):
 
 import argparse
 import json
+import math
 import pickle
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Final
@@ -60,7 +61,8 @@ def collect_sites(max_sites: int) -> list[dict[str, Any]]:
             continue
         lon = (graph.nodes[u]["x"] + graph.nodes[v]["x"]) / 2
         lat = (graph.nodes[u]["y"] + graph.nodes[v]["y"]) / 2
-        cell = (int(lon / GRID_DEG_LON), int(lat / GRID_DEG_LAT))
+        # floor, not int (see export_web): truncation misbins negative longitudes
+        cell = (math.floor(lon / GRID_DEG_LON), math.floor(lat / GRID_DEG_LAT))
         if cell in seen:
             continue
         seen.add(cell)

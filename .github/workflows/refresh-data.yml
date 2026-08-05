@@ -23,7 +23,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install dependencies
-        run: pip install osmnx geopandas networkx shapely pillow
+        run: pip install osmnx geopandas networkx shapely scipy pillow
       - name: Refresh all sources
         working-directory: pipeline
         env:

@@ -8,6 +8,7 @@ MAPILLARY_TOKEN; skipped otherwise. Writes data/mapillary_report.json.
 """
 
 import json
+import math
 import os
 import pickle
 import urllib.parse
@@ -60,7 +61,8 @@ def run() -> None:
             continue
         lon = (graph.nodes[u]["x"] + graph.nodes[v]["x"]) / 2
         lat = (graph.nodes[u]["y"] + graph.nodes[v]["y"]) / 2
-        cell = (int(lon / 0.0012), int(lat / 0.0009))
+        # floor, not int (see export_web): truncation misbins negative longitudes
+        cell = (math.floor(lon / 0.0012), math.floor(lat / 0.0009))
         if cell in seen_cells:
             continue
         seen_cells.add(cell)

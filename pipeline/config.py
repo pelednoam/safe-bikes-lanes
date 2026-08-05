@@ -94,6 +94,14 @@ MASSGIS_TOWNS_URL: Final[str] = (
     "Massachusetts_Municipalities_Hosted/FeatureServer/0"
 )
 
+# Census 2020 block groups with decennial population (POP100), from TIGERweb.
+# Public domain, no key. Used to weight the where-to-build analysis by how many
+# people a project actually serves. Verified live 2026-08-05.
+CENSUS_BLOCKGROUPS_URL: Final[str] = (
+    "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/"
+    "tigerWMS_Census2020/MapServer/8"
+)
+
 SOMERVILLE_MOBILITY3: Final[str] = (
     "https://maps.somervillema.gov/arcgis/rest/services/Mobility3/MapServer"
 )
@@ -297,10 +305,19 @@ ACCESS_BUDGET_M: Final[float] = 2500.0
 # POI kinds that count as destinations worth reaching safely.
 DESTINATION_KINDS: Final[tuple[str, ...]] = ("school", "playground", "library")
 
-# Marginal-gain analysis runs one graph search per candidate, so it is screened
-# to this many by severance + crashes first. Whatever is dropped is logged: a
-# silent top-N reads as "we checked everything".
-PRIORITY_SCREEN_N: Final[int] = 200
+# A candidate's accessibility gain costs one multi-source graph search, which
+# measured at 0.09 s on the full network — so every candidate is evaluated and
+# nothing is screened out. The plan budgeted for a top-200 screen; it wasn't
+# needed, and "we measured all 5,670" is a much better sentence for a city than
+# "we measured the 200 we liked the look of".
+
+# Unreachable is clamped to this multiple of the access budget before differences
+# are taken: a node that goes from unreachable to reachable would otherwise show
+# an infinite saving and dominate every other project.
+ACCESS_CLAMP_MULT: Final[float] = 4.0
+
+# Coverage choropleth cell size (~400 m at this latitude).
+ACCESS_CELL_DEG: Final[float] = 0.005
 
 # How many make it into the map layer. The full ranking always goes to the CSV;
 # all 5,675 candidates as GeoJSON came to ~7 MB, heavier than the display network

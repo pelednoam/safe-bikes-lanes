@@ -6,9 +6,15 @@ output stops being an argument a city can act on, so it is asserted directly on
 hand-built graphs rather than on real data.
 """
 
+import json
 import math
+import tempfile
+from pathlib import Path
+from typing import NamedTuple
 
+import config
 import networkx as nx
+import numpy as np
 import priorities
 import pytest
 
@@ -45,6 +51,8 @@ class GraphBuilder:
             self.g.add_edge(
                 a, b, length=length, cls=cls, stress_mult=mult, name=name,
                 crash_count=crashes,
+                # what build_graph writes: perceived cost the router travels on
+                weight=length * mult,
             )
 
 
@@ -277,7 +285,7 @@ def test_parallel_ways_both_count_toward_length() -> None:
     assert len(cands[0].edges) == 2
 
 
-def test_unmeasured_metrics_are_blank_not_zero(tmp_path: object) -> None:
+def test_unmeasured_metrics_are_blank_not_zero() -> None:
     """Before the accessibility pass runs, "residents gaining access" must be
     empty rather than 0 — a zero there reads as "this helps nobody"."""
     cand = priorities.Candidate(
@@ -309,3 +317,351 @@ def test_candidates_with_no_island_pair_are_not_each_others_alternatives() -> No
     priorities.group_alternatives([a, b_])
     assert a.group == b_.group
     assert a.group_size == 2
+
+
+# ── accessibility (phase 2) ────────────────────────────────────────────────
+
+
+@pytest.fixture
+def stranded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> nx.MultiDiGraph:
+    """A neighbourhood cut off from the only school by 100 m of arterial.
+
+    0-1-2 quiet (homes) | 2-3 arterial (the gap) | 3-4 quiet, school at 4.
+    A second arterial 5-6 sits off to the side, connecting nothing.
+    """
+    b = GraphBuilder()
+    for i in range(7):
+        b.node(i, i * 200)
+    b.edge(0, 1, 200, "quiet_street", "Home St")
+    b.edge(1, 2, 200, "quiet_street", "Home St")
+    b.edge(2, 3, 100, "busy_street", "The Gap")
+    b.edge(3, 4, 200, "quiet_street", "School St")
+    b.edge(5, 6, 300, "busy_street", "Useless Rd")
+
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    lon, lat = _lonlat(800)
+    (raw / "pois.geojson").write_text(
+        json.dumps(
+            {
+                "type": "FeatureCollection",
+                "features": [
+                    {
+                        "type": "Feature",
+                        "geometry": {"type": "Point", "coordinates": [lon, lat]},
+                        "properties": {"kind": "school", "name": "Test Elementary"},
+                    },
+                    {
+                        "type": "Feature",
+                        "geometry": {"type": "Point", "coordinates": [lon, lat]},
+                        "properties": {"kind": "ice_cream", "name": "Not a destination"},
+                    },
+                ],
+            }
+        )
+    )
+    monkeypatch.setattr(config, "RAW_DIR", raw)
+    return b.g
+
+
+class Measured(NamedTuple):
+    cands: dict[str, priorities.Candidate]
+    pop: np.ndarray
+    pop_is_real: bool
+    dests: list[int]
+    before: np.ndarray
+
+
+def _measure(graph: nx.MultiDiGraph) -> Measured:
+    island_of, island_m = priorities.safe_islands(graph)
+    cands = priorities.find_candidates(graph)
+    priorities.score_severance(cands, island_of, island_m)
+    net = priorities.Network(graph)
+    pop, pop_is_real = priorities.node_population(graph, net)
+    dests = priorities.destination_nodes(graph, net)
+    before = priorities.score_accessibility(graph, cands, net, pop, dests, island_of)
+    return Measured({c.name: c for c in cands}, pop, pop_is_real, dests, before)
+
+
+def test_only_destination_kinds_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ice-cream shop is a kid stop, not somewhere a safe route is owed to."""
+    raw = tmp_path / "raw3"
+    raw.mkdir()
+    lon, lat = _lonlat(100)
+    (raw / "pois.geojson").write_text(
+        json.dumps(
+            {
+                "type": "FeatureCollection",
+                "features": [
+                    {
+                        "type": "Feature",
+                        "geometry": {"type": "Point", "coordinates": [lon, lat]},
+                        "properties": {"kind": "school"},
+                    },
+                    {
+                        "type": "Feature",
+                        "geometry": {"type": "Point", "coordinates": [lon, lat]},
+                        "properties": {"kind": "ice_cream"},
+                    },
+                    {
+                        "type": "Feature",
+                        "geometry": {"type": "Point", "coordinates": [lon, lat]},
+                        "properties": {"kind": "restroom"},
+                    },
+                ],
+            }
+        )
+    )
+    monkeypatch.setattr(config, "RAW_DIR", raw)
+    b = GraphBuilder()
+    b.node(0, 0)
+    b.node(1, 100)
+    b.edge(0, 1, 100, "quiet_street", "A St")
+    net = priorities.Network(b.g)
+    # three POIs at the same spot, one of them a destination
+    assert len(priorities.destination_nodes(b.g, net)) == 1
+
+    # and with no POI file at all it degrades rather than raising
+    empty = tmp_path / "raw3-empty"
+    empty.mkdir()
+    monkeypatch.setattr(config, "RAW_DIR", empty)
+    assert priorities.destination_nodes(b.g, net) == []
+
+
+def test_closing_the_gap_saves_resident_distance(stranded: nx.MultiDiGraph) -> None:
+    out = _measure(stranded)
+    gap = out.cands["The Gap"]
+    useless = out.cands["Useless Rd"]
+    assert gap.access_computed
+    # the homes get closer to the school; the street to nowhere changes nothing
+    assert gap.resident_m_saved > 0
+    assert useless.resident_m_saved == 0
+    assert gap.resident_m_saved > useless.resident_m_saved
+
+
+def test_a_stranded_neighbourhood_gains_access(stranded: nx.MultiDiGraph) -> None:
+    """pop_gaining counts people crossing from "nothing in reach" to "in reach"."""
+    out = _measure(stranded)
+    # with the arterial in the way the homes are over budget from the school
+    assert out.cands["The Gap"].pop_gaining > 0
+    assert out.cands["Useless Rd"].pop_gaining == 0
+
+
+def test_unreachable_gains_are_clamped_not_infinite(stranded: nx.MultiDiGraph) -> None:
+    """A node going from unreachable to reachable must not post an infinite
+    saving — one such node would otherwise outrank every real project."""
+    out = _measure(stranded)
+    saved = out.cands["The Gap"].resident_m_saved
+    assert math.isfinite(saved)
+    ceiling = (
+        config.ACCESS_BUDGET_M
+        * config.ACCESS_CLAMP_MULT
+        * float(out.pop.sum())
+    )
+    assert saved <= ceiling
+
+
+def test_population_falls_back_to_street_length_and_says_so(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without the census layer the analysis still runs, but nothing may claim
+    to have counted residents."""
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    monkeypatch.setattr(config, "RAW_DIR", empty)
+    b = GraphBuilder()
+    b.node(0, 0)
+    b.node(1, 200)
+    b.edge(0, 1, 200, "quiet_street", "Home St")
+    net = priorities.Network(b.g)
+    pop, pop_is_real = priorities.node_population(b.g, net)
+    assert not pop_is_real
+    assert pop.sum() == pytest.approx(200.0)  # the street's own length
+
+
+def test_population_spreads_over_nodes_not_a_centroid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A centroid can land across the very arterial being measured, which would
+    credit the wrong side. Residents go on the streets inside the block group."""
+    raw = tmp_path / "raw2"
+    raw.mkdir()
+    ring = [
+        [-71.11, 42.37], [-71.09, 42.37], [-71.09, 42.39], [-71.11, 42.39],
+        [-71.11, 42.37],
+    ]
+    (raw / "population.geojson").write_text(
+        json.dumps(
+            {
+                "type": "FeatureCollection",
+                "features": [
+                    {
+                        "type": "Feature",
+                        "geometry": {"type": "MultiPolygon", "coordinates": [[ring]]},
+                        "properties": {"geoid": "test", "pop": 900},
+                    }
+                ],
+            }
+        )
+    )
+    monkeypatch.setattr(config, "RAW_DIR", raw)
+    b = GraphBuilder()
+    for i in range(3):
+        b.node(i, i * 100)
+    b.edge(0, 1, 100, "quiet_street", "A St")
+    b.edge(1, 2, 100, "quiet_street", "A St")
+    net = priorities.Network(b.g)
+    pop, pop_is_real = priorities.node_population(b.g, net)
+    assert pop_is_real
+    assert pop.sum() == pytest.approx(900.0)
+    # spread across all three nodes rather than piled on one
+    assert (pop > 0).sum() == 3
+
+
+def test_coverage_export_labels_a_proxy_as_a_proxy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    empty = tmp_path / "empty2"
+    empty.mkdir()
+    monkeypatch.setattr(config, "RAW_DIR", empty)
+    b = GraphBuilder()
+    b.node(0, 0)
+    b.node(1, 200)
+    b.edge(0, 1, 200, "quiet_street", "Home St")
+    net = priorities.Network(b.g)
+    pop, pop_is_real = priorities.node_population(b.g, net)
+    before = np.zeros(net.node_count())  # everything in reach
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    priorities.export_coverage(b.g, net, pop, before, pop_is_real, out_dir)
+    cells = json.loads((out_dir / "access.geojson").read_text())["features"]
+    assert cells
+    props = cells[0]["properties"]
+    assert props["weight_kind"] == "residential_street_m"
+    assert props["residents"] is None  # must not report a headcount it didn't count
+    assert props["pct_served"] == 100
+    assert props["band"] == "good"
+
+
+def test_cost_is_measured_toward_the_destination_not_away(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pins the direction of the accessibility search.
+
+    Every other fixture here is symmetric, so a transposed cost matrix would
+    give identical answers and no test would notice. A one-way street is the
+    only thing that can tell "how far to the school" from "how far from it":
+    here you can ride 0 -> 1 cheaply but not back, so node 0 is close to the
+    school and node 1 is not.
+    """
+    b = GraphBuilder()
+    b.node(0, 0)
+    b.node(1, 300)
+    # 0 -> 1 quiet and short; 1 -> 0 only via a long arterial detour
+    b.g.add_edge(0, 1, length=300, cls="quiet_street", stress_mult=1.4, name="One Way",
+                 crash_count=0, weight=300 * 1.4)
+    b.node(2, -4000)
+    b.g.add_edge(1, 2, length=4000, cls="busy_street", stress_mult=25.0, name="Long Way",
+                 crash_count=0, weight=4000 * 25.0)
+    b.g.add_edge(2, 0, length=4000, cls="busy_street", stress_mult=25.0, name="Long Way",
+                 crash_count=0, weight=4000 * 25.0)
+
+    raw = tmp_path / "oneway"
+    raw.mkdir()
+    lon, lat = _lonlat(300)  # a school at node 1
+    (raw / "pois.geojson").write_text(
+        json.dumps(
+            {
+                "type": "FeatureCollection",
+                "features": [
+                    {
+                        "type": "Feature",
+                        "geometry": {"type": "Point", "coordinates": [lon, lat]},
+                        "properties": {"kind": "school"},
+                    }
+                ],
+            }
+        )
+    )
+    monkeypatch.setattr(config, "RAW_DIR", raw)
+
+    net = priorities.Network(b.g)
+    dests = priorities.destination_nodes(b.g, net)
+    assert len(dests) == 1
+    cost = net.cost_to_nearest(dests)
+    at_0 = cost[net.index[0]]
+    at_2 = cost[net.index[2]]
+    # from 0 you ride the short quiet street to the school
+    assert at_0 == pytest.approx(300 * 1.4)
+    # from 2 you must take the arterial; if the matrix were transposed this
+    # would come out as the cheap direction instead
+    assert at_2 == pytest.approx(4000 * 25.0 + 300 * 1.4)
+    assert at_2 > at_0
+
+
+def test_coverage_cells_contain_their_own_points() -> None:
+    """Cell binning truncated toward zero, so west of the meridian a point was
+    binned into the cell next door and every overlay drew ~100 m off its data."""
+    b = GraphBuilder()
+    b.node(0, 0)
+    b.node(1, 100)
+    b.edge(0, 1, 100, "quiet_street", "A St")
+    net = priorities.Network(b.g)
+    pop = np.ones(net.node_count())
+    before = np.zeros(net.node_count())
+    out_dir = Path(tempfile.mkdtemp())
+    priorities.export_coverage(b.g, net, pop, before, True, out_dir)
+    cells = json.loads((out_dir / "access.geojson").read_text())["features"]
+    assert cells
+    for node in b.g.nodes:
+        x, y = float(b.g.nodes[node]["x"]), float(b.g.nodes[node]["y"])
+        assert any(
+            ring[0][0] <= x <= ring[2][0] and ring[0][1] <= y <= ring[2][1]
+            for cell in cells
+            for ring in [cell["geometry"]["coordinates"][0]]
+        ), f"node at {x},{y} fell outside every cell"
+
+
+def test_priority_weights_sum_to_one() -> None:
+    """Otherwise scores aren't comparable between runs, and a reweighting in
+    config silently rescales every project."""
+    assert sum(config.PRIORITY_WEIGHTS.values()) == pytest.approx(1.0)
+    assert set(config.PRIORITY_WEIGHTS) == {"severance", "access", "crash", "coverage"}
+
+
+def test_summary_reports_reach_only_once_measured() -> None:
+    """The accessibility finding is the point of the second pass, so it has to
+    reach the sentence — but never as a headcount when the weight is a proxy."""
+    cand = priorities.Candidate(
+        pid="c1", name="Gap St", kind="corridor", cls="busy_street", length_m=120.0
+    )
+    cand.dest_unlocked = 3
+    cand.pop_gaining = 1900.0
+    # not measured yet: say nothing about reach
+    assert "opens a network" not in priorities.summary_sentence(cand)
+
+    cand.access_computed = True
+    cand.pop_is_headcount = True
+    rich = priorities.summary_sentence(cand)
+    # phrased as what it is: the joined network holds those destinations, most
+    # already reachable from its own side
+    assert "opens a network with 3 schools, playgrounds and libraries on it" in rich
+    assert "reaches 3 schools" not in rich
+    assert "about 1,900 residents gain a safe route" in rich
+
+    # proxy weighting: the destinations still count, the people do not
+    cand.pop_is_headcount = False
+    proxy = priorities.summary_sentence(cand)
+    assert "opens a network with 3 schools, playgrounds and libraries on it" in proxy
+    assert "1,900" not in proxy
+    assert "residents" not in proxy
+
+    # and a single destination reads as one
+    cand.dest_unlocked = 1
+    cand.pop_is_headcount = True
+    assert (
+        "opens a network with 1 school, playground or library on it"
+        in priorities.summary_sentence(cand)
+    )

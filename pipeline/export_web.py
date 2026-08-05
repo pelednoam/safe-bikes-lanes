@@ -72,7 +72,10 @@ def export_heatmap(graph: nx.MultiDiGraph) -> None:
                 (float(graph.nodes[v]["x"]), float(graph.nodes[v]["y"])),
             ]
         for lon, lat, meters in _seg_samples(coords):
-            cell = (int(lon / CELL_LON), int(lat / CELL_LAT))
+            # floor, not int: truncation rounds toward zero, so at negative
+            # longitudes a sample landed one cell east of the cell it was
+            # binned into — every cell overlay was drawn ~100 m off its data
+            cell = (math.floor(lon / CELL_LON), math.floor(lat / CELL_LAT))
             acc = cells[cell]
             acc[0] += stress * meters
             acc[1] += meters
@@ -136,7 +139,10 @@ def export_lane_heatmap(graph: nx.MultiDiGraph) -> None:
             ]
         protected = cls in PROTECTED_LANE_CLASSES
         for lon, lat, meters in _seg_samples(coords):
-            cell = (int(lon / CELL_LON), int(lat / CELL_LAT))
+            # floor, not int: truncation rounds toward zero, so at negative
+            # longitudes a sample landed one cell east of the cell it was
+            # binned into — every cell overlay was drawn ~100 m off its data
+            cell = (math.floor(lon / CELL_LON), math.floor(lat / CELL_LAT))
             acc = cells[cell]
             acc[0] += meters
             if protected:

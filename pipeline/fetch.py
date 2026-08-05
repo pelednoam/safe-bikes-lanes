@@ -172,6 +172,47 @@ def fetch_towns() -> GeoJSON:
     return fc
 
 
+def fetch_population() -> GeoJSON:
+    """Census 2020 block groups, trimmed to population + outer rings.
+
+    Only the population and the shape are wanted: the source carries three dozen
+    administrative fields and 10 MB of multi-part geometry for our bbox alone.
+    Interior rings are dropped — a lake inside a block group doesn't change how
+    many people live in it, and the polygons are only used to decide which
+    streets a block group's residents live on.
+    """
+    fc = arcgis_query(config.CENSUS_BLOCKGROUPS_URL)
+    out: list[dict[str, Any]] = []
+    for feat in fc.get("features", []):
+        props = feat.get("properties", {})
+        geom = feat.get("geometry") or {}
+        try:
+            pop = int(props.get("POP100") or 0)
+        except (TypeError, ValueError):
+            pop = 0
+        if geom.get("type") == "Polygon":
+            polys = [geom.get("coordinates", [])]
+        elif geom.get("type") == "MultiPolygon":
+            polys = geom.get("coordinates", [])
+        else:
+            continue
+        rings = [
+            [[round(float(x), 5), round(float(y), 5)] for x, y in poly[0]]
+            for poly in polys
+            if poly
+        ]
+        if not rings:
+            continue
+        out.append(
+            {
+                "type": "Feature",
+                "geometry": {"type": "MultiPolygon", "coordinates": [[r] for r in rings]},
+                "properties": {"geoid": str(props.get("GEOID", "")), "pop": pop},
+            }
+        )
+    return {"type": "FeatureCollection", "features": out}
+
+
 def fetch_cambridge_permits() -> GeoJSON:
     """Active Cambridge street/excavation permits (geocoded, with end dates)."""
     today = datetime.date.today().isoformat()
@@ -257,6 +298,7 @@ def fetch_all(refresh: bool = False) -> None:
     }
     jobs["pois.geojson"] = fetch_pois
     jobs["towns.geojson"] = fetch_towns
+    jobs["population.geojson"] = fetch_population
     jobs["cambridge_permits.geojson"] = fetch_cambridge_permits
     jobs["workzones.geojson"] = fetch_workzones
     for year in config.IMPACT_CRASH_YEARS:
