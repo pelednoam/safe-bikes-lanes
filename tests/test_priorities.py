@@ -159,17 +159,81 @@ def test_crash_weighting_is_monotone() -> None:
     assert by_name["Crashy St"].score > by_name["Quiet Ave"].score
 
 
-def test_length_bounds_drop_stubs_and_programmes() -> None:
+def test_a_programme_length_street_is_never_a_candidate() -> None:
     b = GraphBuilder()
+    b.node(0, 100)
+    b.node(1, 5000)
+    b.edge(0, 1, 4900, "busy_street", "Route 2")  # over CANDIDATE_MAX_M
+    assert "Route 2" not in {c.name for c in priorities.find_candidates(b.g)}
+
+
+def test_short_stubs_are_dropped_but_short_connectors_are_not() -> None:
+    """The length floor exists for kerb cuts and driveway stubs. Applying it in
+    find_candidates also threw away 12 m links between two safe islands — the
+    cheapest real projects there are — before anything could measure them.
+    """
+    b = GraphBuilder()
+    # a stub joining nothing
     b.node(0, 0)
     b.node(1, 10)
-    b.edge(0, 1, 10, "busy_street", "Kerb Cut")  # under CANDIDATE_MIN_M
-    b.node(2, 100)
-    b.node(3, 5000)
-    b.edge(2, 3, 4900, "busy_street", "Route 2")  # over CANDIDATE_MAX_M
-    names = {c.name for c in priorities.find_candidates(b.g)}
-    assert "Kerb Cut" not in names
-    assert "Route 2" not in names
+    b.edge(0, 1, 10, "busy_street", "Kerb Cut")
+    # a 14 m hostile link between two quiet grids
+    for i, x in ((2, 500), (3, 700), (4, 714), (5, 914)):
+        b.node(i, x)
+    b.edge(2, 3, 200, "quiet_street", "West St")
+    b.edge(3, 4, 14, "busy_street", "The Pinch")
+    b.edge(4, 5, 200, "quiet_street", "East St")
+
+    island_of, island_m = priorities.safe_islands(b.g)
+    cands = priorities.find_candidates(b.g)
+    # both survive the first pass now, so both can be measured
+    assert {"Kerb Cut", "The Pinch"} <= {c.name for c in cands}
+    priorities.score_severance(cands, island_of, island_m)
+    kept = {c.name: c for c in priorities.classify_and_prune(cands)}
+    assert "Kerb Cut" not in kept  # joins nothing, so the floor applies
+    assert "The Pinch" in kept
+    # one location to treat, not a corridor to protect
+    assert kept["The Pinch"].kind == "spot_fix"
+
+
+def test_an_already_signalized_link_stays_a_corridor() -> None:
+    b = GraphBuilder()
+    for i, x in ((0, 0), (1, 200), (2, 214), (3, 414)):
+        b.node(i, x)
+    b.edge(0, 1, 200, "quiet_street", "West St")
+    b.edge(1, 2, 14, "busy_street", "Signalled Link")
+    b.edge(2, 3, 200, "quiet_street", "East St")
+    b.g.nodes[1]["highway"] = "traffic_signals"
+    island_of, island_m = priorities.safe_islands(b.g)
+    cands = priorities.find_candidates(b.g)
+    priorities.score_severance(cands, island_of, island_m)
+    kept = {c.name: c for c in priorities.classify_and_prune(cands)}
+    # it may still need something, but a spot fix at a signalized junction is a
+    # different (and probably bigger) job than one at an unsignalized pinch
+    assert kept["Signalled Link"].kind == "corridor"
+
+
+def test_spot_fixes_are_costed_as_a_location_not_a_length() -> None:
+    """A 14 m spot fix costed per metre reads as a rounding error, and a city
+    comparing benefit per dollar would rank it absurdly high."""
+    crossing = priorities.Candidate(
+        pid="x", name="Main St", kind="spot_fix", cls="busy_street", length_m=14.0
+    )
+    corridor = priorities.Candidate(
+        pid="c", name="Main St", kind="corridor", cls="busy_street", length_m=14.0
+    )
+    longer_crossing = priorities.Candidate(
+        pid="x2", name="Main St", kind="spot_fix", cls="busy_street", length_m=40.0
+    )
+    # a signal costs what a signal costs, whatever the road's width
+    assert crossing.cost_proxy == longer_crossing.cost_proxy
+    assert crossing.cost_proxy > corridor.cost_proxy
+    # and it describes a location without asserting the treatment: nothing in the
+    # geometry distinguishes crossing a road from briefly riding along one
+    text = priorities.summary_sentence(crossing)
+    assert "a spot fix on Main St" in text
+    assert "14 m of it" in text
+    assert "crossing" not in text
 
 
 def test_normalise_works_on_a_short_list() -> None:
@@ -225,19 +289,19 @@ def test_summary_only_claims_what_the_numbers_say() -> None:
     assert "1 bike crash since 2021" in rich  # singular
 
 
-def test_cost_proxy_scales_with_length_and_flags_crossings() -> None:
+def test_cost_proxy_scales_with_length_for_corridors() -> None:
     corridor = priorities.Candidate(
         pid="c1", name="A", kind="corridor", cls="busy_street", length_m=100.0
     )
     longer = priorities.Candidate(
         pid="c2", name="B", kind="corridor", cls="busy_street", length_m=400.0
     )
-    crossing = priorities.Candidate(
-        pid="c3", name="C", kind="crossing", cls="busy_street", length_m=0.0
+    spot = priorities.Candidate(
+        pid="c3", name="C", kind="spot_fix", cls="busy_street", length_m=0.0
     )
     assert longer.cost_proxy == pytest.approx(4 * corridor.cost_proxy)
-    # a crossing costs a signal, not zero, even though its length is ~0
-    assert crossing.cost_proxy > corridor.cost_proxy
+    # a spot fix costs a location, not zero, however short it is
+    assert spot.cost_proxy > corridor.cost_proxy
 
 
 def test_towns_are_assigned_from_a_polygon() -> None:
@@ -665,3 +729,66 @@ def test_summary_reports_reach_only_once_measured() -> None:
         "opens a network with 1 school, playground or library on it"
         in priorities.summary_sentence(cand)
     )
+
+
+def test_scoring_restores_the_network_between_candidates(
+    stranded: nx.MultiDiGraph,
+) -> None:
+    """Each candidate is measured on a graph re-costed in place and put back.
+
+    A restore that missed anything would silently measure every later candidate
+    against a network with earlier upgrades already built into it — the numbers
+    would still look plausible and would all be wrong.
+    """
+    island_of, island_m = priorities.safe_islands(stranded)
+    cands = priorities.find_candidates(stranded)
+    priorities.score_severance(cands, island_of, island_m)
+    net = priorities.Network(stranded)
+    original = net.matrix.data.copy()
+    pop, _real = priorities.node_population(stranded, net)
+    dests = priorities.destination_nodes(stranded, net)
+    priorities.score_accessibility(stranded, cands, net, pop, dests, island_of)
+    assert np.array_equal(net.matrix.data, original), "arc weights leaked between candidates"
+
+
+def test_measuring_twice_gives_the_same_answer(stranded: nx.MultiDiGraph) -> None:
+    """Idempotence, which is the symptom a leaky restore would break first."""
+    first = _measure(stranded)
+    second = _measure(stranded)
+    for name, cand in first.cands.items():
+        assert cand.resident_m_saved == pytest.approx(second.cands[name].resident_m_saved)
+        assert cand.pop_gaining == pytest.approx(second.cands[name].pop_gaining)
+
+
+def test_map_slice_keeps_the_top_of_every_measure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The app re-sorts the slice it was given, so a project that tops one
+    measure has to be in it — otherwise moving the sliders onto crash history
+    can never surface the streets that actually top that list."""
+    monkeypatch.setattr(config, "PRIORITY_MAP_N", 16)
+    cands: list[priorities.Candidate] = []
+    for i in range(60):
+        c = priorities.Candidate(
+            pid=f"c{i}", name=f"St {i}", kind="corridor", cls="busy_street", length_m=100.0
+        )
+        # composite favours the low indices; crash favours the high ones
+        c.components = {
+            "severance": 1.0 - i / 60,
+            "access": 1.0 - i / 60,
+            "coverage": 1.0 - i / 60,
+            "crash": i / 60,
+        }
+        c.score = 0.85 * (1.0 - i / 60) + 0.15 * (i / 60)
+        cands.append(c)
+    cands.sort(key=lambda c: c.score, reverse=True)
+    # a spot fix ranked last overall must still make the map
+    cands[-1].kind = "spot_fix"
+    last_pid = cands[-1].pid
+    chosen = {c.pid for c in priorities.select_for_map(cands)}
+    assert len(chosen) <= 16
+    assert last_pid in chosen, "spot fixes are the cheapest projects; always map them"
+    # the worst project by our weighting is the best by crash history
+    assert "c59" in chosen
+    # and the overall leader is still there
+    assert "c0" in chosen

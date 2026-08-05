@@ -285,7 +285,9 @@ UNIT_COST_PER_M: Final[dict[str, float]] = {
     "buffered": 120.0,    # paint and thermoplastic
     "lane": 80.0,
     "path": 2500.0,       # new off-street construction
-    "crossing": 150_000.0,  # a signal or beacon, per location (length ~0)
+    # per location, not per metre: signal-scale, because that's the expensive end
+    # of what a spot fix can turn out to need
+    "spot_fix": 150_000.0,
 }
 
 # Composite weights. Every component is also exported raw, so the app's sliders
@@ -324,10 +326,25 @@ ACCESS_CELL_DEG: Final[float] = 0.005
 # the app loads by viewport.
 PRIORITY_MAP_N: Final[int] = 1500
 
-# Candidates shorter than this are noise (driveway stubs, kerb cuts); longer
-# than this is a programme, not a project.
+# Candidates longer than this are a programme, not a project. Short ones are
+# usually noise (driveway stubs, kerb cuts) and are dropped at CANDIDATE_MIN_M —
+# unless they join two kid-safe islands, in which case a 12 m connector is the
+# best project on the list and must not be filtered away before it's measured.
 CANDIDATE_MIN_M: Final[float] = 25.0
 CANDIDATE_MAX_M: Final[float] = 1500.0
+CROSSING_MIN_M: Final[float] = 5.0
+
+# A short hostile link between two safe islands is a SPOT FIX: a signal, a
+# beacon, a protected crossing, or a few metres of separation — one location, not
+# a corridor. It is deliberately not called a crossing: a 39 m segment named
+# after the arterial means riding 39 m *along* it, and nothing in this geometry
+# distinguishes crossing a road from briefly travelling on one. The treatment is
+# a designer's call; what the data supports is "short, hostile, and load-bearing".
+#
+# 60 m rather than 45: the island-joining candidates run 6 at <=15 m, 9 at 16-30,
+# 9 at 31-45, then 12 more at 46-60 before thinning out. 45 cut straight through
+# the cluster.
+SPOT_FIX_MAX_M: Final[float] = 60.0
 
 # Display colors (also used by the frontend legend).
 CLASS_COLOR: Final[dict[str, str]] = {

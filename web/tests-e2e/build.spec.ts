@@ -277,3 +277,110 @@ test.describe("data availability", () => {
     expect(fetched).toBe(1);
   });
 });
+
+test("re-weighting repaints the map, so it can't contradict the list", async ({ page }) => {
+  // colour and width are driven by the score property; moving the sliders used
+  // to re-sort the list while the map kept painting the pipeline's weighting
+  await openBuild(page);
+  await expect(page.locator(".build-row").first()).toBeVisible({ timeout: 20_000 });
+  // selecting a row turns the layer on by itself; reaching for the checkbox in
+  // the collapsed Map layers section just burns the test's whole budget
+  await page.locator(".build-row").first().click();
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () => window._map?.queryRenderedFeatures(undefined, { layers: ["build"] }).length ?? 0,
+        ),
+      { timeout: 30_000 },
+    )
+    .toBeGreaterThan(0);
+
+  const topScore = async (): Promise<number> =>
+    page.evaluate(() => {
+      const src = window._map?.getSource("build") as
+        | { _data?: GeoJSON.FeatureCollection }
+        | undefined;
+      const feats = src?._data?.features ?? [];
+      return Math.max(
+        ...feats.map((f) => Number((f.properties as { score?: number } | null)?.score ?? 0)),
+      );
+    });
+
+  const before = await topScore();
+  await page.locator("#build-weights > summary").click();
+  await page.locator("#wt-severance").fill("0");
+  await page.locator("#wt-access").fill("0");
+  await page.locator("#wt-coverage").fill("0");
+  await page.locator("#wt-crash").fill("100");
+  // the painted scores move with the sliders
+  await expect.poll(topScore, { timeout: 10_000 }).not.toBe(before);
+
+  // and the list's leader is the map's leader
+  const listLeader = await page.locator(".build-row").first().getAttribute("data-pid");
+  const paintedLeader = await page.evaluate(() => {
+    const src = window._map?.getSource("build") as
+      | { _data?: GeoJSON.FeatureCollection }
+      | undefined;
+    const feats = src?._data?.features ?? [];
+    let best = { pid: "", score: -1 };
+    for (const f of feats) {
+      const p = f.properties as { pid?: string; score?: number } | null;
+      if (p?.pid !== undefined && Number(p.score) > best.score) {
+        best = { pid: p.pid, score: Number(p.score) };
+      }
+    }
+    return best.pid;
+  });
+  expect(paintedLeader).toBe(listLeader);
+});
+
+test("spot fixes are drawn as points and read as one location, not a street", async ({
+  page,
+}) => {
+  // A 14 m link between two safe grids is one location to treat, and a line that
+  // short is invisible and untappable at the zoom a city looks at.
+  await openBuild(page);
+  await expect(page.locator(".build-row").first()).toBeVisible({ timeout: 20_000 });
+  // Select a spot fix, not the top row: queryRenderedFeatures only sees what's
+  // on screen, and there are a few dozen spot fixes across 130 towns — framing
+  // the highest-scoring corridor puts none of them in the viewport.
+  const spotRow = page.locator(".build-row", { hasText: "spot fix" }).first();
+  if ((await spotRow.count()) === 0) {
+    test.skip(true, "no spot fix in the top 20 under the default weighting");
+  }
+  await spotRow.click();
+
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () =>
+            window._map?.queryRenderedFeatures(undefined, { layers: ["crossings"] }).length ?? 0,
+        ),
+      { timeout: 30_000 },
+    )
+    .toBeGreaterThan(0);
+
+  // the list names a location and its size, without asserting the treatment
+  const spotText = (await spotRow.textContent()) ?? "";
+  expect(spotText).toContain("spot fix");
+  expect(spotText).toContain("one location to treat");
+  // never asserts a treatment the geometry can't support
+  expect(spotText).not.toMatch(/crossing|signal/i);
+
+  // tapping one selects it and does not drop a destination pin
+  const pt = await page.evaluate(() => {
+    const map = window._map;
+    const f = map?.queryRenderedFeatures(undefined, { layers: ["crossings"] })[0];
+    if (!map || !f || f.geometry.type !== "Point") return null;
+    const p = map.project(f.geometry.coordinates as [number, number]);
+    return { x: Math.round(p.x), y: Math.round(p.y) };
+  });
+  expect(pt).not.toBeNull();
+  if (!pt) return;
+  await page.mouse.click(pt.x, pt.y);
+  await page.waitForTimeout(600);
+  await expect(page.locator(".maplibregl-marker:not(.opt-chip)")).toHaveCount(0);
+  await expect(page.locator(".build-row.selected")).toHaveCount(1);
+});

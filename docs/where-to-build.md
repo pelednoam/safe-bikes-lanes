@@ -19,13 +19,39 @@ argued with (the panel's sliders re-sort without re-running anything):
 `web/data/priorities_meta.json` carries the provenance and the five stated
 limits; the About dialog prints them.
 
+## Spot fixes
+
+A short hostile link between two kid-safe islands is not a corridor project. It's
+one location — a signal, a beacon, a protected crossing, a few metres of
+separation — and often the cheapest thing a city can actually do this year.
+
+**They are deliberately not called crossings.** That would assert a treatment the
+geometry can't support: a 39 m segment carrying the arterial's own name means
+riding 39 m *along* the arterial, not across it, and nothing here distinguishes
+those two cases. What the data supports is that the link is short, hostile and
+load-bearing. Which treatment fits is a designer's call.
+
+They are not a separate search. A spot fix *is* a candidate corridor that happens
+to be short (≤ `SPOT_FIX_MAX_M`, 60 m), on a hostile street, joining two islands,
+and not already signalized — classified after severance scoring rather than found
+separately. The 60 m bound is calibrated, not guessed: island-joining candidates
+run 6 at ≤15 m, 9 at 16–30, 9 at 31–45, then 12 more at 46–60 before thinning
+out, so an earlier 45 m cut straight through the cluster. Consequences:
+
+- The length floor that drops kerb cuts and driveway stubs (`CANDIDATE_MIN_M`,
+  25 m) is applied **after** severance, not during the search. Applying it during
+  the search silently threw away every 12 m connector between two islands —
+  the best projects on the list — before anything measured them.
+- Cost is per location, at signal scale, not per metre. A 14 m spot fix costed by
+  length reads as a rounding error and would top any benefit-per-dollar sort.
+- Already-signalized links stay classified as corridors: a spot fix at a
+  signalized junction is a different and probably bigger job.
+- They are exported twice on purpose: in `priorities.geojson` (one list, one
+  ranking) and as points in `severance.geojson`, because 14 m of line cannot be
+  seen or tapped at the zoom a city looks at.
+
 ## Not built
 
-- **Crossing projects.** The plan included "add a signal here" candidates —
-  zero-length projects where two kid-safe islands meet across an unsignalized
-  arterial. The `kind: "crossing"` field exists and is never set, and there is
-  no `severance.geojson`. These are often the cheapest real interventions, so
-  this is the most valuable thing still missing.
 - **A "what if we built this" simulator.** Phase 4.
 - **Printable per-project one-pagers.** Phase 4; the CSV export works.
 

@@ -499,6 +499,7 @@ const LAZY_LAYER_FILES: Record<string, string> = {
   gateways: "gateways.geojson",
   access: "access.geojson",
   build: "priorities.geojson",
+  crossings: "severance.geojson",
 };
 const lazyLoaded = new Set<string>();
 
@@ -2083,6 +2084,23 @@ map.on("load", () => {
     layout: { visibility: "none", "line-cap": "round" },
     paint: { "line-color": "#1440a0", "line-width": 11, "line-opacity": 0.45 },
   });
+  // Spot fixes, as points. They're in the projects layer too, but 14 m of line
+  // is invisible at the zoom a city looks at, and these are the cheapest
+  // projects on the list.
+  map.addSource("crossings", { type: "geojson", data: emptyFC() });
+  map.addLayer({
+    id: "crossings",
+    type: "circle",
+    source: "crossings",
+    layout: { visibility: "none" },
+    paint: {
+      "circle-radius": ["interpolate", ["linear"], ["get", "score"], 0, 4, 0.8, 9],
+      "circle-color": "#d7191c",
+      "circle-stroke-color": "#ffffff",
+      "circle-stroke-width": 2,
+      "circle-opacity": 0.95,
+    },
+  });
   map.addSource("pois", { type: "geojson", data: emptyFC() });
   map.addLayer({
     id: "pois",
@@ -2366,10 +2384,14 @@ map.on("click", (e: MapMouseEvent) => {
   // A project line is a thing to inspect, not a place to ride to. Without this
   // the layer's own handler selected the project AND this one dropped a
   // destination pin and re-routed underneath it.
+  const inspectable = ["build", "crossings"].filter(
+    (id) =>
+      map.getLayer(id) !== undefined &&
+      map.getLayoutProperty(id, "visibility") === "visible",
+  );
   if (
-    map.getLayer("build") !== undefined &&
-    map.getLayoutProperty("build", "visibility") === "visible" &&
-    map.queryRenderedFeatures(e.point, { layers: ["build"] }).length > 0
+    inspectable.length > 0 &&
+    map.queryRenderedFeatures(e.point, { layers: inspectable }).length > 0
   ) {
     return;
   }
@@ -4715,6 +4737,7 @@ if ("serviceWorker" in navigator) {
 interface ProjectProps {
   pid: string;
   name: string;
+  kind: string;
   towns: string;
   cls: string;
   length_m: number;
@@ -4747,6 +4770,8 @@ const WEIGHT_KEYS = ["severance", "access", "crash", "coverage"] as const;
 type WeightKey = (typeof WEIGHT_KEYS)[number];
 
 let projects: ProjectProps[] = [];
+/** The loaded layer, kept so re-weighting can repaint it. */
+let projectFC: GeoJSON.FeatureCollection | null = null;
 /** Extent per project, kept from the panel's own load.
  *
  * Read from the map source instead, selecting a row did nothing at all unless
@@ -4767,6 +4792,23 @@ function weightValues(): Record<WeightKey, number> {
   if (total <= 0) return { severance: 1, access: 0, crash: 0, coverage: 0 };
   for (const key of WEIGHT_KEYS) raw[key] /= total;
   return raw;
+}
+
+/** Every project's score under the current weights, for painting the map. */
+function scoreAllProjects(): Map<string, number> {
+  const w = weightValues();
+  return new Map(
+    projects.map((p) => [
+      p.pid,
+      Math.round(
+        (w.severance * p.c_severance +
+          w.access * p.c_access +
+          w.crash * p.c_crash +
+          w.coverage * p.c_coverage) *
+          1000,
+      ) / 1000,
+    ]),
+  );
 }
 
 /** Re-score with the panel's weights. The components are what the pipeline
@@ -4814,7 +4856,9 @@ function focusProject(pid: string): void {
   if (!toggle.checked) {
     toggle.checked = true;
     ensureLayer("build");
+    ensureLayer("crossings");
     map.setLayoutProperty("build", "visibility", "visible");
+    map.setLayoutProperty("crossings", "visibility", "visible");
   }
   if (map.getLayer("build-selected")) {
     map.setFilter("build-selected", ["==", ["get", "pid"], pid]);
@@ -4825,10 +4869,31 @@ function focusProject(pid: string): void {
   renderBuildList();
 }
 
+/** Repaint the map with the reader's weighting.
+ *
+ * The layer's colour and width are driven by the score property, so moving the
+ * sliders re-sorted the list while the map kept painting our own weighting —
+ * the two openly contradicted each other about which project was the big one.
+ */
+function repaintProjects(scored: Map<string, number>): void {
+  if (!projectFC || map.getSource("build") === undefined) return;
+  for (const f of projectFC.features) {
+    const pid = (f.properties as { pid?: string } | null)?.pid;
+    if (pid === undefined || f.properties === null) continue;
+    const score = scored.get(pid);
+    if (score !== undefined) f.properties["score"] = score;
+  }
+  (map.getSource("build") as GeoJSONSource).setData(projectFC);
+}
+
 function renderBuildList(): void {
   const box = el<HTMLDivElement>("build-list");
   box.innerHTML = "";
   const ranked = rankedProjects();
+  // scored over every project, not the deduped list: the map draws the
+  // alternatives too, and they'd otherwise keep our weighting while the rest
+  // switched to the reader's
+  repaintProjects(scoreAllProjects());
   if (ranked.length === 0) {
     box.textContent = "no candidate projects here";
     return;
@@ -4846,6 +4911,15 @@ function renderBuildList(): void {
     rank.className = "build-rank";
     rank.textContent = `${i + 1}.`;
     head.appendChild(rank);
+    if (p.kind === "spot_fix") {
+      // A spot fix is one location, not a length to protect. Rebuilding the
+      // heading as "39 m of X" re-imposed the corridor framing the pipeline
+      // deliberately avoids, and made the distinction invisible here.
+      const badge = document.createElement("span");
+      badge.className = "build-badge";
+      badge.textContent = "spot fix";
+      head.appendChild(badge);
+    }
     head.appendChild(
       document.createTextNode(
         `${Math.round(p.length_m)} m of ${p.name}${p.towns ? ` — ${p.towns}` : ""}`,
@@ -4857,6 +4931,9 @@ function renderBuildList(): void {
     // the pipeline's own sentence, minus the "N m of Street (Town)" opener the
     // heading above already carries
     why.textContent = p.summary.split("; ").slice(1).join("; ");
+    if (p.kind === "spot_fix") {
+      why.textContent = `one location to treat — ${why.textContent}`;
+    }
     row.appendChild(why);
     if (p.group_size > 1) {
       const alt = document.createElement("div");
@@ -4956,6 +5033,7 @@ function ensureBuildData(): void {
   void dataReady
     .then(() => loadJson<GeoJSON.FeatureCollection>("priorities.geojson"))
     .then((fc) => {
+      projectFC = fc;
       projects = fc.features
         .map((f) => f.properties as unknown as ProjectProps)
         .filter((p) => p && typeof p.pid === "string");
@@ -5025,10 +5103,15 @@ for (const [checkbox, layer] of [
     if (on) ensureLayer(layer);
     map.setLayoutProperty(layer, "visibility", on ? "visible" : "none");
     if (layer === "build") {
-      if (on) ensureBuildData();
-      else if (map.getLayer("build-selected")) {
+      // spot fixes ride with the projects: same list, drawn as points because a
+      // 14 m line can't be seen or tapped at this zoom
+      if (on) {
+        ensureBuildData();
+        ensureLayer("crossings");
+      } else if (map.getLayer("build-selected")) {
         map.setLayoutProperty("build-selected", "visibility", "none");
       }
+      map.setLayoutProperty("crossings", "visibility", on ? "visible" : "none");
     }
   });
 }
@@ -5074,6 +5157,21 @@ map.on("click", "build", (e: MapLayerMouseEvent) => {
     }
     focusProject(pid);
   }
+});
+map.on("click", "crossings", (e: MapLayerMouseEvent) => {
+  const pid = (e.features?.[0]?.properties as { pid?: string } | undefined)?.pid;
+  if (pid !== undefined) {
+    if (!el<HTMLDetailsElement>("build-box").open) {
+      el<HTMLDetailsElement>("build-box").open = true;
+    }
+    focusProject(pid);
+  }
+});
+map.on("mouseenter", "crossings", () => {
+  map.getCanvas().style.cursor = "pointer";
+});
+map.on("mouseleave", "crossings", () => {
+  map.getCanvas().style.cursor = "";
 });
 map.on("mouseenter", "build", () => {
   map.getCanvas().style.cursor = "pointer";

@@ -52,7 +52,7 @@ class Candidate:
 
     pid: str
     name: str
-    kind: str  # "corridor" | "crossing"
+    kind: str  # "corridor" | "spot_fix"
     cls: str
     length_m: float
     edges: list[tuple[int, int, int]] = field(default_factory=list)
@@ -60,6 +60,7 @@ class Candidate:
     parts: list[list[tuple[float, float]]] = field(default_factory=list)
     crashes: int = 0
     crashes_known: bool = True
+    signalized: bool = False
     crash_pressure: float = 0.0
     towns: list[str] = field(default_factory=list)
 
@@ -102,8 +103,8 @@ class Candidate:
 
     @property
     def cost_proxy(self) -> float:
-        if self.kind == "crossing":
-            return config.UNIT_COST_PER_M["crossing"]
+        if self.kind == "spot_fix":
+            return config.UNIT_COST_PER_M["spot_fix"]
         return self.length_m * config.UNIT_COST_PER_M[config.UPGRADE_CLASS]
 
 
@@ -221,7 +222,10 @@ def find_candidates(graph: nx.MultiDiGraph) -> list[Candidate]:
                 parts.append(edge_coords(graph, u, v, data))
             if not members:
                 continue
-            if length < config.CANDIDATE_MIN_M or length > config.CANDIDATE_MAX_M:
+            # The lower bound is applied after severance scoring, not here: a
+            # 12 m link between two islands is the cheapest real project there
+            # is, and this filter was throwing exactly those away unmeasured.
+            if length < config.CROSSING_MIN_M or length > config.CANDIDATE_MAX_M:
                 continue
             candidates.append(
                 Candidate(
@@ -235,6 +239,11 @@ def find_candidates(graph: nx.MultiDiGraph) -> list[Candidate]:
                     parts=parts,
                     crashes=crashes,
                     crashes_known=crashes_known,
+                    signalized=any(
+                        graph.nodes[n].get("highway") == "traffic_signals"
+                        or graph.nodes[n].get("crossing") == "traffic_signals"
+                        for n in comp
+                    ),
                     crash_pressure=round(pressure / max(length, 1.0), 4),
                 )
             )
@@ -281,6 +290,41 @@ def _ring_bbox(ring: list[tuple[float, float]]) -> tuple[float, float, float, fl
     xs = [p[0] for p in ring]
     ys = [p[1] for p in ring]
     return (min(xs), min(ys), max(xs), max(ys))
+
+
+def classify_and_prune(candidates: list[Candidate]) -> list[Candidate]:
+    """Split spot fixes out from corridors, and drop the short noise.
+
+    A short hostile link between two kid-safe islands isn't a corridor project.
+    It's one location — a signal, a beacon, a protected crossing, a few metres of
+    separation — and often the thing a city can actually do this year.
+
+    It is not called a crossing. That would assert a treatment this geometry
+    can't support: a 39 m segment carrying the arterial's own name means riding
+    39 m *along* the arterial, not across it. What the data supports is that the
+    link is short, hostile, and load-bearing; which of those treatments fits is a
+    designer's call.
+
+    Short links that join nothing are what the length floor was for: driveway
+    stubs and kerb cuts.
+    """
+    kept: list[Candidate] = []
+    spot_fixes = 0
+    dropped = 0
+    for cand in candidates:
+        joins = cand.join_m > 0
+        if cand.length_m < config.CANDIDATE_MIN_M and not joins:
+            dropped += 1
+            continue
+        if joins and cand.length_m <= config.SPOT_FIX_MAX_M and not cand.signalized:
+            cand.kind = "spot_fix"
+            spot_fixes += 1
+        kept.append(cand)
+    print(
+        f"  {spot_fixes} of them are spot fixes (one location, not a corridor); "
+        f"dropped {dropped} short links that join nothing"
+    )
+    return kept
 
 
 def load_towns() -> list[tuple[str, list[list[tuple[float, float]]]]]:
@@ -451,7 +495,14 @@ def summary_sentence(cand: Candidate) -> str:
     if cand.towns:
         where += f" ({', '.join(cand.towns)})"
     today = CLASS_WORDS.get(cand.cls, cand.cls.replace("_", " "))
-    bits.append(f"{where} — today {today}")
+    if cand.kind == "spot_fix":
+        # says where and how big, and leaves the treatment to a designer
+        spot = f"a spot fix on {cand.name}"
+        if cand.towns:
+            spot += f" ({', '.join(cand.towns)})"
+        bits.append(f"{spot} — {cand.length_m:.0f} m of it, today {today}")
+    else:
+        bits.append(f"{where} — today {today}")
     if cand.join_m > 0:
         joined = " and ".join(cand.join_names) if cand.join_names else ""
         bits.append(
@@ -582,6 +633,7 @@ def build(limit: int | None = None) -> list[Candidate]:
     score_severance(candidates, island_of, island_m)
     joined = sum(1 for c in candidates if c.join_m > 0)
     print(f"  {joined} of them would join two or more kid-safe islands")
+    candidates = classify_and_prune(candidates)
 
     assign_towns(candidates, load_towns())
     group_alternatives(candidates)
@@ -627,13 +679,13 @@ def build(limit: int | None = None) -> list[Candidate]:
     out_dir.mkdir(parents=True, exist_ok=True)
     export_coverage(graph, net, pop, before, pop_is_real, out_dir)
     write_csv(out_dir / "priorities.csv", candidates)
-    # The map layer carries the top slice: all 5,675 candidates came to ~7 MB,
-    # heavier than the display network the app loads by viewport. The CSV keeps
-    # every one of them, and the cap is stated rather than implied.
-    shown = candidates[: config.PRIORITY_MAP_N]
+    # The map layer carries a slice: all 5,670 candidates came to ~7 MB, heavier
+    # than the display network the app loads by viewport. The CSV keeps every one.
+    shown = select_for_map(candidates)
     (out_dir / "priorities.geojson").write_text(
         json.dumps(to_geojson(shown), separators=(",", ":"), allow_nan=False)
     )
+    export_spot_fixes(out_dir, shown)
     write_meta(out_dir, candidates, shown_count=len(shown), islands=island_m,
                destinations=len(destinations), pop=pop, pop_is_real=pop_is_real,
                stranded=stranded, stranded_pct=stranded_pct)
@@ -975,6 +1027,80 @@ def export_coverage(
     print(f"wrote access.geojson ({len(feats)} cells, {stuck} poorly served)")
 
 
+
+
+def select_for_map(candidates: list[Candidate]) -> list[Candidate]:
+    """Which projects go into the map layer the app can re-sort.
+
+    Not simply the top N by our own weighting. The app's sliders re-rank what
+    it was given, so a reader who moves everything onto crash history would
+    never see the streets that actually top that list — they'd be outside the
+    slice, invisibly. Each component gets a guaranteed quota, then the composite
+    order fills the rest.
+    """
+    limit = config.PRIORITY_MAP_N
+    quota = max(1, limit // 8)
+    pinned: dict[str, Candidate] = {}
+    # every spot fix, always. They're the cheapest things on the list and there
+    # are a few dozen of them; making them compete for slots against
+    # kilometre-long corridors left a third of them off the map for no gain.
+    for cand in candidates:
+        if cand.kind == "spot_fix":
+            pinned[cand.pid] = cand
+    for comp in ("severance", "access", "crash", "coverage"):
+        ranked = sorted(candidates, key=lambda c: c.components.get(comp, 0.0), reverse=True)
+        for cand in ranked[:quota]:
+            pinned[cand.pid] = cand
+    out = list(pinned.values())
+    from_quota = len(out)
+    for cand in candidates:  # already in composite order
+        if len(out) >= limit:
+            break
+        if cand.pid not in pinned:
+            out.append(cand)
+    out.sort(key=lambda c: c.score, reverse=True)
+    spots = sum(1 for c in out if c.kind == "spot_fix")
+    print(
+        f"  map layer: {len(out)} projects ({spots} spot fixes, all of them; "
+        f"{from_quota - spots} more because they top a single measure, "
+        "the rest by overall score)"
+    )
+    return out
+
+
+def export_spot_fixes(out_dir: Path, candidates: list[Candidate]) -> None:
+    """Spot fixes as points.
+
+    They're in priorities.geojson too — that stays the one list — but 14 metres
+    of line is invisible at the zoom a city looks at, and these are the cheapest
+    projects on it. A point can be seen.
+    """
+    feats: list[dict[str, Any]] = []
+    for cand in candidates:
+        if cand.kind != "spot_fix" or not cand.coords:
+            continue
+        mid = cand.coords[len(cand.coords) // 2]
+        feats.append(
+            {
+                "type": "Feature",
+                "geometry": {
+                    "type": "Point",
+                    "coordinates": [round(mid[0], 6), round(mid[1], 6)],
+                },
+                "properties": {
+                    "pid": cand.pid,
+                    "name": cand.name,
+                    "towns": ", ".join(cand.towns),
+                    "score": cand.score,
+                    "length_m": cand.length_m,
+                    "summary": summary_sentence(cand),
+                },
+            }
+        )
+    (out_dir / "severance.geojson").write_text(
+        json.dumps({"type": "FeatureCollection", "features": feats}, separators=(",", ":"))
+    )
+    print(f"wrote severance.geojson ({len(feats)} spot fixes on the map)")
 
 
 def write_meta(

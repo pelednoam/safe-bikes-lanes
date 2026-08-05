@@ -371,6 +371,11 @@
   .build-where { font-weight:600; }
   .build-why { color:var(--muted); font-size:12.5px; margin-top:2px; line-height:1.35; }
   .build-alt { color:var(--muted); font-size:12px; }
+  .build-badge {
+    display:inline-block; margin-right:6px; padding:1px 7px; border-radius:var(--r-pill);
+    background:var(--accent-soft); color:var(--accent); font-size:11px; font-weight:700;
+    text-transform:lowercase; letter-spacing:.02em; vertical-align:1px;
+  }
   label.wt { display:flex; align-items:center; justify-content:space-between; gap:8px;
              font-size:13px; margin:4px 0; }
   label.wt input[type=range] { flex:0 0 120px; }
@@ -640,7 +645,9 @@
       <label class="wt">crash history <input type="range" id="wt-crash" min="0" max="100" value="15"></label>
       <label class="wt">residents gaining access <input type="range" id="wt-coverage" min="0" max="100" value="15"></label>
       <div class="hint">Re-sorts what's already measured — no numbers change,
-      only their weight. <button id="wt-reset" style="margin:0;padding:2px 8px">reset</button></div>
+      only their weight. It re-sorts the projects on the map; the CSV has every
+      one that was measured, for sorting anywhere else.
+      <button id="wt-reset" style="margin:0;padding:2px 8px">reset</button></div>
     </details>
     <div id="build-list"></div>
     <div class="hint" id="build-method"></div>
