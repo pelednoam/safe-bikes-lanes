@@ -131,6 +131,21 @@ cd web && npm run e2e         # Playwright browser tests (real app + graph)
 cd web && npm run e2e:native  # emulated Capacitor WebView (native-only paths)
 ```
 
+## Where to build next (for cities)
+
+`pipeline/priorities.py` ranks candidate bike-infrastructure projects: it strips
+the network down to streets a kid can use, finds where that network is severed,
+and measures what each candidate would open up — safe network joined, distance
+saved reaching schools and parks, crash history, and residents who gain a safe
+route at all. Output is `web/data/priorities.{geojson,csv}`,
+`access.geojson` (who can reach anywhere today) and `priorities_meta.json`
+(provenance and limits). The app shows it under **🏗 Where to build**, with a
+town filter, sliders that re-weight the ranking client-side, and a CSV export.
+
+Run it after a graph build: `cd pipeline && python priorities.py` (about 12
+minutes; it evaluates every candidate rather than a screened subset). See
+[docs/where-to-build.md](docs/where-to-build.md) for what it does not do.
+
 ## Data licenses
 
 OpenStreetMap © OpenStreetMap contributors (ODbL). Cambridge GIS, MassDOT/

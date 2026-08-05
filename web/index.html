@@ -360,6 +360,21 @@
     line-height:1.2;
   }
   #nav-alert.gps { background:var(--s-shar); color:#231a08; }
+  #build-list { margin-top:8px; display:flex; flex-direction:column; gap:6px; }
+  .build-row {
+    border:1px solid var(--line); border-radius:var(--r-sm); padding:7px 9px;
+    cursor:pointer; background:var(--field);
+  }
+  .build-row:hover, .build-row:focus-visible { border-color:var(--accent); outline:none; }
+  .build-row.selected { border-color:var(--accent); box-shadow:inset 0 0 0 1px var(--accent); }
+  .build-rank { font-family:var(--font-cond); font-weight:700; margin-right:6px; }
+  .build-where { font-weight:600; }
+  .build-why { color:var(--muted); font-size:12.5px; margin-top:2px; line-height:1.35; }
+  .build-alt { color:var(--muted); font-size:12px; }
+  label.wt { display:flex; align-items:center; justify-content:space-between; gap:8px;
+             font-size:13px; margin:4px 0; }
+  label.wt input[type=range] { flex:0 0 120px; }
+  #build-town { max-width:52%; }
   #nav-classify { display:flex; align-items:center; gap:10px; flex-wrap:wrap;
                   justify-content:center; margin-top:8px; }
   #nav-classify-q { font-size:13px; color:var(--muted); width:100%; }
@@ -608,6 +623,29 @@
 
 
 
+  <!-- For cities and advocates rather than riders: where new protection would
+       do the most good. Hidden entirely when the data snapshot predates the
+       module, like the construction and workzone layers. -->
+  <details class="section" id="build-box" style="display:none">
+    <summary>🏗 Where to build</summary>
+    <p class="hint" id="build-intro"></p>
+    <div class="tool-row">
+      <select id="build-town" title="Show projects in one city or town"></select>
+      <button id="build-csv" style="margin:0" title="Download every ranked project as CSV">⬇ CSV</button>
+    </div>
+    <details id="build-weights">
+      <summary>What counts most</summary>
+      <label class="wt">gap-closing <input type="range" id="wt-severance" min="0" max="100" value="40"></label>
+      <label class="wt">reach to schools &amp; parks <input type="range" id="wt-access" min="0" max="100" value="30"></label>
+      <label class="wt">crash history <input type="range" id="wt-crash" min="0" max="100" value="15"></label>
+      <label class="wt">residents gaining access <input type="range" id="wt-coverage" min="0" max="100" value="15"></label>
+      <div class="hint">Re-sorts what's already measured — no numbers change,
+      only their weight. <button id="wt-reset" style="margin:0;padding:2px 8px">reset</button></div>
+    </details>
+    <div id="build-list"></div>
+    <div class="hint" id="build-method"></div>
+  </details>
+
   <details class="section">
     <summary>🔊 Voice</summary>
     <p class="hint">Turns and safety warnings are spoken while you ride. Test it
@@ -629,6 +667,10 @@
       <input type="checkbox" id="show-elev"> elevation map</label>
     <label class="toggle" title="Where bike infrastructure is dense vs missing: greener = more lane/path meters per block; hover for numbers">
       <input type="checkbox" id="show-lanes"> 🚴 lane coverage</label>
+    <label class="toggle" title="Share of residents who can reach a school, playground or library on kid-safe streets — red means almost nobody can">
+      <input type="checkbox" id="show-access"> 🚸 safe reach</label>
+    <label class="toggle" title="Ranked candidate projects: thicker and brighter means a bigger gain for the length built">
+      <input type="checkbox" id="show-build"> 🏗 build-next projects</label>
     <label class="toggle" title="Tilt the map with 3D terrain; heatmaps extrude — taller = more stress / higher ground. Drag with two fingers (or right-drag) to rotate">
       <input type="checkbox" id="show-3d"> 3D view</label>
     <label class="toggle" title="Dark basemap and UI for night rides (remembered; defaults to your system setting)">
@@ -721,6 +763,13 @@
   climb costs 12 m-equivalent (doubled over 4% grade, from ~14 m-resolution
   terrain data). Routes are graded <b>A–F</b> on average kid-stress per meter —
   the same scale regardless of profile, so grades are always comparable.</p>
+
+  <div id="about-build" style="display:none">
+    <h2>Where to build: how the ranking works</h2>
+    <p id="about-build-text"></p>
+    <p><b>What it does not mean:</b></p>
+    <ul id="about-build-limits"></ul>
+  </div>
 
   <h2>Data sources &amp; freshness</h2>
   <p>Everything below refreshes <b>automatically every month</b>; the map you're

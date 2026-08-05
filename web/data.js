@@ -46,6 +46,13 @@ export async function initDataSource() {
 export function usingRemoteData() {
     return remoteBuilt;
 }
+/** Where a data file lives right now, for a download link.
+ *
+ * Not loadJson: the CSV is handed to the browser as a file rather than parsed,
+ * so it needs the URL the resolver would have used, not its contents. */
+export function dataUrl(name) {
+    return remoteBuilt !== null ? SITE_DATA + name : `data/${name}`;
+}
 /** Load a data layer: site (cached per build) when newer, else the bundle. */
 export async function loadJson(name) {
     if (remoteBuilt !== null) {

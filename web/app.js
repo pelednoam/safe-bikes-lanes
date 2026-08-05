@@ -3,7 +3,7 @@ import { bearingDeg, buildAlerts, buildManeuvers, buildTrack, distM, snapToTrack
 import { addHazard, buildReportText, downscalePhoto, getHazardPhoto, HAZARD_LABELS, listHazards, removeHazard, setHazardCategory, } from "./hazards.js";
 import { clearRecent, deletePlace, emojiFor, exportBackup, importBackup, listPlaces, listRecent, pushRecent, savePlace, } from "./places.js";
 import { clearRides, deleteRide, loadRides, RideRecorder, rideTotals, saveRide, stashInProgress, takeInProgress, } from "./rides.js";
-import { initDataSource, loadJson, usingRemoteData } from "./data.js";
+import { dataUrl, initDataSource, loadJson, usingRemoteData } from "./data.js";
 import { buildCues, PROFILES, Router, toGPX } from "./router.js";
 import { NetworkTiles, TileStore } from "./tiles.js";
 import { drawRideCard, drawTotalsCard, rideShareText, totalsShareText } from "./sharecard.js";
@@ -386,6 +386,8 @@ const LAZY_LAYER_FILES = {
     lanemap: "lanemap.geojson",
     elevmap: "elevation.geojson",
     gateways: "gateways.geojson",
+    access: "access.geojson",
+    build: "priorities.geojson",
 };
 const lazyLoaded = new Set();
 /** Fetch an overlay's data once, the first time its toggle is turned on. */
@@ -1879,6 +1881,57 @@ map.on("load", () => {
             "text-halo-blur": 0.3,
         },
     });
+    // ── where-to-build (cities, not riders) ──────────────────────────────
+    // Coverage first, underneath: it's the backdrop the projects are answers to.
+    map.addSource("access", { type: "geojson", data: emptyFC() });
+    // beforeId: at 35% opacity over the network and route this washed out the
+    // safety colours it exists to explain. It's a backdrop.
+    map.addLayer({
+        id: "access",
+        type: "fill",
+        source: "access",
+        layout: { visibility: "none" },
+        paint: {
+            "fill-color": [
+                "match",
+                ["get", "band"],
+                "good", "#1a9850",
+                "partial", "#fee08b",
+                "#d73027",
+            ],
+            "fill-opacity": 0.35,
+            "fill-outline-color": "rgba(0,0,0,0)",
+        },
+    }, "network-casing");
+    map.addSource("build", { type: "geojson", data: emptyFC() });
+    map.addLayer({
+        id: "build",
+        type: "line",
+        source: "build",
+        layout: { visibility: "none", "line-cap": "round" },
+        paint: {
+            // width and colour both track the score, so the map and the ranked list
+            // can't disagree about which project is the big one
+            "line-color": [
+                "interpolate",
+                ["linear"],
+                ["get", "score"],
+                0, "#8e9aa4",
+                0.3, "#f39c12",
+                0.6, "#d7191c",
+            ],
+            "line-width": ["interpolate", ["linear"], ["get", "score"], 0, 2.5, 0.8, 8],
+            "line-opacity": 0.9,
+        },
+    });
+    map.addLayer({
+        id: "build-selected",
+        type: "line",
+        source: "build",
+        filter: ["==", ["get", "pid"], ""],
+        layout: { visibility: "none", "line-cap": "round" },
+        paint: { "line-color": "#1440a0", "line-width": 11, "line-opacity": 0.45 },
+    });
     map.addSource("pois", { type: "geojson", data: emptyFC() });
     map.addLayer({
         id: "pois",
@@ -2139,6 +2192,14 @@ map.on("load", () => {
     parseHash();
 });
 map.on("click", (e) => {
+    // A project line is a thing to inspect, not a place to ride to. Without this
+    // the layer's own handler selected the project AND this one dropped a
+    // destination pin and re-routed underneath it.
+    if (map.getLayer("build") !== undefined &&
+        map.getLayoutProperty("build", "visibility") === "visible" &&
+        map.queryRenderedFeatures(e.point, { layers: ["build"] }).length > 0) {
+        return;
+    }
     if (shedMode) {
         shedCenter = [e.lngLat.lng, e.lngLat.lat];
         void computeShed();
@@ -4344,3 +4405,333 @@ if ("serviceWorker" in navigator) {
             .catch(() => undefined);
     }
 }
+const WEIGHT_KEYS = ["severance", "access", "crash", "coverage"];
+let projects = [];
+/** Extent per project, kept from the panel's own load.
+ *
+ * Read from the map source instead, selecting a row did nothing at all unless
+ * the overlay toggle happened to be on already — the source is only filled when
+ * the layer loads. The panel has the geometry in hand; it should use it. */
+const projectBounds = new Map();
+let priorityMeta = null;
+let selectedProject = null;
+function weightValues() {
+    const raw = {};
+    let total = 0;
+    for (const key of WEIGHT_KEYS) {
+        const v = Number(el(`wt-${key}`).value);
+        raw[key] = v;
+        total += v;
+    }
+    if (total <= 0)
+        return { severance: 1, access: 0, crash: 0, coverage: 0 };
+    for (const key of WEIGHT_KEYS)
+        raw[key] /= total;
+    return raw;
+}
+/** Re-score with the panel's weights. The components are what the pipeline
+ * measured; only their relative importance is the reader's to choose. */
+function rankedProjects() {
+    const w = weightValues();
+    const town = el("build-town").value;
+    const seenGroups = new Set();
+    return projects
+        .filter((p) => town === "" ||
+        // exact, per name: a substring match put Lynnfield under Lynn, North
+        // Reading under Reading, and North Andover under Andover
+        p.towns
+            .split(",")
+            .map((t) => t.trim())
+            .includes(town))
+        .map((p) => ({
+        p,
+        score: w.severance * p.c_severance +
+            w.access * p.c_access +
+            w.crash * p.c_crash +
+            w.coverage * p.c_coverage,
+    }))
+        .sort((a, b) => b.score - a.score)
+        .filter(({ p }) => {
+        // one row per gap: alternatives across the same barrier are listed on the
+        // row they belong to, not as separate near-identical entries
+        if (seenGroups.has(p.group))
+            return false;
+        seenGroups.add(p.group);
+        return true;
+    })
+        .map(({ p, score }) => ({ ...p, score: Math.round(score * 1000) / 1000 }));
+}
+function focusProject(pid) {
+    selectedProject = pid;
+    if (!projects.some((p) => p.pid === pid))
+        return;
+    // choosing a project shows the projects: it would be odd to highlight
+    // something on an invisible layer
+    const toggle = el("show-build");
+    if (!toggle.checked) {
+        toggle.checked = true;
+        ensureLayer("build");
+        map.setLayoutProperty("build", "visibility", "visible");
+    }
+    if (map.getLayer("build-selected")) {
+        map.setFilter("build-selected", ["==", ["get", "pid"], pid]);
+        map.setLayoutProperty("build-selected", "visibility", "visible");
+    }
+    const box = projectBounds.get(pid);
+    if (box)
+        map.fitBounds(box, { padding: 90, maxZoom: 16.5, duration: 600 });
+    renderBuildList();
+}
+function renderBuildList() {
+    const box = el("build-list");
+    box.innerHTML = "";
+    const ranked = rankedProjects();
+    if (ranked.length === 0) {
+        box.textContent = "no candidate projects here";
+        return;
+    }
+    ranked.slice(0, 20).forEach((p, i) => {
+        const row = document.createElement("div");
+        row.className = "build-row" + (p.pid === selectedProject ? " selected" : "");
+        row.tabIndex = 0;
+        row.setAttribute("role", "button");
+        row.setAttribute("aria-pressed", p.pid === selectedProject ? "true" : "false");
+        row.setAttribute("data-pid", p.pid);
+        const head = document.createElement("div");
+        head.className = "build-where";
+        const rank = document.createElement("span");
+        rank.className = "build-rank";
+        rank.textContent = `${i + 1}.`;
+        head.appendChild(rank);
+        head.appendChild(document.createTextNode(`${Math.round(p.length_m)} m of ${p.name}${p.towns ? ` — ${p.towns}` : ""}`));
+        row.appendChild(head);
+        const why = document.createElement("div");
+        why.className = "build-why";
+        // the pipeline's own sentence, minus the "N m of Street (Town)" opener the
+        // heading above already carries
+        why.textContent = p.summary.split("; ").slice(1).join("; ");
+        row.appendChild(why);
+        if (p.group_size > 1) {
+            const alt = document.createElement("div");
+            alt.className = "build-alt";
+            alt.textContent = `${p.group_size - 1} other way${p.group_size > 2 ? "s" : ""} across the same gap`;
+            row.appendChild(alt);
+        }
+        const act = () => {
+            focusProject(p.pid);
+        };
+        row.addEventListener("click", act);
+        row.addEventListener("keydown", (e) => {
+            if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                act();
+            }
+        });
+        box.appendChild(row);
+    });
+    if (ranked.length > 20) {
+        const more = document.createElement("div");
+        more.className = "hint";
+        // never imply the list is the whole field
+        const all = priorityMeta?.candidates ?? ranked.length;
+        more.textContent =
+            `showing the top 20 of ${ranked.length} mapped project` +
+                `${ranked.length === 1 ? "" : "s"}; the CSV has all ${all} that were measured`;
+        box.appendChild(more);
+    }
+}
+function describeMeta(meta) {
+    const pct = meta.access?.stranded_pct;
+    const headcount = meta.population?.is_headcount === true;
+    const who = headcount ? "residents" : "homes (estimated from street length)";
+    el("build-intro").textContent =
+        pct === undefined
+            ? "Candidate projects, ranked by how much safe network they'd open up."
+            : `${pct}% of ${who} in the mapped towns can't reach a school, playground or ` +
+                `library within ${Math.round((meta.access?.budget_m ?? 0) / 100) / 10} km of ` +
+                "perceived distance. These are the projects that would change that most.";
+    const limits = meta.limits ?? [];
+    el("build-method").textContent =
+        `Measured ${meta.candidates ?? 0} candidates against ${meta.destinations ?? 0} ` +
+            `schools, playgrounds and libraries (data built ${meta.built ?? "—"}). ` +
+            "Method and limits are in About.";
+    // The same limits, in full, where someone checking a number will look. A
+    // ranking a city might quote in public needs its caveats somewhere citable.
+    el("about-build").style.display = limits.length > 0 ? "block" : "none";
+    el("about-build-text").textContent =
+        `Every street a kid can't use is cut into candidate projects, and each is ` +
+            `measured against the network as it stands: what kid-safe network it would ` +
+            `join, how much closer it brings people to ${meta.destinations ?? 0} schools, ` +
+            `playgrounds and libraries, its recorded bike crashes, and how many ` +
+            `residents gain a safe route at all. Population is ${meta.population?.source ?? "unavailable"}. ${meta.access?.budget_note ?? ""}`;
+    const list = el("about-build-limits");
+    list.innerHTML = "";
+    for (const limit of limits) {
+        const li = document.createElement("li");
+        li.textContent = limit;
+        list.appendChild(li);
+    }
+}
+/** Decide whether this data build has a ranking at all — 2 KB, at boot.
+ *
+ * The ranking itself is 2.8 MB and is for cities, not riders, so it waits until
+ * someone opens the section or turns the layer on. Loading it at boot meant
+ * every phone pulled three megabytes of project geometry to render a panel
+ * almost nobody opens. Absent metadata hides the section entirely: a published
+ * data snapshot can predate this module. */
+let buildMetaStarted = false;
+function ensureBuildMeta() {
+    if (buildMetaStarted)
+        return;
+    buildMetaStarted = true;
+    void dataReady
+        .then(() => loadJson("priorities_meta.json"))
+        .then((meta) => {
+        priorityMeta = meta;
+        el("build-box").style.display = "block";
+        describeMeta(meta);
+    })
+        .catch(() => {
+        el("build-box").style.display = "none";
+    });
+}
+/** Load the projects themselves, on first real use. */
+let buildDataStarted = false;
+function ensureBuildData() {
+    if (buildDataStarted)
+        return;
+    buildDataStarted = true;
+    el("build-list").textContent = "loading projects…";
+    void dataReady
+        .then(() => loadJson("priorities.geojson"))
+        .then((fc) => {
+        projects = fc.features
+            .map((f) => f.properties)
+            .filter((p) => p && typeof p.pid === "string");
+        projectBounds.clear();
+        for (const f of fc.features) {
+            const pid = f.properties?.pid;
+            if (pid === undefined)
+                continue;
+            const parts = f.geometry.type === "MultiLineString"
+                ? f.geometry.coordinates.flat()
+                : f.geometry.type === "LineString"
+                    ? f.geometry.coordinates
+                    : [];
+            if (parts.length < 2)
+                continue;
+            let w = Infinity;
+            let sth = Infinity;
+            let e = -Infinity;
+            let n = -Infinity;
+            for (const [lon, lat] of parts) {
+                w = Math.min(w, lon);
+                e = Math.max(e, lon);
+                sth = Math.min(sth, lat);
+                n = Math.max(n, lat);
+            }
+            projectBounds.set(pid, [
+                [w, sth],
+                [e, n],
+            ]);
+        }
+        const towns = new Set();
+        for (const p of projects) {
+            for (const t of p.towns.split(",")) {
+                const name = t.trim();
+                if (name && name !== "-")
+                    towns.add(name);
+            }
+        }
+        const select = el("build-town");
+        select.innerHTML = "";
+        const all = document.createElement("option");
+        all.value = "";
+        all.textContent = `all towns (${projects.length} mapped projects)`;
+        select.appendChild(all);
+        for (const town of [...towns].sort()) {
+            const opt = document.createElement("option");
+            opt.value = town;
+            opt.textContent = town;
+            select.appendChild(opt);
+        }
+        renderBuildList();
+    })
+        .catch(() => {
+        // metadata said there was a ranking and the ranking didn't load: say so
+        // rather than leaving "loading projects…" up forever
+        el("build-list").textContent =
+            "couldn't load the projects — check your connection and reopen this section";
+        buildDataStarted = false;
+    });
+}
+// wiring: the two toggles, the filter, the sliders, and the CSV
+for (const [checkbox, layer] of [
+    ["show-access", "access"],
+    ["show-build", "build"],
+]) {
+    el(checkbox).addEventListener("change", (e) => {
+        const on = e.target.checked;
+        if (on)
+            ensureLayer(layer);
+        map.setLayoutProperty(layer, "visibility", on ? "visible" : "none");
+        if (layer === "build") {
+            if (on)
+                ensureBuildData();
+            else if (map.getLayer("build-selected")) {
+                map.setLayoutProperty("build-selected", "visibility", "none");
+            }
+        }
+    });
+}
+el("build-town").addEventListener("change", () => {
+    selectedProject = null;
+    if (map.getLayer("build-selected")) {
+        map.setLayoutProperty("build-selected", "visibility", "none");
+    }
+    renderBuildList();
+});
+for (const key of WEIGHT_KEYS) {
+    el(`wt-${key}`).addEventListener("input", renderBuildList);
+}
+el("wt-reset").addEventListener("click", () => {
+    // back to the pipeline's own weighting, which the exported score used
+    const defaults = {
+        severance: "40",
+        access: "30",
+        crash: "15",
+        coverage: "15",
+    };
+    for (const key of WEIGHT_KEYS)
+        el(`wt-${key}`).value = defaults[key];
+    renderBuildList();
+});
+el("build-csv").addEventListener("click", () => {
+    // the full ranking, not the top 20 on screen and not the town filter's slice
+    const a = document.createElement("a");
+    a.href = dataUrl("priorities.csv");
+    a.download = "where-to-build.csv";
+    a.click();
+});
+// clicking a project on the map selects it in the list, and the other way round
+map.on("click", "build", (e) => {
+    const pid = e.features?.[0]?.properties?.pid;
+    if (pid !== undefined) {
+        if (!el("build-box").open) {
+            el("build-box").open = true;
+        }
+        focusProject(pid);
+    }
+});
+map.on("mouseenter", "build", () => {
+    map.getCanvas().style.cursor = "pointer";
+});
+map.on("mouseleave", "build", () => {
+    map.getCanvas().style.cursor = "";
+});
+el("build-box").addEventListener("toggle", () => {
+    if (el("build-box").open)
+        ensureBuildData();
+});
+// at boot, only the 2 KB metadata: it decides whether the section exists
+ensureBuildMeta();

@@ -45,7 +45,9 @@ async function nativeShim(page: Page): Promise<void> {
  * error, and the sandbox running these tests has no route out. Anything else
  * counts. */
 function isExpectedOfflineNoise(text: string): boolean {
-  return /pelednoam\.github\.io|nominatim|ERR_FAILED|ERR_INTERNET_DISCONNECTED|CORS policy/i.test(
+  // "404" alone is deliberately not in here: only a probe for an optional layer
+  // that a given data snapshot may not carry yet is allowed to miss.
+  return /pelednoam\.github\.io|nominatim|priorities|ERR_FAILED|ERR_INTERNET_DISCONNECTED|CORS policy/i.test(
     text,
   );
 }
@@ -54,8 +56,13 @@ async function bootNative(page: Page): Promise<string[]> {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(`pageerror: ${e.message}`));
   page.on("console", (m) => {
-    if (m.type() === "error" && !isExpectedOfflineNoise(m.text())) {
-      errors.push(`console: ${m.text()}`);
+    // A failed resource load logs "the server responded with a status of 404"
+    // with no URL in the text, so the filter has to read the location too —
+    // otherwise every 404 is an anonymous line that can't be judged, or
+    // dismissed wholesale, which would hide real ones.
+    const where = m.location()?.url ?? "";
+    if (m.type() === "error" && !isExpectedOfflineNoise(`${m.text()} ${where}`)) {
+      errors.push(`console: ${m.text()} (${where})`);
     }
   });
   await nativeShim(page);
