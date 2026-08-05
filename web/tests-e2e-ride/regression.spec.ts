@@ -525,3 +525,23 @@ test("a phone that can't speak says so instead of just going quiet", async ({ pa
   // and guidance carries on rather than stalling behind a queue that never drains
   await expect(page.locator("#nav-dist")).not.toBeEmpty();
 });
+
+test("on a phone the about button survives the sheet hiding the title", async ({ page }) => {
+  // the phone layout drops #panel h1 and the hint to save sheet space, which is
+  // exactly where the footer button is unreachable — so the header one has to
+  // outlive its own row's title
+  await plan(page);
+  await expect(page.locator("#panel h1")).toBeHidden();
+  const info = page.locator("#about-top");
+  await expect(info).toBeVisible();
+  const box = await info.boundingBox();
+  expect(box).not.toBeNull();
+  if (!box) return;
+  // inside the 390-wide viewport, and a thumb-sized target
+  expect(box.x + box.width).toBeLessThanOrEqual(390);
+  expect(Math.min(box.width, box.height)).toBeGreaterThanOrEqual(32);
+  await info.click();
+  await expect(page.locator("#about")).toBeVisible();
+  const dialog = await page.locator("#about").boundingBox();
+  expect(dialog?.width ?? 999).toBeLessThanOrEqual(390);
+});

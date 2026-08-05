@@ -80,6 +80,15 @@
   #panel h1 {
     font-size:16px; font-weight:700; letter-spacing:-.012em; margin:0 0 3px;
   }
+  /* The other way in is a button at the very bottom of the panel, under every
+     collapsible section — findable at a desk, not on a phone. This one sits
+     above the fields, so it's there in any sheet state. */
+  #panel-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  #about-top {
+    flex:none; margin:0; padding:0; width:34px; height:34px; min-width:34px;
+    border-radius:999px; font-size:15px; line-height:1;
+    display:flex; align-items:center; justify-content:center;
+  }
   #panel .hint { color:var(--muted); font-size:13px; margin:0 0 12px; }
   body.dark .maplibregl-popup-content { background:var(--solid); color:var(--ink);
     border-radius:var(--r-md); }
@@ -384,6 +393,8 @@
     }
     /* the map already says where you are — the title and blurb are desktop-only */
     #panel h1, #panel .hint { display:none; }
+    /* h1 goes, ℹ stays — it's the only way into the explanation from a phone */
+    #panel-head { justify-content:flex-end; margin-bottom:6px; }
     #panel.peek { max-height:168px; overflow:hidden; }
     #panel.half { max-height:52%; }
     #panel.full { max-height:88%; }
@@ -478,7 +489,11 @@
 </div>
 <div id="panel">
   <div id="sheet-handle" title="drag to resize"></div>
-  <h1>Family Bike Router</h1>
+  <div id="panel-head">
+    <h1>Family Bike Router</h1>
+    <button id="about-top" type="button" aria-label="About — how safety is decided"
+            title="About — how safety is decided, data sources and freshness">ℹ</button>
+  </div>
   <div class="hint">Cambridge, Somerville &amp; nearby towns — safety first. Search or tap the map for where you’re headed; routes start from your location.</div>
   <div id="od">
     <div class="od-row">

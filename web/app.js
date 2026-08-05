@@ -2915,11 +2915,16 @@ el("mapillary-save").addEventListener("click", () => {
     el("mapillary-status").textContent =
         token === "" ? "cleared" : "✓ saved — hover any street";
 });
-el("about-btn").addEventListener("click", () => {
+function openAbout() {
     el("mapillary-token").value = mapillaryToken;
     fillAbout();
     el("about").showModal();
-});
+}
+// two ways in: the labelled button in the footer, which says what's inside, and
+// the ℹ in the header, which is reachable without scrolling the panel
+for (const id of ["about-btn", "about-top"]) {
+    el(id).addEventListener("click", openAbout);
+}
 el("about-close").addEventListener("click", () => {
     el("about").close();
 });

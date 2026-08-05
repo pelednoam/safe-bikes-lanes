@@ -384,3 +384,31 @@ test("a destination set from a link gets a name, and a typed one is left alone",
   await page.waitForTimeout(1500);
   await expect(page.locator("#search")).toHaveValue("the bakery");
 });
+
+test("the about dialog is one tap away, without scrolling the panel", async ({ page }) => {
+  await boot(page, HOME_VIEW);
+  const info = page.locator("#about-top");
+  // it has to be reachable where the panel opens, not below every section
+  await expect(info).toBeVisible();
+  const box = await info.boundingBox();
+  expect(box).not.toBeNull();
+  if (!box) return;
+  expect(box.y).toBeLessThan(120);
+  // a tappable target, not a 16 px glyph
+  expect(Math.min(box.width, box.height)).toBeGreaterThanOrEqual(32);
+  expect(await info.getAttribute("aria-label")).toMatch(/about/i);
+
+  await info.click();
+  await expect(page.locator("#about")).toBeVisible();
+  await expect(page.locator("#about")).toContainText(/protection\s+class/i);
+  // the freshness table is filled in, not left as the placeholder
+  await expect(page.locator("#built-date")).not.toHaveText("…");
+  await expect(page.locator("#freshness-table tr")).not.toHaveCount(1);
+
+  // and it closes the two ways every other dialog does
+  await page.locator("#about-close").click();
+  await expect(page.locator("#about")).not.toBeVisible();
+  await info.click();
+  await page.mouse.click(5, 5);
+  await expect(page.locator("#about")).not.toBeVisible();
+});
