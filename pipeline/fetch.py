@@ -95,6 +95,8 @@ def fetch_pois() -> GeoJSON:
     query = f"""[out:json][timeout:90];
 (
   nwr["leisure"="playground"]({bbox});
+  nwr["amenity"="school"]({bbox});
+  nwr["amenity"="kindergarten"]({bbox});
   nwr["amenity"="ice_cream"]({bbox});
   node["cuisine"="ice_cream"]({bbox});
   nwr["amenity"="library"]({bbox});
@@ -134,6 +136,8 @@ out center tags;"""
             continue
         if tags.get("leisure") == "playground":
             kind = "playground"
+        elif tags.get("amenity") in ("school", "kindergarten"):
+            kind = "school"
         elif tags.get("amenity") == "ice_cream" or tags.get("cuisine") == "ice_cream":
             kind = "ice_cream"
         elif tags.get("amenity") == "library":
@@ -152,6 +156,20 @@ out center tags;"""
             }
         )
     return {"type": "FeatureCollection", "features": features}
+
+
+def fetch_towns() -> GeoJSON:
+    """Municipal boundaries, trimmed to TOWN name only.
+
+    The source layer carries a dozen administrative fields and multi-part coast
+    geometry; the where-to-build module needs only which polygon a street falls
+    in, and the untrimmed layer is 4.9 MB of properties we'd never read.
+    """
+    fc = arcgis_query(config.MASSGIS_TOWNS_URL)
+    for feat in fc.get("features", []):
+        props = feat.get("properties", {})
+        feat["properties"] = {"town": str(props.get("TOWN", "")).title()}
+    return fc
 
 
 def fetch_cambridge_permits() -> GeoJSON:
@@ -238,6 +256,7 @@ def fetch_all(refresh: bool = False) -> None:
         ),
     }
     jobs["pois.geojson"] = fetch_pois
+    jobs["towns.geojson"] = fetch_towns
     jobs["cambridge_permits.geojson"] = fetch_cambridge_permits
     jobs["workzones.geojson"] = fetch_workzones
     for year in config.IMPACT_CRASH_YEARS:

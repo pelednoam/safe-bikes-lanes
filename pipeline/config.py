@@ -86,6 +86,14 @@ IMPACT_CRASH_WHERE: Final[str] = (
     + ",".join(f"'{c}'" for c in IMPACT_CRASH_CITIES)
     + ") AND NON_MTRST_TYPE_CL LIKE '%Bicycl%'"
 )
+# MassGIS municipal boundaries (polygons, TOWN field) — used by the
+# where-to-build module to say which city a candidate project is in, and to let
+# the app filter by town. Verified live 2026-08-05: 137 towns intersect our bbox.
+MASSGIS_TOWNS_URL: Final[str] = (
+    "https://services1.arcgis.com/hGdibHYSPO59RG1h/arcgis/rest/services/"
+    "Massachusetts_Municipalities_Hosted/FeatureServer/0"
+)
+
 SOMERVILLE_MOBILITY3: Final[str] = (
     "https://maps.somervillema.gov/arcgis/rest/services/Mobility3/MapServer"
 )
@@ -243,6 +251,66 @@ BOSTON_FACILITY_CLASS: Final[dict[str, str]] = {
     "SLM": "sharrow", "SLMTC": "sharrow", "SLMSUP": "sharrow",
     "SUP": "path", "SUPM": "path", "SUPN": "path",
 }
+
+# ---------------------------------------------------------------------------
+# "Where to build next" — ranking candidate projects for a city.
+#
+# The unit is a CORRIDOR (a contiguous run of one street at one class), because
+# that is what actually gets built. Scores are relative and comparable within a
+# run, not absolute: they answer "which of these first", not "how good is this".
+# ---------------------------------------------------------------------------
+
+# A street counts as kid-safe at or below this multiplier. 2.0 admits path,
+# separated, buffered, quiet_street and service; it excludes plain painted lanes
+# (3.0), which is the point — a painted lane is not a route for an eight-year-old.
+SAFE_MULT_MAX: Final[float] = 2.0
+
+# What a candidate would become if built. Severance and accessibility gains are
+# measured against this, so it must be a class we'd actually recommend.
+UPGRADE_CLASS: Final[str] = "separated"
+
+# Order-of-magnitude build cost per metre, for a benefit-per-dollar column. NOT
+# an estimate — a city's own numbers vary by an order of magnitude with drainage,
+# parking removal and signals. Labelled as a proxy everywhere it surfaces.
+UNIT_COST_PER_M: Final[dict[str, float]] = {
+    "separated": 900.0,   # flexposts/curb, restriping, some signal work
+    "buffered": 120.0,    # paint and thermoplastic
+    "lane": 80.0,
+    "path": 2500.0,       # new off-street construction
+    "crossing": 150_000.0,  # a signal or beacon, per location (length ~0)
+}
+
+# Composite weights. Every component is also exported raw, so the app's sliders
+# and a city's own spreadsheet can re-sort without re-running the pipeline.
+PRIORITY_WEIGHTS: Final[dict[str, float]] = {
+    "severance": 0.40,   # joins separated kid-safe islands
+    "access": 0.30,      # resident-minutes saved to the nearest school/park
+    "crash": 0.15,       # recorded bike crashes on an unprotected street
+    "coverage": 0.15,    # residents who gain any safe access at all
+}
+
+# Accessibility: a destination is "in reach" within this perceived distance.
+# ~2.5 km of perceived cost is roughly a 15-minute ride at a young-kids pace on
+# protected infrastructure.
+ACCESS_BUDGET_M: Final[float] = 2500.0
+
+# POI kinds that count as destinations worth reaching safely.
+DESTINATION_KINDS: Final[tuple[str, ...]] = ("school", "playground", "library")
+
+# Marginal-gain analysis runs one graph search per candidate, so it is screened
+# to this many by severance + crashes first. Whatever is dropped is logged: a
+# silent top-N reads as "we checked everything".
+PRIORITY_SCREEN_N: Final[int] = 200
+
+# How many make it into the map layer. The full ranking always goes to the CSV;
+# all 5,675 candidates as GeoJSON came to ~7 MB, heavier than the display network
+# the app loads by viewport.
+PRIORITY_MAP_N: Final[int] = 1500
+
+# Candidates shorter than this are noise (driveway stubs, kerb cuts); longer
+# than this is a programme, not a project.
+CANDIDATE_MIN_M: Final[float] = 25.0
+CANDIDATE_MAX_M: Final[float] = 1500.0
 
 # Display colors (also used by the frontend legend).
 CLASS_COLOR: Final[dict[str, str]] = {

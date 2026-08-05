@@ -522,6 +522,10 @@ def build() -> None:
         data["climb"] = round(max(0.0, elev[v] - elev[u]), 2)
         data["xpen"] = round(pen, 1)
         data["road_busy"] = bool(row["road_busy"])
+        # exact crash count, not just the derived factor: the where-to-build
+        # report quotes counts to cities, and a capped factor can't be inverted
+        # back into one (crash_factor saturates at CRASH_FACTOR_CAP)
+        data["crash_count"] = int(row["crash_count"])
         data["cls"] = row["cls"]
         data["stress_mult"] = float(row["stress_mult"])
         data["crash_factor"] = float(row["crash_factor"])
