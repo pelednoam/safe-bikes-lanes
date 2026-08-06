@@ -163,3 +163,115 @@ def test_overpass_tries_every_mirror_before_giving_up(monkeypatch: pytest.Monkey
     with pytest.raises(RuntimeError, match="Overpass"):
         fetch.fetch_pois()
     assert len(attempts) >= 3  # every mirror, not just the first
+
+
+def test_cambridge_permits_become_dated_points(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Active street permits steer routes around work. A row without a position
+    can't do that and must be dropped rather than land at (0, 0)."""
+    rows = [
+        {
+            "longitude": "-71.1", "latitude": "42.38", "permit_type": "Excavation",
+            "company_name": "Acme", "full_address": "1 Main St",
+            "start_date": "2026-08-01T00:00:00", "end_date": "2026-09-01T00:00:00",
+        },
+        {"permit_type": "Excavation"},  # no position
+        {"longitude": "nope", "latitude": "42.38"},  # unparseable
+    ]
+    monkeypatch.setattr(fetch, "_get", lambda *_a, **_k: json.dumps(rows).encode())
+    fc = fetch.fetch_cambridge_permits()
+    assert len(fc["features"]) == 1
+    props = fc["features"][0]["properties"]
+    assert props["src"] == "cambridge_permit"
+    assert props["start"] == "2026-08-01"
+    assert props["end"] == "2026-09-01"
+    assert fc["features"][0]["geometry"]["coordinates"] == [-71.1, 42.38]
+
+
+def test_workzones_say_how_to_enable_them_when_unconfigured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No key is a configuration state, and the message has to say what to do —
+    fetch_all catches this so the other eleven sources still build."""
+    monkeypatch.delenv(config.WZDX_KEY_ENV, raising=False)
+    with pytest.raises(RuntimeError, match="MassDOT"):
+        fetch.fetch_workzones()
+
+
+def test_workzones_authenticate_with_the_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(config.WZDX_KEY_ENV, "test-key")
+    feed = {"features": [{"type": "Feature", "geometry": None, "properties": {"id": "wz1"}}]}
+    seen: dict[str, Any] = {}
+
+    def fake_urlopen(req: Any, *_a: Any, **_k: Any) -> _FakeResponse:
+        seen["auth"] = req.get_header("Authorization")
+        return _FakeResponse(json.dumps(feed).encode())
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    fc = fetch.fetch_workzones()
+    assert len(fc["features"]) == 1
+    assert seen["auth"] == "Bearer test-key"
+
+
+def test_mapc_labels_each_layer_with_the_class_it_means(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The regional network arrives as separate layers; the class lives in the
+    layer id, so it has to be attached before the geometries are merged."""
+    def fake_query(url: str, *_a: Any, **_k: Any) -> dict[str, Any]:
+        return {
+            "type": "FeatureCollection",
+            "features": [{"type": "Feature", "geometry": None, "properties": {}}],
+        }
+
+    monkeypatch.setattr(fetch, "arcgis_query", fake_query)
+    fc = fetch.fetch_mapc()
+    classes = {f["properties"]["mapc_cls"] for f in fc["features"]}
+    assert classes == set(config.MAPC_ALLTRAILS_LAYERS.values())
+    assert len(fc["features"]) == len(config.MAPC_ALLTRAILS_LAYERS)
+
+
+def test_fetch_all_skips_what_is_already_cached(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A refresh shouldn't re-download twelve sources to rebuild one."""
+    monkeypatch.setattr(config, "RAW_DIR", tmp_path)
+    (tmp_path / "pois.geojson").write_text('{"type":"FeatureCollection","features":[]}')
+    calls: list[str] = []
+
+    def boom(*_a: Any, **_k: Any) -> bytes:
+        calls.append("fetched")
+        raise OSError("should not be called for cached sources")
+
+    monkeypatch.setattr(fetch, "_get", boom)
+    monkeypatch.setattr(fetch, "arcgis_query", lambda *_a, **_k: {"features": []})
+    monkeypatch.setattr(fetch, "fetch_pois", lambda: {"features": []})
+    monkeypatch.setattr(fetch, "fetch_towns", lambda: {"features": []})
+    monkeypatch.setattr(fetch, "fetch_population", lambda: {"features": []})
+    monkeypatch.setattr(fetch, "fetch_workzones", lambda: {"features": []})
+    monkeypatch.setattr(fetch, "fetch_cambridge_permits", lambda: {"features": []})
+    monkeypatch.setattr(fetch, "fetch_mapc", lambda: {"features": []})
+    fetch.fetch_all(refresh=False)
+    out = capsys.readouterr().out
+    assert "pois.geojson: cached, skipping" in out
+
+
+def test_fetch_all_reports_failures_instead_of_dying(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """One dead endpoint must not cost the other eleven sources."""
+    monkeypatch.setattr(config, "RAW_DIR", tmp_path)
+
+    def half_broken(*_a: Any, **_k: Any) -> dict[str, Any]:
+        raise RuntimeError("endpoint down")
+
+    monkeypatch.setattr(fetch, "arcgis_query", half_broken)
+    empty = b'{"type":"FeatureCollection","features":[]}'
+    monkeypatch.setattr(fetch, "_get", lambda *_a, **_k: empty)
+    for name in ("fetch_pois", "fetch_towns", "fetch_population", "fetch_workzones",
+                 "fetch_cambridge_permits", "fetch_mapc"):
+        monkeypatch.setattr(fetch, name, lambda: {"type": "FeatureCollection", "features": []})
+    fetch.fetch_all(refresh=True)
+    err = capsys.readouterr().err
+    assert "FAILED" in err
+    # and the sources that did work were still written
+    assert (tmp_path / "pois.geojson").exists()

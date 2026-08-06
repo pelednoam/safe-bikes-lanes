@@ -40,6 +40,10 @@ jobs:
         # reads data/graph.pkl, writes web/data/priorities.{geojson,csv}, which
         # publish-data.sh tars into the release asset the app extracts
         run: python priorities.py
+      - name: Build the per-city pages
+        working-directory: pipeline
+        # reads the ranking, writes web/data/cities/*.json and web/<slug>/
+        run: python city_pages.py Somerville
       - name: Cache aerial + terrain tiles
         uses: actions/cache@v4
         with:

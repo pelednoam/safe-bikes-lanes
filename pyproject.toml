@@ -36,9 +36,10 @@ omit = [
     "pipeline/aerial.py",
 ]
 # Ratchet, not a target: raise it when the number rises, never lower it to pass.
-# build_graph's build() is the floor here — it needs osmnx, the network and a
-# real extract, so its 24% is the honest cost of not faking a graph build.
-fail_under = 65
+# build() and export() now run whole in tests/test_build_end_to_end.py against a
+# six-node network with OSM and the elevation service stubbed, which is what
+# took this from 67% to 87%.
+fail_under = 85
 exclude_also = [
     "if __name__ == .__main__.:",
     "if TYPE_CHECKING:",

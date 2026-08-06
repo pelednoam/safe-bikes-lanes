@@ -56,10 +56,21 @@ jobs:
       - name: Assemble site
         run: |
           mkdir _site
-          cp web/index.html web/*.js _site/
+          cp web/index.html web/*.js web/*.css _site/
           cp web/manifest.json web/icon-192.png web/icon-512.png _site/
           cp -r web/fonts _site/fonts
           cp -r web/data _site/data
+          # One directory per city, so the URL is /somerville rather than a
+          # query string. Driven by the generator's own index, so adding a city
+          # to the pipeline is the only step needed to publish its page.
+          if [ -f web/data/cities/index.json ]; then
+            for slug in $(python3 -c "import json,sys; print(' '.join(c['slug'] for c in json.load(open('web/data/cities/index.json'))))"); do
+              if [ -d "web/$slug" ]; then
+                cp -r "web/$slug" "_site/$slug"
+                echo "  city page: /$slug"
+              fi
+            done
+          fi
       - name: Mirror latest APK + version manifest
         run: |
           mkdir -p _site/app

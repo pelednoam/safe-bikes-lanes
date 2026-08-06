@@ -3,10 +3,11 @@
 // real code path (IndexedDB) rather than a mock of it.
 import "fake-indexeddb/auto";
 
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   addHazard,
+  downscalePhoto,
   buildReportText,
   getHazardPhoto,
   HAZARD_LABELS,
@@ -104,5 +105,56 @@ describe("the text a rider sends onward", () => {
     const text = buildReportText(bare);
     expect(text).not.toMatch(/\.\s+\./);
     expect(text).toContain(HAZARD_LABELS["surface"]);
+  });
+});
+
+describe("shrinking a photo before it's stored", () => {
+  const bigFile = new Blob(["x".repeat(2000)], { type: "image/jpeg" });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function stubCanvas(opts: { context?: boolean; blob?: boolean } = {}): void {
+    const { context = true, blob = true } = opts;
+    const ctx = { drawImage: () => undefined };
+    const canvas = {
+      width: 0,
+      height: 0,
+      getContext: () => (context ? ctx : null),
+      toBlob: (cb: (b: Blob | null) => void) =>
+        cb(blob ? new Blob(["small"], { type: "image/jpeg" }) : null),
+    };
+    vi.stubGlobal("document", { createElement: () => canvas });
+  }
+
+  it("shrinks an oversized photo", async () => {
+    // hazard photos go to IndexedDB on a phone; a 12 MP original would fill it
+    vi.stubGlobal("createImageBitmap", async () => ({ width: 4000, height: 3000 }));
+    stubCanvas();
+    const out = await downscalePhoto(bigFile, 1280);
+    expect(await out.text()).toBe("small");
+  });
+
+  it("leaves a photo that's already small alone", async () => {
+    vi.stubGlobal("createImageBitmap", async () => ({ width: 800, height: 600 }));
+    stubCanvas();
+    const out = await downscalePhoto(bigFile, 1280);
+    expect(out).toBe(bigFile); // the same object: no needless re-encode
+  });
+
+  it("keeps the original rather than losing the report", async () => {
+    // a hazard report with no photo is worth more than no report at all
+    vi.stubGlobal("createImageBitmap", async () => {
+      throw new Error("not an image");
+    });
+    expect(await downscalePhoto(bigFile, 1280)).toBe(bigFile);
+
+    vi.stubGlobal("createImageBitmap", async () => ({ width: 4000, height: 3000 }));
+    stubCanvas({ context: false });
+    expect(await downscalePhoto(bigFile, 1280)).toBe(bigFile);
+
+    stubCanvas({ blob: false });
+    expect(await downscalePhoto(bigFile, 1280)).toBe(bigFile);
   });
 });

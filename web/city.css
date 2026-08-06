@@ -1,0 +1,107 @@
+/* One city's severance. Shares the app's type and safety hues, but it is a
+   reading page rather than a tool: the map is the argument, the panel is the
+   caption. */
+@font-face {
+  font-family: "Barlow"; font-style: normal; font-weight: 400; font-display: swap;
+  src: url("fonts/Barlow-400.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Barlow"; font-style: normal; font-weight: 600; font-display: swap;
+  src: url("fonts/Barlow-600.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Barlow"; font-style: normal; font-weight: 700; font-display: swap;
+  src: url("fonts/Barlow-700.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Barlow Semi Condensed"; font-style: normal; font-weight: 700; font-display: swap;
+  src: url("fonts/BarlowSemiCondensed-700.woff2") format("woff2");
+}
+
+:root {
+  --ink: #111619;
+  --muted: #5c6a72;
+  --line: rgba(17, 22, 25, 0.11);
+  --surface: rgba(255, 255, 255, 0.94);
+  --field: rgba(17, 22, 25, 0.05);
+  --accent: #12833f;
+  --connected: #1a9850;
+  --barrier: #d73027;
+  --r-sm: 9px;
+  --r-md: 13px;
+  --shadow: 0 8px 30px rgba(17, 22, 25, 0.16);
+  --font: "Barlow", system-ui, -apple-system, sans-serif;
+  --font-cond: "Barlow Semi Condensed", var(--font);
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { font-family: var(--font); color: var(--ink); background: #eef1f3; }
+#map { position: absolute; inset: 0; }
+
+#panel {
+  position: absolute; top: 14px; left: 14px; z-index: 5; width: 372px;
+  max-height: calc(100% - 28px); overflow-y: auto; overscroll-behavior: contain;
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--r-md); box-shadow: var(--shadow); padding: 16px;
+  -webkit-backdrop-filter: blur(20px) saturate(1.5); backdrop-filter: blur(20px) saturate(1.5);
+}
+
+h1 { font-family: var(--font-cond); font-size: 30px; line-height: 1.02; margin: 0 0 2px;
+     letter-spacing: -0.02em; }
+.kicker { font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+          color: var(--accent); margin: 0 0 6px; }
+.lede { font-size: 14.5px; line-height: 1.5; margin: 0 0 14px; }
+.lede b { font-variant-numeric: tabular-nums; }
+
+.figures { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px; }
+.figure { background: var(--field); border-radius: var(--r-sm); padding: 9px 10px; }
+.figure .n { font-family: var(--font-cond); font-size: 23px; font-weight: 700; line-height: 1;
+             font-variant-numeric: tabular-nums; }
+.figure .l { font-size: 11.5px; color: var(--muted); line-height: 1.3; margin-top: 3px; }
+.figure.bad .n { color: var(--barrier); }
+.figure.good .n { color: var(--connected); }
+
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted);
+     margin: 16px 0 7px; }
+
+.layers { display: flex; flex-direction: column; gap: 5px; }
+.layer { display: flex; align-items: center; gap: 8px; font-size: 13.5px; cursor: pointer; }
+.layer input { width: 16px; height: 16px; accent-color: var(--accent); }
+.swatch { width: 13px; height: 13px; border-radius: 3px; flex: none; }
+.swatch.line { height: 4px; border-radius: 2px; }
+
+#projects { display: flex; flex-direction: column; gap: 5px; }
+.project {
+  display: flex; gap: 9px; align-items: baseline; padding: 7px 9px; cursor: pointer;
+  border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--field);
+  font-size: 13px; line-height: 1.35;
+}
+.project:hover { border-color: var(--accent); }
+/* a visible ring, not just a border tint: the list is keyboard-navigable and a
+   colour change alone is easy to lose */
+.project:focus-visible { border-color: var(--accent); outline: 2px solid var(--accent);
+                         outline-offset: 2px; }
+.layer input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.project.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.project .rank { font-family: var(--font-cond); font-weight: 700; font-size: 15px;
+                 color: var(--accent); min-width: 17px; }
+.project .why { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.badge { display: inline-block; padding: 0 6px; border-radius: 999px; background: #e8f3ec;
+         color: var(--accent); font-size: 10.5px; font-weight: 700; margin-left: 5px; }
+
+.note { font-size: 11.5px; color: var(--muted); line-height: 1.45; margin-top: 14px;
+        border-top: 1px solid var(--line); padding-top: 10px; }
+.note a { color: var(--accent); }
+details.limits summary { cursor: pointer; font-weight: 600; }
+details.limits li { margin-bottom: 3px; }
+
+.maplibregl-popup-content { font-family: var(--font); font-size: 13px; padding: 9px 11px; }
+
+@media (max-width: 760px) {
+  #panel {
+    top: auto; bottom: 0; left: 0; width: 100%; max-height: 58%;
+    border-radius: var(--r-md) var(--r-md) 0 0; padding: 14px 14px 20px;
+  }
+  h1 { font-size: 25px; }
+}

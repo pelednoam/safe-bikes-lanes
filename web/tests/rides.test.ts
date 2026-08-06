@@ -1,7 +1,16 @@
 // Tests for ride recording and history stats.
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { RideRecorder, rideTotals, stashInProgress, takeInProgress } from "../src/rides.js";
+import {
+  clearRides,
+  deleteRide,
+  loadRides,
+  RideRecorder,
+  rideTotals,
+  saveRide,
+  stashInProgress,
+  takeInProgress,
+} from "../src/rides.js";
 import type { RideSummary } from "../src/rides.js";
 
 const LAT = 42.38;
@@ -236,5 +245,51 @@ describe("a ride interrupted by the app going away", () => {
     });
     stashInProgress(null);
     expect(takeInProgress()).toBeNull();
+  });
+});
+
+describe("ride history storage", () => {
+  beforeEach(() => {
+    (globalThis as unknown as { localStorage: MemoryStorage }).localStorage =
+      new MemoryStorage();
+  });
+
+  const mkRide = (id: string, meters = 1000): RideSummary => ({
+    id,
+    startedAt: `2026-08-0${id}T10:00:00.000Z`,
+    meters,
+    durationS: 600,
+    movingS: 500,
+    byClass: {},
+    pctProtected: 50,
+    pctQuiet: 20,
+    profile: "young_kids",
+    polyline: [],
+  });
+
+  it("keeps newest first and survives a corrupt store", () => {
+    saveRide(mkRide("1"));
+    saveRide(mkRide("2"));
+    expect(loadRides().map((r) => r.id)).toEqual(["2", "1"]);
+    localStorage.setItem("rideHistory", "{not json");
+    // a broken store loses history rather than breaking the app on launch
+    expect(loadRides()).toEqual([]);
+  });
+
+  it("deletes one ride and clears them all", () => {
+    saveRide(mkRide("1"));
+    saveRide(mkRide("2"));
+    expect(deleteRide("1").map((r) => r.id)).toEqual(["2"]);
+    clearRides();
+    expect(loadRides()).toEqual([]);
+    // deleting something that isn't there is not an error
+    expect(deleteRide("nope")).toEqual([]);
+  });
+
+  it("caps the history so a year of riding can't fill storage", () => {
+    for (let i = 0; i < 250; i++) saveRide(mkRide(String(i)));
+    const kept = loadRides();
+    expect(kept.length).toBeLessThanOrEqual(200);
+    expect(kept[0]?.id).toBe("249"); // the newest survives the cap
   });
 });

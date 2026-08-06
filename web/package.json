@@ -11,7 +11,8 @@
     "app:sync": "npm run build:app && npx cap sync android",
     "e2e": "playwright test",
     "e2e:native": "playwright test -c playwright.native.config.ts",
-    "e2e:ride": "playwright test -c playwright.ride.config.ts"
+    "e2e:ride": "playwright test -c playwright.ride.config.ts",
+    "coverage:app": "playwright test --config=playwright.coverage.config.ts --reporter=list"
   },
   "devDependencies": {
     "@capacitor/cli": "^8.4.2",

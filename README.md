@@ -146,6 +146,18 @@ Run it after a graph build: `cd pipeline && python priorities.py` (about 12
 minutes; it evaluates every candidate rather than a screened subset). See
 [docs/where-to-build.md](docs/where-to-build.md) for what it does not do.
 
+### Per-city pages
+
+`pipeline/city_pages.py` writes one page per city — `/somerville`, and any other
+town passed on the command line. It shows that city alone: the streets a child
+can use coloured by which connected piece they belong to, the streets that cut
+those pieces apart, the candidate projects, and who can't reach a school or park
+today. The lede is whichever is true of that city — Somerville's safe network is
+mostly one piece, so its page says so and points at the 7,225 residents still
+out of reach rather than claiming severance it doesn't have.
+
+Run it after `priorities.py`: `cd pipeline && python city_pages.py Somerville`.
+
 ## Data licenses
 
 OpenStreetMap © OpenStreetMap contributors (ODbL). Cambridge GIS, MassDOT/

@@ -11,14 +11,19 @@ export default defineConfig({
       // representative browser session executes of it is measurable with
       // page.coverage (about half; the full suites exercise more).
       include: ["src/**/*.ts"],
-      exclude: ["src/app.ts", "src/types.ts"],
+      // Page entry points, not modules: both run on import (they build a map
+      // and fetch data), so a unit test can't import them without a browser.
+      // app.ts is covered by the browser/ride/native suites, city.ts by
+      // tests-e2e/city.spec.ts. Counting them here would report a number that
+      // means nothing either way — npm run coverage:app measures app.js for real.
+      exclude: ["src/app.ts", "src/city.ts", "src/types.ts"],
       // Set just under what the suite achieves today, so this ratchets rather
       // than blocks: raise them when the number rises, never lower them to pass.
       thresholds: {
-        statements: 78,
-        branches: 68,
-        functions: 74,
-        lines: 82,
+        statements: 88,
+        branches: 74,
+        functions: 87,
+        lines: 92,
       },
     },
   },

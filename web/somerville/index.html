@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Somerville — where to build for family biking</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Where new bike infrastructure would do the most good in Somerville: the streets a child can actually use, the barriers that cut them apart, and the projects that would join them up.">
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<link rel="stylesheet" href="../city.css">
+<script>window.__CITY__ = "somerville";</script>
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+</head>
+<body>
+<div id="map"></div>
+<main id="panel">
+  <p class="kicker">Where to build</p>
+  <h1 id="city-name">Somerville</h1>
+  <p class="lede" id="lede"></p>
+  <div class="figures" id="figures"></div>
+
+  <h2>Layers</h2>
+  <div class="layers">
+    <label class="layer"><input type="checkbox" id="show-islands" checked>
+      <span class="swatch line" style="background:#1a9850"></span>
+      Streets a child can use, coloured by which piece they belong to</label>
+    <label class="layer"><input type="checkbox" id="show-barriers" checked>
+      <span class="swatch line" style="background:#d73027"></span>
+      The streets that cut those pieces apart</label>
+    <label class="layer"><input type="checkbox" id="show-projects" checked>
+      <span class="swatch line" style="background:#111619"></span>
+      Candidate projects</label>
+    <label class="layer"><input type="checkbox" id="show-access">
+      <span class="swatch" style="background:#d73027;opacity:.5"></span>
+      Who can't reach a school or park</label>
+  </div>
+
+  <h2>What to build first</h2>
+  <div id="projects"></div>
+
+  <div class="note">
+    <details class="limits">
+      <summary>How this was worked out, and what it doesn't mean</summary>
+      <p>Every street is given a protection class from OpenStreetMap plus the
+      city, MassDOT and MAPC facility layers. Keep only what a child can ride —
+      paths, separated lanes, buffered lanes and quiet streets — and what's left
+      falls into disconnected pieces. Candidate projects are the hostile streets
+      that would join two of them, scored on the network they'd connect, how
+      much closer they'd bring people to schools, playgrounds and libraries,
+      recorded bike crashes, and residents who'd gain a safe route at all.</p>
+      <ul id="limits-list"></ul>
+    </details>
+    <p>Data built <span id="built">—</span>. Part of the
+    <a href="../">family bike route planner</a>.</p>
+  </div>
+</main>
+<script type="module" src="../city.js"></script>
+</body>
+</html>
