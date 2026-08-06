@@ -88,7 +88,12 @@ test("the position dot is snapped onto the route, not raw GPS", async ({ page, c
   // report a fix ~14 m off the route (typical bike GPS wander)
   const rawLat = target[1] + 14 / 110_540;
   await context.setGeolocation({ longitude: target[0], latitude: rawLat });
-  await page.waitForTimeout(2000);
+  // wait for the dot to exist rather than for two seconds: the runner is four
+  // times slower than a dev machine, and a fixed sleep read it before the first
+  // fix had been drawn — a null dot, not a wrongly placed one
+  await expect
+    .poll(async () => (await dotLngLat(page)) !== null, { timeout: 30_000 })
+    .toBe(true);
 
   const drawn = await dotLngLat(page);
   expect(drawn).not.toBeNull();
