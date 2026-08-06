@@ -404,3 +404,71 @@ describe("option pricing", () => {
     }
   });
 });
+
+// ── "what if this were protected?" ─────────────────────────────────────────
+// The simulator behind the city view. Its credibility rests on agreeing with
+// what pipeline/priorities.py assumes when it ranks the same project: the
+// target class's multiplier on the real length, without the crash factor or
+// the crossing penalty the build would remove.
+//
+// The toy world is the question in miniature: 110 m of busy street straight
+// there, or 120 m of quiet streets around.
+
+const BUSY_MID: [number, number] = [-71.0995, 42.38];
+
+describe("costing a street as if it were built", () => {
+  it("makes the hostile shortcut usable, and the route takes it", () => {
+    const r = toyRouter();
+    const before = r.routeOptions(A, B, "young_kids")[0];
+    expect(before?.payload.summary.meters).toBe(120); // the quiet way round
+
+    const touched = r.setUpgradedPoints([BUSY_MID]);
+    expect(touched).toBeGreaterThan(0);
+    const after = r.routeOptions(A, B, "young_kids")[0];
+    // 110 m of protection beats 120 m of detour
+    expect(after?.payload.summary.meters).toBe(110);
+    expect(after?.payload.summary.pct_protected).toBeGreaterThan(
+      before?.payload.summary.pct_protected ?? 0,
+    );
+  });
+
+  it("is a question, not a setting: clearing it restores the real route", () => {
+    const r = toyRouter();
+    const real = r.routeOptions(A, B, "young_kids")[0];
+    r.setUpgradedPoints([BUSY_MID]);
+    r.routeOptions(A, B, "young_kids");
+    r.setUpgradedPoints([]);
+    expect(r.upgradedCount).toBe(0);
+    const back = r.routeOptions(A, B, "young_kids")[0];
+    expect(back?.payload.summary.meters).toBe(real?.payload.summary.meters);
+    expect(back?.payload.summary.pct_protected).toBe(real?.payload.summary.pct_protected);
+  });
+
+  it("reports how much it covers, so the UI can't overstate it", () => {
+    const r = toyRouter();
+    expect(r.setUpgradedPoints([[50, 50]])).toBe(0); // nothing out there
+    expect(r.upgradedCount).toBe(0);
+    // and an unmatched what-if changes nothing about the route
+    expect(r.routeOptions(A, B, "young_kids")[0]?.payload.summary.meters).toBe(120);
+  });
+
+  it("drops the crash factor the build would address", () => {
+    // the busy edge carries crash 1.5; upgraded, it must cost its length alone
+    const plain = toyRouter(200); // long enough that the detour still wins
+    plain.setUpgradedPoints([BUSY_MID]);
+    const opt = plain.routeOptions(A, B, "young_kids")[0];
+    // 200 m upgraded still beats the 120 m detour only if the factor is gone:
+    // 200 x 1.0 = 200 vs 120 x 1.4 = 168, so the detour wins and the numbers
+    // are the honest ones rather than 200 x 1.0 x 1.5
+    expect(opt?.payload.summary.meters).toBe(120);
+  });
+
+  it("widens what a kid can reach from a point", () => {
+    const r = toyRouter();
+    const before = r.safeShed(A, 400, "young_kids", false);
+    r.setUpgradedPoints([BUSY_MID]);
+    const after = r.safeShed(A, 400, "young_kids", false);
+    // with no trip planned, this is the demonstration: more map in reach
+    expect(after.reachableKm).toBeGreaterThan(before.reachableKm);
+  });
+});

@@ -4866,6 +4866,9 @@ function focusProject(pid: string): void {
   }
   const box = projectBounds.get(pid);
   if (box) map.fitBounds(box, { padding: 90, maxZoom: 16.5, duration: 600 });
+  el<HTMLDivElement>("whatif").style.display = "block";
+  if (whatIfPid !== null && whatIfPid !== pid) clearWhatIf();
+  else el<HTMLDivElement>("whatif-result").textContent = "";
   renderBuildList();
 }
 
@@ -4884,6 +4887,102 @@ function repaintProjects(scored: Map<string, number>): void {
     if (score !== undefined) f.properties["score"] = score;
   }
   (map.getSource("build") as GeoJSONSource).setData(projectFC);
+}
+
+// ── what if this were protected? ──────────────────────────────────────────
+// The ranked list asserts a project is worth building. This lets the reader
+// check it against their own trip, which is the difference between a number
+// and an argument.
+
+let whatIfPid: string | null = null;
+
+function whatIfPoints(pid: string): [number, number][] {
+  const feature = projectFC?.features.find(
+    (f) => (f.properties as { pid?: string } | null)?.pid === pid,
+  );
+  if (!feature) return [];
+  const parts: [number, number][] =
+    feature.geometry.type === "MultiLineString"
+      ? (feature.geometry.coordinates.flat() as [number, number][])
+      : feature.geometry.type === "LineString"
+        ? (feature.geometry.coordinates as [number, number][])
+        : [];
+  return parts;
+}
+
+function clearWhatIf(): void {
+  whatIfPid = null;
+  router?.setUpgradedPoints([]);
+  el<HTMLButtonElement>("whatif-clear").style.display = "none";
+  el<HTMLDivElement>("whatif-result").textContent = "";
+  void requestRoute();
+}
+
+async function runWhatIf(pid: string): Promise<void> {
+  const out = el<HTMLDivElement>("whatif-result");
+  const points = whatIfPoints(pid);
+  if (points.length === 0) {
+    out.textContent = "couldn't find that project's shape";
+    return;
+  }
+  if (!start || !end) {
+    // no trip planned: answer with reach instead, which needs only one point
+    const from = start ?? end;
+    if (!router || !from) {
+      out.textContent = "plan a trip, or set a start, and ask again";
+      return;
+    }
+    const at = from.getLngLat();
+    const budget = 2500;
+    const before = router.safeShed([at.lng, at.lat], budget, profileId, preferFlat);
+    router.setUpgradedPoints(points);
+    const after = router.safeShed([at.lng, at.lat], budget, profileId, preferFlat);
+    whatIfPid = pid;
+    el<HTMLButtonElement>("whatif-clear").style.display = "";
+    const gain = Math.round((after.reachableKm - before.reachableKm) * 10) / 10;
+    out.textContent =
+      gain > 0
+        ? `From your start, ${gain} km more of kid-safe street comes into reach ` +
+          `(${before.reachableKm} → ${after.reachableKm} km).`
+        : "From your start, this one doesn't change what's in reach.";
+    return;
+  }
+
+  const chosen = options.find((o) => o.id === selectedId) ?? options[0];
+  if (!chosen || !router) {
+    out.textContent = "plan a trip first, then ask";
+    return;
+  }
+  const was = chosen.payload.summary;
+  const covered = router.setUpgradedPoints(points);
+  whatIfPid = pid;
+  el<HTMLButtonElement>("whatif-clear").style.display = "";
+  await requestRoute();
+  const now = (options.find((o) => o.id === selectedId) ?? options[0])?.payload.summary;
+  if (!now) {
+    out.textContent = "couldn't re-plan with that built";
+    return;
+  }
+  const dKm = Math.round((now.meters - was.meters) / 100) / 10;
+  const dProt = now.pct_protected - was.pct_protected;
+  const parts: string[] = [];
+  if (dProt !== 0) parts.push(`${dProt > 0 ? "+" : ""}${dProt}% protected`);
+  if (Math.abs(dKm) >= 0.1) parts.push(`${dKm > 0 ? "+" : ""}${dKm} km`);
+  out.innerHTML = "";
+  const line = document.createElement("b");
+  line.textContent =
+    parts.length > 0
+      ? `Your trip: ${parts.join(", ")}.`
+      : "Your trip doesn't change — this project isn't on your way.";
+  out.appendChild(line);
+  // never let the phrasing imply more was modelled than actually matched
+  out.appendChild(
+    document.createTextNode(
+      ` Modelled as ${covered} rebuilt segment${covered === 1 ? "" : "s"}, separated,` +
+        " with its crash history and crossing penalty removed — the same" +
+        " assumption the ranking uses.",
+    ),
+  );
 }
 
 function renderBuildList(): void {
@@ -5115,6 +5214,84 @@ for (const [checkbox, layer] of [
     }
   });
 }
+
+/** One project, on one page, for a meeting.
+ *
+ * Deliberately not a screenshot of the panel: it has to stand alone once it is
+ * printed, so it carries the numbers, where they came from, and what they do
+ * not mean. A page a city might hand round is exactly where a model's caveats
+ * are most likely to get lost. */
+function printProject(pid: string): void {
+  const p = projects.find((x) => x.pid === pid);
+  if (!p) return;
+  const meta = priorityMeta;
+  const esc = (t: string): string =>
+    t.replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" })[c] ?? c);
+  const headcount = meta?.population?.is_headcount === true;
+  const rows: [string, string][] = [
+    ["Where", `${esc(p.name)}${p.towns ? ` — ${esc(p.towns)}` : ""}`],
+    ["Length", `${Math.round(p.length_m)} m`],
+    ["Today", esc(p.cls.replace(/_/g, " "))],
+    ["Kind", p.kind === "spot_fix" ? "spot fix (one location)" : "corridor"],
+    ["Kid-safe network it joins", `${(p.join_m / 1000).toFixed(1)} km`],
+  ];
+  if (p.dest_unlocked !== null) {
+    rows.push(["Schools, playgrounds, libraries on it", String(p.dest_unlocked)]);
+  }
+  if (p.pop_gaining !== null && headcount) {
+    rows.push(["Residents gaining a safe route", Math.round(p.pop_gaining).toLocaleString()]);
+  }
+  if (p.crashes !== null) rows.push(["Bike crashes since 2021", String(p.crashes)]);
+  rows.push([
+    "Cost, order of magnitude",
+    `$${Math.round(p.cost_proxy).toLocaleString()} — a sorting proxy, not an estimate`,
+  ]);
+
+  const win = window.open("", "_blank");
+  if (!win) return;
+  win.document.write(
+    `<html><head><title>${esc(p.name)} — where to build</title><style>
+      body{font-family:sans-serif;font-size:13px;max-width:640px;margin:24px auto;line-height:1.5}
+      h1{font-size:20px;margin:0 0 2px} .sub{color:#555;margin:0 0 14px}
+      table{border-collapse:collapse;width:100%;margin-bottom:14px}
+      th,td{border-bottom:1px solid #ddd;padding:5px 6px;text-align:left;vertical-align:top}
+      th{width:44%;font-weight:600;color:#333}
+      .limits{font-size:11.5px;color:#555} .limits li{margin-bottom:3px}
+      .method{font-size:11.5px;color:#555;border-top:1px solid #ddd;padding-top:8px}
+    </style></head><body>
+    <h1>${esc(p.name)}</h1>
+    <p class="sub">${esc(p.summary)}</p>
+    <table>${rows
+      .map(([k, v]) => `<tr><th>${k}</th><td>${v}</td></tr>`)
+      .join("")}</table>
+    <p class="method"><b>How this was measured.</b> Streets a child can't use are
+    cut into candidate projects and each is scored on four things: the kid-safe
+    network it would join, how much closer it brings people to
+    ${meta?.destinations ?? 0} schools, playgrounds and libraries, its recorded
+    bike crashes, and how many residents gain a safe route at all. Population:
+    ${esc(meta?.population?.source ?? "not available")}.
+    ${esc(meta?.access?.budget_note ?? "")}
+    Data built ${esc(meta?.built ?? "—")}; ${meta?.candidates ?? 0} candidates
+    were measured.</p>
+    <p class="limits"><b>What these numbers do not mean:</b></p>
+    <ul class="limits">${(meta?.limits ?? [])
+      .map((l) => `<li>${esc(l)}</li>`)
+      .join("")}</ul>
+    </body></html>`,
+  );
+  win.document.close();
+  win.focus();
+  win.print();
+}
+
+el<HTMLButtonElement>("build-print").addEventListener("click", () => {
+  if (selectedProject !== null) printProject(selectedProject);
+});
+
+el<HTMLButtonElement>("whatif-run").addEventListener("click", () => {
+  if (selectedProject !== null) void runWhatIf(selectedProject);
+});
+el<HTMLButtonElement>("whatif-clear").addEventListener("click", clearWhatIf);
 
 el<HTMLSelectElement>("build-town").addEventListener("change", () => {
   selectedProject = null;

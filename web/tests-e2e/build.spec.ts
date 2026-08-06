@@ -384,3 +384,81 @@ test("spot fixes are drawn as points and read as one location, not a street", as
   await expect(page.locator(".maplibregl-marker:not(.opt-chip)")).toHaveCount(0);
   await expect(page.locator(".build-row.selected")).toHaveCount(1);
 });
+
+test("what-if re-costs your own trip, and undoes cleanly", async ({ page }) => {
+  // The ranked list asserts a project is worth building; this is how a reader
+  // checks that against a trip they actually take.
+  await page.goto("/#s=-71.122258,42.396748&e=-71.086705,42.362552&m=young_kids");
+  await page.waitForFunction(() => window._map !== undefined && window._map.loaded(), null, {
+    timeout: 45_000,
+  });
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
+  const distanceBefore = (await page.locator("#s-dist").textContent()) ?? "";
+  const protectedBefore = (await page.locator("#s-prot").textContent()) ?? "";
+
+  await expect(page.locator("#build-box")).toBeVisible({ timeout: 30_000 });
+  await page.locator("#build-box > summary").click();
+  await expect(page.locator(".build-row").first()).toBeVisible({ timeout: 30_000 });
+  await page.locator(".build-row").first().click();
+  await expect(page.locator("#whatif")).toBeVisible();
+
+  await page.locator("#whatif-run").click();
+  await expect(page.locator("#whatif-result")).not.toBeEmpty({ timeout: 30_000 });
+  const answer = (await page.locator("#whatif-result").textContent()) ?? "";
+  // it always says how much it modelled, so the phrasing can't imply more
+  expect(answer).toMatch(/rebuilt segment/);
+  expect(answer).toMatch(/same assumption the ranking uses/);
+  // and it either moved the trip or said plainly that it didn't
+  expect(answer).toMatch(/protected|km|doesn't change/);
+
+  // undo restores the real trip: this is a question, not a setting
+  await page.locator("#whatif-clear").click();
+  await expect.poll(async () => page.locator("#s-dist").textContent(), { timeout: 30_000 })
+    .toBe(distanceBefore);
+  expect(await page.locator("#s-prot").textContent()).toBe(protectedBefore);
+  await expect(page.locator("#whatif-clear")).toBeHidden();
+});
+
+test("with no trip planned, what-if answers with reach instead", async ({ page }) => {
+  await page.goto("/#c=-71.105,42.383,13");
+  await page.waitForFunction(() => window._map !== undefined && window._map.loaded(), null, {
+    timeout: 45_000,
+  });
+  await expect(page.locator("#build-box")).toBeVisible({ timeout: 30_000 });
+  await page.locator("#build-box > summary").click();
+  await expect(page.locator(".build-row").first()).toBeVisible({ timeout: 30_000 });
+  await page.locator(".build-row").first().click();
+  await page.locator("#whatif-run").click();
+  // no start and no destination: say what's missing rather than nothing
+  await expect(page.locator("#whatif-result")).toContainText(/plan a trip|set a start|in reach/i, {
+    timeout: 30_000,
+  });
+});
+
+test("the one-pager stands alone: numbers, provenance, and caveats", async ({ page, context }) => {
+  // A page a city hands round is exactly where a model's caveats get lost, so
+  // they have to be printed on it rather than left behind in the app.
+  await openBuild(page);
+  await expect(page.locator(".build-row").first()).toBeVisible({ timeout: 20_000 });
+  await page.locator(".build-row").first().click();
+
+  const opened = context.waitForEvent("page", { timeout: 30_000 });
+  await page.locator("#build-print").click();
+  const sheet = await opened;
+  await sheet.waitForLoadState("domcontentloaded");
+  const text = (await sheet.locator("body").textContent()) ?? "";
+
+  // what it is and what it would do
+  expect(text).toMatch(/Kid-safe network it joins/);
+  expect(text).toMatch(/\d+ m/);
+  // where the numbers came from
+  expect(text).toMatch(/How this was measured/);
+  expect(text).toMatch(/Census|street length/);
+  expect(text).toMatch(/Data built \d{4}-\d{2}-\d{2}/);
+  // and what they don't mean — the part most likely to be dropped
+  expect(text).toMatch(/What these numbers do not mean/);
+  expect(text).toMatch(/model output|not measurement/i);
+  // the cost is never presented as an estimate
+  expect(text).toMatch(/sorting proxy, not an estimate/);
+  await sheet.close();
+});

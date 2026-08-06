@@ -371,6 +371,11 @@
   .build-where { font-weight:600; }
   .build-why { color:var(--muted); font-size:12.5px; margin-top:2px; line-height:1.35; }
   .build-alt { color:var(--muted); font-size:12px; }
+  #whatif { margin-top:9px; border-top:1px solid var(--line); padding-top:9px; }
+  #whatif .row { gap:8px; }
+  #whatif-run { flex:1; margin:0; }
+  #whatif-result { margin-top:6px; }
+  #whatif-result b { color:var(--ink); }
   .build-badge {
     display:inline-block; margin-right:6px; padding:1px 7px; border-radius:var(--r-pill);
     background:var(--accent-soft); color:var(--accent); font-size:11px; font-weight:700;
@@ -650,6 +655,16 @@
       <button id="wt-reset" style="margin:0;padding:2px 8px">reset</button></div>
     </details>
     <div id="build-list"></div>
+    <div id="whatif" style="display:none">
+      <div class="row">
+        <button id="whatif-run">🔧 What if it were protected?</button>
+        <button id="whatif-clear" style="display:none">undo</button>
+      </div>
+      <div class="row">
+        <button id="build-print" title="One page for this project: the numbers, where they came from, and what they don't mean">🖨 One-pager</button>
+      </div>
+      <div id="whatif-result" class="hint"></div>
+    </div>
     <div class="hint" id="build-method"></div>
   </details>
 

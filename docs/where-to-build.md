@@ -50,10 +50,42 @@ out, so an earlier 45 m cut straight through the cluster. Consequences:
   ranking) and as points in `severance.geojson`, because 14 m of line cannot be
   seen or tapped at the zoom a city looks at.
 
+## Checking the ranking against your own trip
+
+The list asserts a project is worth building; **What if it were protected?**
+lets a reader test that. It re-costs the project's edges in the in-browser
+router as `separated` — the target class's multiplier on the real length,
+without the crash factor or the crossing penalty, which is exactly what the
+offline ranking assumes — and re-plans the trip on screen.
+
+- With a trip planned it reports the change in protected share and distance,
+  and says plainly when a project isn't on your way rather than implying a
+  benefit.
+- With no trip it answers with reach instead: how much more kid-safe street
+  comes within a 2.5 km perceived-distance ride of your start.
+- It always states how many segments it actually matched, so the phrasing can't
+  imply more was modelled than was.
+- It's a question, not a setting: **undo** restores the real route, and
+  selecting a different project clears the previous answer.
+
+One subtlety worth keeping: the first version changed only the *cost*, so the
+router happily rode the rebuilt street and then reported the trip as 0%
+protected. Everything that describes a route now reads the presented class, so
+the route, the percentage, the ribbon and the grade agree.
+
+## The one-pager
+
+**🖨 One-pager** prints a single project: what it is, what it would join, who
+gains, its crash history, and an order-of-magnitude cost — followed by how it
+was all measured and the same limits the About dialog lists. It deliberately
+isn't a screenshot of the panel: a page that gets handed round a meeting is
+exactly where a model's caveats go missing, so they're printed on it.
+
 ## Not built
 
-- **A "what if we built this" simulator.** Phase 4.
-- **Printable per-project one-pagers.** Phase 4; the CSV export works.
+- Nothing from the original plan. The remaining ideas are new ones: a
+  benefit-per-dollar sort, project bundling (several corridors as one scheme),
+  and comparing two data builds to show what a year of construction changed.
 
 ## Known limits of what is built
 

@@ -104,6 +104,9 @@ const HILL_EQUIV_M = 12;
 const STEEP_GRADE = 0.04;
 /** Weight multiplier for edges the user marked as sketchy. */
 const SKETCHY_MULT = 5.0;
+/** How close a what-if point has to be to count that edge as rebuilt. Wider
+ * than a sketchy mark: a project is a whole corridor, not one spot. */
+const UPGRADE_SNAP_M = 30;
 const SKETCHY_SNAP_M = 30;
 /** Weight multiplier for edges inside active construction zones. */
 const CONSTRUCTION_MULT = 4.0;
@@ -197,6 +200,9 @@ export class Router {
   private readonly midY: Float64Array;
   private sketchy = new Set<number>();
   private construction = new Set<number>();
+  /** Edges to cost as if already built, for "what if this were protected?".
+   * Empty in every ordinary route: this is a question, not a setting. */
+  private upgraded = new Set<number>();
   private readonly totalLen: number;
 
   constructor(data: GraphData) {
@@ -247,6 +253,15 @@ export class Router {
         return;
       }
       const cls = this.g.classes[e[3]] ?? "quiet_street";
+      if (this.upgraded.has(i)) {
+        // built: the separated multiplier on its true length, and neither the
+        // crash history nor the crossing penalty the build would remove. The
+        // hill stays — protection doesn't flatten a road.
+        let up = e[2] * profile.mult["separated"];
+        if (preferFlat) up += this.hillPen[i] as number;
+        w[i] = up;
+        return;
+      }
       let mult = profile.mult[cls];
       if (e[9] === 1 && cls === "lane") mult = profile.busyLane;
       if (e[9] === 1 && cls === "buffered") mult = profile.busyBuffered;
@@ -330,6 +345,34 @@ export class Router {
   /** Active construction: penalize edges near work zones / street permits. */
   setConstructionPoints(points: [number, number][]): void {
     this.construction = this.pointsToEdgeSet(points, CONSTRUCTION_SNAP_M);
+  }
+
+  /** The class an edge presents as, honouring an active what-if.
+   *
+   * Everything that describes a route reads this rather than the raw class:
+   * the first version changed only the cost, so the router happily rode the
+   * rebuilt street and then reported the trip as 0% protected. */
+  private classOf(ei: number): ProtectionClass {
+    if (this.upgraded.has(ei)) return "separated";
+    const e = this.g.edges[ei];
+    return (e ? this.g.classes[e[3]] : undefined) ?? "quiet_street";
+  }
+
+  /** Cost these edges as if they had been rebuilt with separation.
+   *
+   * Mirrors what pipeline/priorities.py assumes when it measures a candidate:
+   * the target class's multiplier on the real length, without the crash factor
+   * or the crossing penalty, because those are what the build addresses.
+   * Passing no points clears it.
+   */
+  setUpgradedPoints(points: [number, number][], snapM = UPGRADE_SNAP_M): number {
+    this.upgraded = points.length === 0 ? new Set() : this.pointsToEdgeSet(points, snapM);
+    return this.upgraded.size;
+  }
+
+  /** How many edges the current what-if covers, for the UI to report honestly. */
+  get upgradedCount(): number {
+    return this.upgraded.size;
   }
 
   // -- shortest path & flood fill -------------------------------------------
@@ -492,7 +535,7 @@ export class Router {
       const du = dist[e[0]] as number;
       if (du + (w[i] as number) > budgetM) return;
       reachLen += e[2];
-      const cls = this.g.classes[e[3]] ?? "quiet_street";
+      const cls = this.classOf(i);
       features.push({
         type: "Feature",
         geometry: { type: "LineString", coordinates: this.edgeCoords(i) },
@@ -540,7 +583,7 @@ export class Router {
       const e = this.g.edges[ei];
       if (!e) continue;
       const walked = walkFlags?.[pi] === true;
-      const cls = this.g.classes[e[3]] ?? "quiet_street";
+      const cls = this.classOf(ei);
       const name = this.g.names[e[4]] ?? "";
       const length = e[2];
       total += length;
