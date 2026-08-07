@@ -1,5 +1,5 @@
 import { isNativeApp, isNewerAppVersion, lastNativeSpeechError, nativeSpeak, startDownload, startBackgroundWatcher, stopBackgroundWatcher, webVoiceCount, } from "./native.js";
-import { CLASS_LABELS, FACILITY_CLASSES, fillSegmentPhoto as fillPhotoSlot, GRADE_COLORS, segmentHtml, } from "./segment.js";
+import { CLASS_LABELS, clearPhotoCache, FACILITY_CLASSES, fillSegmentPhoto as fillPhotoSlot, GRADE_COLORS, segmentHtml, } from "./segment.js";
 import { bearingDeg, buildAlerts, buildManeuvers, buildTrack, distM, snapToTrack, sunsetTime, trackBearingAhead, trackSlice, } from "./nav.js";
 import { addHazard, buildReportText, downscalePhoto, getHazardPhoto, HAZARD_LABELS, listHazards, removeHazard, setHazardCategory, } from "./hazards.js";
 import { clearRecent, deletePlace, emojiFor, exportBackup, importBackup, listPlaces, listRecent, pushRecent, savePlace, } from "./places.js";
@@ -930,8 +930,6 @@ function showSummary(option) {
         sunsetBox.style.display = "none";
     }
 }
-/** ~45 m cell cache so hovering along a street reuses one lookup. */
-const segPhotoCache = new Map();
 let segPhotoTimer;
 async function showMapillaryPreview(lon, lat) {
     const d = 0.0005; // ~45 m box
@@ -2900,7 +2898,7 @@ el("mapillary-save").addEventListener("click", () => {
         localStorage.removeItem("mapillaryToken");
     else
         localStorage.setItem("mapillaryToken", token);
-    segPhotoCache.clear();
+    clearPhotoCache(); // the shared lookup holds misses fetched with the old token
     el("mapillary-status").textContent =
         token === "" ? "cleared" : "✓ saved — hover any street";
 });

@@ -45,6 +45,17 @@ export function classGrade(cls) {
         return null;
     return m <= 1.6 ? "A" : m <= 2.4 ? "B" : m <= 4 ? "C" : m <= 8 ? "D" : "F";
 }
+/** Street names come from OpenStreetMap, which anyone can edit, and both pages
+ * render this card through MapLibre's setHTML — i.e. innerHTML. A name of
+ * `<img src=x onerror=...>` would then run script on the page's own origin,
+ * where the rider's saved routes live. Escape anything that came from data. */
+function esc(text) {
+    return text
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+}
 /** The card shown for a street: grade, what it is, what that means for a child,
  * how far they'd detour to avoid it, and whether anyone has crashed there. */
 export function segmentHtml(props, opts = { photo: false }) {
@@ -53,7 +64,7 @@ export function segmentHtml(props, opts = { photo: false }) {
     // rather than something confident and wrong
     const grade = cls !== undefined ? classGrade(cls) : null;
     const known = cls !== undefined && grade !== null;
-    const label = known ? CLASS_LABELS[cls] ?? cls : "type unknown";
+    const label = known ? esc(CLASS_LABELS[cls] ?? cls) : "type unknown";
     const badge = grade !== null
         ? `<span style="background:${GRADE_COLORS[grade]};color:#fff;border-radius:5px;` +
             `padding:0 6px;font-weight:700">${grade}</span> `
@@ -76,7 +87,7 @@ export function segmentHtml(props, opts = { photo: false }) {
     const name = props.name !== undefined && props.name !== null && props.name !== ""
         ? props.name
         : "unnamed";
-    return `${badge}<b>${name}</b><br>${label}${meaning}${stress}${crashes}${unconfirmed}${photoSlot}`;
+    return `${badge}<b>${esc(name)}</b><br>${label}${meaning}${stress}${crashes}${unconfirmed}${photoSlot}`;
 }
 const photoCache = new Map();
 /** How far a street-level photo may be and still be *this* street. Beyond this
@@ -89,7 +100,10 @@ const PHOTO_MAX_M = 60;
 export async function fetchSegmentPhoto(lon, lat, token) {
     if (token === "")
         return { url: null, captured: null };
-    const key = `${Math.round(lon / 0.0005)},${Math.round(lat / 0.0005)}`;
+    // A coarse cell would let a cached photo stand in for a point most of a cell
+    // away, on top of the PHOTO_MAX_M cap — the two errors add up. ~22 m keeps
+    // the total inside a block.
+    const key = `${Math.round(lon / 0.0002)},${Math.round(lat / 0.0002)}`;
     const cached = photoCache.get(key);
     if (cached !== undefined)
         return cached;
@@ -133,6 +147,12 @@ export async function fetchSegmentPhoto(lon, lat, token) {
     photoCache.set(key, result);
     return result;
 }
+/** Forget every looked-up photo. Called when the Mapillary token changes: the
+ * cache holds misses fetched with the old token, and keeping them means a
+ * corrected token shows no photos until the page is reloaded. */
+export function clearPhotoCache() {
+    photoCache.clear();
+}
 /** Fill a card's photo slot once the image resolves, if the card is still up. */
 export function fillSegmentPhoto(slotOwner, lon, lat, token, stillWanted) {
     if (!slotOwner || token === "")
@@ -149,7 +169,7 @@ export function fillSegmentPhoto(slotOwner, lon, lat, token, stillWanted) {
         }
         const when = captured !== null ? ` <small>${new Date(captured).toLocaleDateString()}</small>` : "";
         slot.innerHTML =
-            `<img src="${url}" alt="" style="max-width:210px;border-radius:6px;display:block;` +
+            `<img src="${esc(url)}" alt="" style="max-width:210px;border-radius:6px;display:block;` +
                 `margin-top:4px">📷${when}`;
     });
 }

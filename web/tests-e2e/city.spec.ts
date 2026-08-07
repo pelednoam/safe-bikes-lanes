@@ -42,7 +42,44 @@ test("the figures split the network into connected and stranded", async ({ page 
   const text = (await page.locator("#figures").textContent()) ?? "";
   expect(text).toMatch(/km/);
   expect(text).toMatch(/reach the wider network/);
-  expect(text).toMatch(/stranded in \d+ pockets/);
+  expect(text).toMatch(/cut off from that network, in \d+ pockets/);
+});
+
+test("every number the page states in public is the one in its data", async ({ page }) => {
+  // The claims are about a real city and are meant to be quoted. Matching them
+  // against /\d+/ proves only that something was rendered — these tests used to
+  // pass while the headline count was being reconstructed from a rounded
+  // percentage, a figure the pipeline never computed. Check the page against
+  // its own source instead.
+  await openCity(page);
+  const s = (await (await page.request.get("/data/cities/somerville.json")).json())
+    .stats as Record<string, number>;
+  const N = (n: number): string => n.toLocaleString("en-US");
+
+  const lede = (await page.locator("#lede").textContent()) ?? "";
+  expect(lede).toContain(`About ${N(s["stranded"] as number)} of Somerville's`);
+  expect(lede).toContain(`${N(s["residents"] as number)} residents`);
+  expect(lede).toContain(`${String(s["stranded_pct"])}%`);
+  // the ride length the whole claim assumes, from the data rather than typed
+  // into the page next to a pipeline constant that could drift from it
+  expect(lede).toContain(`${String(s["budget_km"])} km ride`);
+  // the specific regression: the count must not be the percentage multiplied out
+  const recovered = Math.round(
+    ((s["residents"] as number) * (s["stranded_pct"] as number)) / 100,
+  );
+  if (recovered !== s["stranded"]) {
+    expect(lede).not.toContain(`About ${N(recovered)} of`);
+  }
+
+  const figures = (await page.locator("#figures").textContent()) ?? "";
+  expect(figures).toContain(`${String(s["connected_km"])} km`);
+  expect(figures).toContain(`${String(s["pocket_km"])} km`);
+  expect(figures).toContain(`${String(s["pockets"])} pockets`);
+  // how many the city has, not how many were drawn
+  expect(figures).toContain(String(s["projects"]));
+  if ((s["projects"] as number) > (s["projects_shown"] as number)) {
+    expect(figures).toContain(`top ${String(s["projects_shown"])} shown`);
+  }
 });
 
 test("the map draws the archipelago: pockets in their own colours", async ({ page }) => {
@@ -329,4 +366,20 @@ test("moving off a street takes its card away", async ({ page }) => {
   // an empty patch of map: the card must not follow the pointer around
   await page.mouse.move(5, 830);
   await expect(page.locator(".maplibregl-popup")).toHaveCount(0, { timeout: 10_000 });
+});
+
+test("turning off the projects layer also stops the hover preview drawing", async ({ page }) => {
+  // the preview is a separate layer; leaving it out of the toggle meant hovering
+  // the list drew magenta lines over a layer the reader had just switched off
+  await openCity(page);
+  await page.locator("#show-projects").uncheck();
+  const vis = async (): Promise<string> =>
+    await page.evaluate(
+      () => window._map?.getLayoutProperty("project-hover", "visibility") as string,
+    );
+  expect(await vis()).toBe("none");
+  await page.locator(".project").first().hover();
+  await expect.poll(vis).toBe("none");
+  await page.locator("#show-projects").check();
+  expect(await vis()).toBe("visible");
 });

@@ -53,12 +53,17 @@ def town_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(city_pages, "OUT", web / "data" / "cities")
 
     b = GraphBuilder()
-    for i, x in ((0, 0), (1, 200), (2, 400), (3, 414), (4, 614)):
+    # node 5 sits west of the town line, joined to Main St by a long edge whose
+    # midpoint is also outside. Its island is therefore 2.4 km region-wide but
+    # only 0.4 km in Testville — without that difference, local and global
+    # island sizes are identical here and the size test below cannot fail.
+    for i, x in ((0, 0), (1, 200), (2, 400), (3, 414), (4, 614), (5, -2000)):
         b.node(i, x)
     b.edge(0, 1, 200, "quiet_street", "Main St")
     b.edge(1, 2, 200, "quiet_street", "Main St")
     b.edge(2, 3, 14, "busy_street", "The Pinch")
     b.edge(3, 4, 200, "quiet_street", "Far St")
+    b.edge(5, 0, 2000, "quiet_street", "Long Road Out")
     with (data / "graph.pkl").open("wb") as fh:
         pickle.dump(b.g, fh)
 
@@ -193,9 +198,13 @@ def test_island_sizes_are_reported_for_this_city_not_the_region(
     with (config.DATA_DIR / "graph.pkl").open("rb") as fh:
         graph: nx.MultiDiGraph = pickle.load(fh)
     city = city_pages.build_city("Testville", graph)
-    for feat in city["islands"]["features"]:
-        # nothing in a 600 m toy town can be kilometres long
-        assert feat["properties"]["isle_km"] < 1.0
+    by_km = {f["properties"]["isle_km"] for f in city["islands"]["features"]}
+    # Main St's island runs 2.4 km region-wide but 0.4 km inside Testville, and
+    # this page is read by someone who lives here. Pinning the value, not just
+    # "< 1.0": the regional figure is 2.4, so an assertion loose enough to pass
+    # either way is the bug this test exists to catch.
+    assert 2.4 not in by_km, "reported the region's island size on a city page"
+    assert by_km == {0.4, 0.2}
 
 
 def test_a_missing_town_fails_loudly(town_fixture: Path) -> None:
@@ -232,3 +241,95 @@ def test_the_page_carries_its_own_caveats(town_fixture: Path) -> None:
     assert len(city["limits"]) == 3
     assert city["population_is_headcount"] is True
     assert city["built"] == "2026-08-06"
+
+
+def test_a_neighbouring_towns_projects_stay_off_this_page(town_fixture: Path) -> None:
+    """"Testville" is a substring of "North Testville", as Reading is of North
+    Reading and Andover of North Andover. A substring filter puts the
+    neighbour's projects on this city's page, which is the one thing the page
+    promises not to do."""
+    lon, lat = _lonlat(300)
+    feats = json.loads((town_fixture / "data" / "priorities.geojson").read_text())
+    feats["features"].append(
+        {
+            "type": "Feature",
+            "geometry": {"type": "MultiLineString", "coordinates": [[[lon, lat]]]},
+            "properties": {
+                "pid": "c3", "name": "Next Town Over",
+                "towns": "North Testville", "length_m": 100,
+                "summary": "100 m in the next town", "kind": "corridor",
+            },
+        }
+    )
+    (town_fixture / "data" / "priorities.geojson").write_text(json.dumps(feats))
+
+    with (config.DATA_DIR / "graph.pkl").open("rb") as fh:
+        graph: nx.MultiDiGraph = pickle.load(fh)
+    city = city_pages.build_city("Testville", graph)
+    pids = {f["properties"]["pid"] for f in city["projects"]["features"]}
+    assert pids == {"c1"}, "a town whose name contains ours leaked its projects in"
+
+    # and a town genuinely listed among several still matches
+    feats["features"][0]["properties"]["towns"] = "Elsewhere, Testville"
+    (town_fixture / "data" / "priorities.geojson").write_text(json.dumps(feats))
+    city = city_pages.build_city("Testville", graph)
+    assert "c1" in {f["properties"]["pid"] for f in city["projects"]["features"]}
+
+
+def test_the_two_pocket_numbers_describe_the_same_pockets(town_fixture: Path) -> None:
+    """"33 km stranded in 38 pockets" was summing every pocket while counting
+    only those over 200 m — two different sets in one sentence."""
+    with (config.DATA_DIR / "graph.pkl").open("rb") as fh:
+        graph: nx.MultiDiGraph = pickle.load(fh)
+    city = city_pages.build_city("Testville", graph)
+    s = city["stats"]
+    assert s["pockets"] == 1 and s["pocket_km"] == 0.2
+    # the total can never exceed what a count of that many biggest pockets allows
+    assert s["pocket_km"] <= s["pockets"] * s["biggest_pocket_km"] + 1e-9
+
+
+def test_the_page_says_how_many_projects_the_city_has_not_how_many_it_drew(
+    town_fixture: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reporting only the truncated count told a city it had 40 candidates when
+    it had more."""
+    monkeypatch.setattr(city_pages, "MAX_PROJECTS", 1)
+    feats = json.loads((town_fixture / "data" / "priorities.geojson").read_text())
+    lon, lat = _lonlat(300)
+    for i in range(3):
+        feats["features"].append(
+            {
+                "type": "Feature",
+                "geometry": {"type": "MultiLineString", "coordinates": [[[lon, lat]]]},
+                "properties": {
+                    "pid": f"x{i}", "name": f"Street {i}", "towns": "Testville",
+                    "length_m": 50, "summary": "a fix", "kind": "spot_fix",
+                },
+            }
+        )
+    (town_fixture / "data" / "priorities.geojson").write_text(json.dumps(feats))
+
+    with (config.DATA_DIR / "graph.pkl").open("rb") as fh:
+        graph: nx.MultiDiGraph = pickle.load(fh)
+    city = city_pages.build_city("Testville", graph)
+    assert city["stats"]["projects"] == 4  # what Testville actually has
+    assert city["stats"]["projects_shown"] == 1  # what the map carries
+    assert len(city["projects"]["features"]) == 1
+
+
+def test_the_stranded_headcount_is_measured_not_recovered_from_a_percentage(
+    town_fixture: Path,
+) -> None:
+    """The page used to rebuild the count as residents * round(pct) / 100, which
+    turned a whole-number 9% into "About 7,225 people" — four significant digits
+    nothing had computed. The pipeline now states the count it measured."""
+    with (config.DATA_DIR / "graph.pkl").open("rb") as fh:
+        graph: nx.MultiDiGraph = pickle.load(fh)
+    city = city_pages.build_city("Testville", graph)
+    s = city["stats"]
+    # the fixture cell: 1000 residents, 50% served -> 500 stranded, 50%
+    assert s["residents"] == 1000
+    assert s["stranded"] == 500
+    assert s["stranded_pct"] == 50
+    # and the budget those numbers assume travels with them
+    assert s["budget_km"] == round(config.ACCESS_BUDGET_M / 1000, 1)

@@ -23,6 +23,7 @@ import {
 } from "./native.js";
 import {
   CLASS_LABELS,
+  clearPhotoCache,
   FACILITY_CLASSES,
   fillSegmentPhoto as fillPhotoSlot,
   GRADE_COLORS,
@@ -1055,8 +1056,6 @@ interface MapillaryImage {
   captured_at?: number;
 }
 
-/** ~45 m cell cache so hovering along a street reuses one lookup. */
-const segPhotoCache = new Map<string, { url: string | null; captured: number | null }>();
 let segPhotoTimer: number | undefined;
 
 async function showMapillaryPreview(lon: number, lat: number): Promise<void> {
@@ -3103,7 +3102,7 @@ el<HTMLButtonElement>("mapillary-save").addEventListener("click", () => {
   mapillaryToken = token;
   if (token === "") localStorage.removeItem("mapillaryToken");
   else localStorage.setItem("mapillaryToken", token);
-  segPhotoCache.clear();
+  clearPhotoCache(); // the shared lookup holds misses fetched with the old token
   el<HTMLSpanElement>("mapillary-status").textContent =
     token === "" ? "cleared" : "✓ saved — hover any street";
 });

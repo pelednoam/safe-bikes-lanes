@@ -11,8 +11,8 @@ no amount of ranking does.
 
 How bad the split is varies, and the page says whichever is true. Somerville
 turned out to be mostly connected — 179 of its 212 kid-safe kilometres are one
-piece — so its page leads with the 7,225 residents who still can't reach a
-school or park, and treats the 33 km of pockets as the specific gaps they are.
+piece — so its page leads with the 7,255 residents who still can't reach a
+school or park, and treats the 23.6 km of pockets as the specific gaps they are.
 The first draft called every city an archipelago; a screenshot disagreed.
 
 Written as a separate step from priorities.py because it needs that module's
@@ -41,6 +41,10 @@ NAMED_ISLANDS = 8
 # A city page carries its own streets, so it stays small. Anything longer than
 # this is a regional corridor that the main map is the right place for.
 MAX_PROJECTS = 40
+# Shorter than this and a "pocket" is a driveway stub, not a stranded piece of
+# neighbourhood. Applies to both the count and the total, so the page's "N km in
+# M pockets" describes one set of things.
+MIN_POCKET_M = 200
 
 
 def slugify(name: str) -> str:
@@ -100,7 +104,10 @@ def build_city(town: str, graph: nx.MultiDiGraph) -> dict[str, Any]:
         return point_in_rings((lon, lat), rings)
 
     island_of, island_m = priorities.safe_islands(graph)
-    biggest_global = max(island_m, key=lambda i: island_m[i], default=-1)
+    # -1 is also the sentinel for "no island" below, so a graph with no kid-safe
+    # streets at all would make every unclassified street rank 0 and read as
+    # "connected to the region" on the page. Use a value no island id can take.
+    biggest_global = max(island_m, key=lambda i: island_m[i], default=-2)
 
     # First pass: how much of each island lies in THIS city. Ranking islands by
     # their global size put every Somerville pocket in the same bucket — they're
@@ -128,6 +135,9 @@ def build_city(town: str, graph: nx.MultiDiGraph) -> dict[str, Any]:
         key=lambda kv: kv[1],
         reverse=True,
     )
+    # Below this a "pocket" is a driveway stub or a mapping artefact, not a
+    # piece of network anyone rides. Counted and measured as one set.
+    real_pockets = [(i, m) for i, m in pockets if m >= MIN_POCKET_M]
     # 0 is always the network that reaches the rest of the region; 1..N are this
     # city's own cut-off pockets, biggest first
     rank_of: dict[int, int] = {biggest_global: 0}
@@ -169,11 +179,21 @@ def build_city(town: str, graph: nx.MultiDiGraph) -> dict[str, Any]:
                 }
             )
 
-    projects = [
+    # Exact membership, not substring: `towns` is a comma-joined list, and in
+    # Massachusetts "Reading" is inside "North Reading", "Andover" inside
+    # "North Andover", "Boylston" inside "West Boylston". A substring test puts
+    # the neighbour's projects on this city's page, which is the one thing the
+    # page promises not to do. (city_rings already matches exactly.)
+    def in_town(feat: dict[str, Any]) -> bool:
+        listed = str(feat["properties"].get("towns", "")).split(",")
+        return any(t.strip().lower() == town.lower() for t in listed)
+
+    matching = [
         f
         for f in json.loads((WEB / "data" / "priorities.geojson").read_text())["features"]
-        if town.lower() in str(f["properties"].get("towns", "")).lower()
-    ][:MAX_PROJECTS]
+        if in_town(f)
+    ]
+    projects = matching[:MAX_PROJECTS]
 
     access_path = WEB / "data" / "access.geojson"
     cells: list[dict[str, Any]] = []
@@ -204,12 +224,31 @@ def build_city(town: str, graph: nx.MultiDiGraph) -> dict[str, Any]:
             # kid-safe network can you leave the neighbourhood on, and how much
             # is stranded in pockets
             "connected_km": round(local_m.get(biggest_global, 0.0) / 1000, 1),
-            "pocket_km": round(sum(m for _i, m in pockets) / 1000, 1),
-            "pockets": sum(1 for _i, m in pockets if m >= 200),
-            "biggest_pocket_km": round(pockets[0][1] / 1000, 1) if pockets else 0.0,
-            "projects": len(projects),
+            # one set of pockets, counted and measured the same way. These two
+            # numbers appear in a single sentence ("33 km stranded in 38
+            # pockets"), and summing all of them while counting only the ones
+            # over MIN_POCKET_M described two different sets.
+            "pocket_km": round(sum(m for _i, m in real_pockets) / 1000, 1),
+            "pockets": len(real_pockets),
+            "biggest_pocket_km": (
+                round(real_pockets[0][1] / 1000, 1) if real_pockets else 0.0
+            ),
+            # what this city has, and how much of it the page shows. Reporting
+            # only the truncated count told a city it had 40 candidates when it
+            # had more.
+            "projects": len(matching),
+            "projects_shown": len(projects),
             "residents": round(residents) if residents else None,
+            # the count itself, not a percentage the page has to multiply back
+            # out: `round(residents * round(pct) / 100)` reconstructed "7,225
+            # people" from a whole-number 9%, which is four significant digits
+            # of precision nothing ever computed (the true value could be
+            # anywhere from ~6,800 to ~7,600).
+            "stranded": round(residents - served) if residents else None,
             "stranded_pct": round(100 * (1 - served / residents)) if residents else None,
+            # the assumption behind every one of those numbers, carried with
+            # them so the page can't state a different budget than was measured
+            "budget_km": round(config.ACCESS_BUDGET_M / 1000, 1),
         },
         "boundary": {"type": "MultiPolygon", "coordinates": [[ring] for ring in rings]},
         "islands": {"type": "FeatureCollection", "features": safe_feats},

@@ -28,9 +28,15 @@ interface CityStats {
   pocket_km: number;
   pockets: number;
   biggest_pocket_km: number;
+  /** how many this city has, which is not always how many are drawn */
   projects: number;
+  projects_shown: number;
   residents: number | null;
+  /** the measured headcount, not something to recompute from the percentage */
+  stranded: number | null;
   stranded_pct: number | null;
+  /** the ride length every access number assumes, carried with them */
+  budget_km: number;
 }
 
 interface CityData {
@@ -99,8 +105,14 @@ function maskOf(boundary: GeoJSON.MultiPolygon): GeoJSON.Feature {
  * where the split really is bad gets the stronger sentence; Somerville gets the
  * true one.
  */
-function shapeOfTheProblem(s: CityStats): string {
-  const budget = "That means no route within a 2.5 km ride that avoids traffic a child shouldn't be in.";
+function shapeOfTheProblem(s: CityStats, afterClaim: boolean): string {
+  // "That means…" only follows something. Without the population sentence in
+  // front of it the paragraph opened on a pronoun with no antecedent.
+  const budget = afterClaim
+    ? `That means no route within a ${s.budget_km} km ride that avoids traffic` +
+      " a child shouldn't be in."
+    : `Measured as a ${s.budget_km} km ride that avoids traffic a child` +
+      " shouldn't be in:";
   const strandedShare = s.safe_km > 0 ? s.pocket_km / s.safe_km : 0;
   if (strandedShare >= 0.3) {
     return (
@@ -115,29 +127,70 @@ function shapeOfTheProblem(s: CityStats): string {
   );
 }
 
+/** Are the numbers this page is about to state in public actually numbers?
+ *
+ * web/data ships separately from the code — it's a release tarball a deploy
+ * downloads — so a page can outrun the snapshot it fetches. Casting the JSON to
+ * CityData and hoping put "undefined km stranded" and "About NaN residents"
+ * one build skew away from being published as findings about a real city.
+ * Refusing to draw is the right failure: a page that says nothing is recoverable,
+ * a page that says nonsense about a city's children is not. */
+function statsAreUsable(city: CityData): boolean {
+  const s = city.stats as Partial<CityStats> | undefined;
+  if (s === undefined || typeof city.name !== "string" || city.name === "") return false;
+  const required: (keyof CityStats)[] = [
+    "safe_km",
+    "connected_km",
+    "pocket_km",
+    "pockets",
+    "projects",
+    "projects_shown",
+    "budget_km",
+  ];
+  return required.every((k) => Number.isFinite(s[k] as number));
+}
+
 function summarise(city: CityData): void {
   const s = city.stats;
   el("city-name").textContent = city.name;
 
   const lede = el("lede");
   lede.innerHTML = "";
-  if (s.residents !== null && s.stranded_pct !== null && city.population_is_headcount) {
+  const claimable =
+    Number.isFinite(s.residents as number) &&
+    Number.isFinite(s.stranded as number) &&
+    Number.isFinite(s.stranded_pct as number) &&
+    city.population_is_headcount;
+  if (claimable) {
     // the figure the page exists to make unavoidable, with the count as well as
-    // the share — 9% sounds small until it's seven thousand people
-    const stranded = Math.round((s.residents * s.stranded_pct) / 100);
+    // the share — 9% sounds small until it's seven thousand people. The count
+    // is the pipeline's own, not the percentage multiplied back out: that gave
+    // "7,225" from a whole-number 9%, precision nothing had measured.
     const strong = document.createElement("b");
-    strong.textContent = `About ${N(stranded)} of ${city.name}'s ${N(s.residents)} residents — ${s.stranded_pct}% — can't reach a school, playground or library on kid-safe streets.`;
+    strong.textContent =
+      `About ${N(s.stranded as number)} of ${city.name}'s ` +
+      `${N(s.residents as number)} residents — ${s.stranded_pct}% — can't reach ` +
+      "a school, playground or library on kid-safe streets.";
     lede.appendChild(strong);
-    lede.appendChild(document.createTextNode(` ${shapeOfTheProblem(s)}`));
+    lede.appendChild(document.createTextNode(` ${shapeOfTheProblem(s, true)}`));
   } else {
-    lede.textContent = shapeOfTheProblem(s);
+    lede.textContent = shapeOfTheProblem(s, false);
   }
 
   const figures: [string, string, string][] = [
     [`${s.connected_km} km`, "kid-safe streets that reach the wider network", "good"],
-    [`${s.pocket_km} km`, `stranded in ${s.pockets} pockets you can't leave safely`, "bad"],
+    // "cut off from the main network", not "you can't leave safely": a pocket
+    // can run into the next town and still not reach the main network, and the
+    // stronger phrasing asserts something this measures nothing about.
+    [`${s.pocket_km} km`, `cut off from that network, in ${s.pockets} pockets`, "bad"],
     [String(s.pockets), "separate pockets of safe street", ""],
-    [String(s.projects), "projects that would join them up", ""],
+    [
+      String(s.projects),
+      s.projects > s.projects_shown
+        ? `projects that would join them up (top ${s.projects_shown} shown)`
+        : "projects that would join them up",
+      "",
+    ],
   ];
   const box = el("figures");
   box.innerHTML = "";
@@ -350,7 +403,9 @@ function wireLayerToggles(map: MLMap): void {
   const pairs: [string, string[]][] = [
     ["show-islands", ["islands"]],
     ["show-barriers", ["barriers"]],
-    ["show-projects", ["projects", "project-hi"]],
+    // project-hover too: without it, hovering the list drew magenta lines over
+    // a layer the reader had just switched off
+    ["show-projects", ["projects", "project-hi", "project-hover"]],
     ["show-access", ["access"]],
   ];
   for (const [box, layers] of pairs) {
@@ -391,6 +446,7 @@ async function start(): Promise<void> {
     const resp = await fetch(`../data/cities/${slug}.json`);
     if (!resp.ok) throw new Error(String(resp.status));
     city = (await resp.json()) as CityData;
+    if (!statsAreUsable(city)) throw new Error("stats missing");
   } catch {
     // a city we haven't generated yet is a missing page, not a broken one
     tellUser("No page for that city yet.");

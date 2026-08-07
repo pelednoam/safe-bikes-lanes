@@ -16,7 +16,9 @@ from typing import Final
 # eight minutes later inside a browser test.
 #
 #   1  city-page segments carry name/cls/source/crashes (2026-08-07)
-DATA_FORMAT: Final[int] = 1
+#   2  city stats carry the measured stranded headcount, projects_shown and
+#      budget_km; the page refuses to draw without them (2026-08-07)
+DATA_FORMAT: Final[int] = 2
 
 DATA_DIR: Final[Path] = Path(__file__).resolve().parent.parent / "data"
 RAW_DIR: Final[Path] = DATA_DIR / "raw"

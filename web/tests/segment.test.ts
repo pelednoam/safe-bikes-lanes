@@ -230,3 +230,32 @@ describe("a street whose class we don't recognise", () => {
     expect(html).not.toContain("OSM only");
   });
 });
+
+describe("a street name that came from OpenStreetMap", () => {
+  // anyone can edit OSM, and both pages render this card through MapLibre's
+  // setHTML — i.e. innerHTML, on the origin holding the rider's saved routes
+  it("cannot smuggle markup into the card", () => {
+    const html = segmentHtml({
+      cls: "lane",
+      name: '<img src=x onerror="alert(1)">',
+    });
+    // the payload survives as visible text, which is fine; what must not
+    // survive is a tag boundary or an attribute quote to hang a handler on
+    expect(html).not.toContain("<img");
+    expect(html).not.toContain('onerror="');
+    expect(html).toContain("&lt;img");
+    expect(html).toContain("&quot;");
+  });
+
+  it("still reads correctly when the name merely contains punctuation", () => {
+    expect(segmentHtml({ cls: "lane", name: "Mass. Ave & Beacon" })).toContain(
+      "Mass. Ave &amp; Beacon",
+    );
+  });
+
+  it("escapes an unrecognised class label too", () => {
+    // the label falls back to the raw class string, which is also data
+    const html = segmentHtml({ cls: "<b>x</b>" as never, name: "A St" });
+    expect(html).not.toContain("<b>x</b>");
+  });
+});
