@@ -36,8 +36,13 @@ echo "published web-data.tar.gz ($SIZE) to the '$TAG' release"
 # otherwise a deploy started by the push races the upload and ships the old data.
 if [ "${NO_DEPLOY:-}" = "1" ]; then
   echo "NO_DEPLOY=1 — not triggering a Pages deploy"
-elif gh workflow run pages.yml >/dev/null 2>&1; then
+elif gh workflow run pages.yml; then
   echo "triggered a Pages deploy against the new snapshot"
 else
-  echo "could not trigger the Pages deploy — run: gh workflow run pages.yml"
+  # Not a warning. The upload has already happened, so the published data and
+  # the live site now disagree, and that is the state this script exists to
+  # avoid. Say why (the error is no longer swallowed) and exit non-zero.
+  echo "::error::uploaded the snapshot but could not trigger the deploy." \
+       "The live site is now serving older data. Run: gh workflow run pages.yml"
+  exit 1
 fi

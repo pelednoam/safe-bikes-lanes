@@ -295,6 +295,7 @@ def test_summary_only_claims_what_the_numbers_say() -> None:
     # towns, which says nothing and, on a city page reporting 262 km, reads like
     # a typo. Name the side that gains instead.
     cand.joins_region = True
+    cand.gain_km = "18.0 km"
     regional = priorities.summary_sentence(cand)
     assert "connects 18.0 km of kid-safe streets to the region-wide network" in regional
     assert "24.0 km" not in regional
@@ -986,7 +987,24 @@ def test_only_the_region_wide_network_is_named_as_such() -> None:
     assert gap.joins_region, "the larger side here IS the biggest island in the graph"
     assert "to the region-wide network" in priorities.summary_sentence(gap)
 
-    # take the region's network out of the candidate's reach and both are named
-    gap.joins_region = False
-    both = priorities.summary_sentence(gap)
-    assert " and " in both and "region-wide" not in both
+    # A candidate that touches neither end of the region's network gets both
+    # figures. Built as a real graph and classified by score_severance, not by
+    # setting the flag by hand — the flag is the thing under test.
+    b2 = GraphBuilder()
+    for i, x in ((0, 0), (1, 400), (2, 420), (3, 1200), (4, 5000), (5, 9000)):
+        b2.node(i, x)
+    b2.edge(0, 1, 400, "quiet_street", "A St")
+    b2.edge(1, 2, 20, "busy_street", "The Gap")
+    b2.edge(2, 3, 780, "quiet_street", "B St")
+    b2.edge(4, 5, 4000, "quiet_street", "The Big One")  # the region's network
+    island_of2, island_m2 = priorities.safe_islands(b2.g)
+
+    gap2 = priorities.Candidate(
+        pid="c2", name="The Gap", kind="corridor", cls="busy_street", length_m=20.0
+    )
+    gap2.nodes = [1, 2]
+    priorities.score_severance([gap2], island_of2, island_m2)
+    assert not gap2.joins_region, "neither side here is the biggest island"
+    both = priorities.summary_sentence(gap2)
+    assert "0.4 km and 0.8 km" in both or "0.8 km and 0.4 km" in both
+    assert "region-wide" not in both

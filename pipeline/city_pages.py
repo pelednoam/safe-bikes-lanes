@@ -107,8 +107,12 @@ def midpoint(coords: list[tuple[float, float]]) -> tuple[float, float]:
     """
     if len(coords) < 2:
         return coords[0]
+    # A degree of longitude is ~0.74 of a degree of latitude at this latitude,
+    # so measuring in raw degrees stretches north-south spans by a third and
+    # puts the "halfway" point of a bent street in the wrong place.
+    kx = math.cos(math.radians(coords[0][1]))
     pairs = list(itertools.pairwise(coords))
-    spans = [math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in pairs]
+    spans = [math.hypot((b[0] - a[0]) * kx, b[1] - a[1]) for a, b in pairs]
     half = sum(spans) / 2
     run = 0.0
     for (a, b), span in zip(pairs, spans, strict=True):
@@ -178,9 +182,15 @@ def build_city(town: str, graph: nx.MultiDiGraph) -> dict[str, Any]:
     # piece of network anyone rides. Counted and measured as one set.
     real_pockets = [(i, m) for i, m in pockets if m >= MIN_POCKET_M]
     # 0 is always the network that reaches the rest of the region; 1..N are this
-    # city's own cut-off pockets, biggest first
+    # city's own cut-off pockets, biggest first.
+    #
+    # Ranked from real_pockets, not every pocket: the stats say "37 pockets"
+    # after dropping the sub-MIN_POCKET_M stubs, and colouring the stubs too gave
+    # a reader more pockets on the map than the sentence claimed — the same
+    # two-different-sets problem the pocket totals had. Stubs share the tail
+    # colour with the long tail of small pockets, which is what they are.
     rank_of: dict[int, int] = {biggest_global: 0}
-    for i, (iid, _m) in enumerate(pockets):
+    for i, (iid, _m) in enumerate(real_pockets):
         rank_of[iid] = min(i + 1, NAMED_POCKETS + 1)
 
     safe_feats: list[dict[str, Any]] = []
@@ -238,6 +248,7 @@ def build_city(town: str, graph: nx.MultiDiGraph) -> dict[str, Any]:
     cells: list[dict[str, Any]] = []
     residents = 0.0
     served = 0.0
+    skipped = 0.0
     if access_path.exists():
         for cell in json.loads(access_path.read_text())["features"]:
             ring = cell["geometry"]["coordinates"][0]
@@ -251,17 +262,33 @@ def build_city(town: str, graph: nx.MultiDiGraph) -> dict[str, Any]:
                 continue
             cells.append(cell)
             people = cell["properties"].get("residents")
-            if people:
-                # a cell with people but no coverage figure counts as unserved
-                # rather than aborting the build
-                pct = cell["properties"].get("pct_served", 0)
-                residents += float(people)
-                served += float(people) * float(pct) / 100.0
+            if not people:
+                continue
+            pct = cell["properties"].get("pct_served")
+            if pct is None:
+                # Leave the cell out of both sides rather than guessing. The
+                # first version raised a KeyError here; the second defaulted to
+                # 0, which quietly counts everyone in the cell as unable to
+                # reach a school — inflating the single number this page leads
+                # with. An unmeasured cell is unmeasured, not unserved.
+                skipped += float(people)
+                continue
+            residents += float(people)
+            served += float(people) * float(pct) / 100.0
+
+    if skipped:
+        # never silently: the denominator of a public claim just got smaller
+        print(f"  {town}: {skipped:,.0f} residents in cells with no coverage figure — excluded")
 
     meta = json.loads((WEB / "data" / "priorities_meta.json").read_text())
     return {
         "slug": slugify(town),
         "name": town,
+        # The stamp travels with THIS file, not only with meta.json. The deploy
+        # check reads meta.json, which export_web writes — so regenerating city
+        # pages without re-exporting could ship city JSONs whose fields don't
+        # match the stamp that was checked. Now the two can be compared.
+        "format": config.DATA_FORMAT,
         "built": meta.get("built"),
         "bbox": [round(west, 5), round(south, 5), round(east, 5), round(north, 5)],
         "stats": {
@@ -310,8 +337,8 @@ def build_city(town: str, graph: nx.MultiDiGraph) -> dict[str, Any]:
             *meta.get("limits", []),
             "Residents are counted by assigning each population grid cell to the"
             " town its centre falls in, so a cell straddling the line counts"
-            " wholly one way. The total is close to the census count for the"
-            " town but is not it.",
+            " wholly one way, and cells with no coverage figure are left out"
+            " entirely. It is an estimate for the town, not its census count.",
         ],
     }
 
@@ -426,8 +453,13 @@ def build(towns: list[str]) -> None:
     (OUT / "index.json").write_text(json.dumps(index, indent=1))
     listed = ", ".join(c["slug"] for c in index)
     print(f"index.json lists {len(index)} cit{'y' if len(index) == 1 else 'ies'}: {listed}")
-    if len(index) < len(CITIES):
-        print(f"  note: {len(CITIES)} are published — the rest will drop off the site")
+    # membership, not a count: building two cities that aren't the two published
+    # ones drops both and the counts match, so a length check says nothing
+    dropped = [c for c in CITIES if slugify(c) not in {c2["slug"] for c2 in index}]
+    if dropped:
+        print(f"  note: {', '.join(dropped)} will drop off the site — it lists only what is built")
+
+
 
 
 if __name__ == "__main__":

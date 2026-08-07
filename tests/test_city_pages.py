@@ -331,14 +331,34 @@ def test_a_neighbouring_towns_projects_stay_off_this_page(town_fixture: Path) ->
 
 def test_the_two_pocket_numbers_describe_the_same_pockets(town_fixture: Path) -> None:
     """"33 km stranded in 38 pockets" was summing every pocket while counting
-    only those over 200 m — two different sets in one sentence."""
+    only those over 200 m — two different sets in one sentence.
+
+    The fixture must contain a pocket the threshold actually drops, or this
+    passes against the very code it names. It didn't, at first."""
     with (config.DATA_DIR / "graph.pkl").open("rb") as fh:
         graph: nx.MultiDiGraph = pickle.load(fh)
+    # a 150 m stub: under MIN_POCKET_M, but big enough that its presence in
+    # safe_km is visible after rounding (600 m without it, 750 m with)
+    b = GraphBuilder()
+    b.node(90, 700)
+    b.node(91, 850)
+    b.edge(90, 91, 150, "quiet_street", "Stub Way")
+    graph.add_nodes_from(b.g.nodes(data=True))
+    graph.add_edges_from(b.g.edges(keys=True, data=True))
+
     city = city_pages.build_city("Testville", graph)
     s = city["stats"]
-    assert s["pockets"] == 1 and s["pocket_km"] == 0.2
-    # the total can never exceed what a count of that many biggest pockets allows
+    # the stub is safe street inside the town, so it counts toward safe_km...
+    assert s["safe_km"] == 0.8, "the stub should still be safe street in this town"
+    # ...but it is not one of the pockets the page reports
+    assert s["pockets"] == 1
+    assert s["pocket_km"] == 0.2, "a sub-threshold stub leaked into the total"
     assert s["pocket_km"] <= s["pockets"] * s["biggest_pocket_km"] + 1e-9
+
+    # and the map must not colour it as a pocket the sentence didn't count
+    ranks = [f["properties"]["isle"] for f in city["islands"]["features"]]
+    counted = {r for r in ranks if 0 < r <= city_pages.NAMED_POCKETS}
+    assert len(counted) == s["pockets"], "more pockets drawn than the page claims"
 
 
 def test_the_page_says_how_many_projects_the_city_has_not_how_many_it_drew(
@@ -392,13 +412,29 @@ def test_no_pocket_gets_a_colour_the_page_does_not_have(town_fixture: Path) -> N
     """Ranks index a palette in city.ts. NAMED_POCKETS individually-coloured
     pockets plus rank 0 (connected) plus the shared tail is NAMED_POCKETS + 2
     entries; a rank past the end falls through to the same grey as the tail and
-    silently merges a pocket into it."""
+    silently merges a pocket into it.
+
+    Needs more pockets than there are colours, or the bound is unreachable and
+    the assertion is decoration — which is what it was."""
     with (config.DATA_DIR / "graph.pkl").open("rb") as fh:
         graph: nx.MultiDiGraph = pickle.load(fh)
+    b = GraphBuilder()
+    for i in range(city_pages.NAMED_POCKETS + 4):  # comfortably past the palette
+        left, right = 100 + i * 2, 101 + i * 2
+        b.node(left, 700.0 + i * 40)
+        b.node(right, 700.0 + i * 40 + 250)
+        b.edge(left, right, 250, "quiet_street", f"Pocket {i} Road")
+    graph.add_nodes_from(b.g.nodes(data=True))
+    graph.add_edges_from(b.g.edges(keys=True, data=True))
+
     city = city_pages.build_city("Testville", graph)
     ranks = {f["properties"]["isle"] for f in city["islands"]["features"]}
+    assert city["stats"]["pockets"] > city_pages.NAMED_POCKETS, (
+        "the fixture must produce more pockets than there are colours"
+    )
     assert min(ranks) >= 0
     assert max(ranks) <= city_pages.NAMED_POCKETS + 1
+    assert city_pages.NAMED_POCKETS + 1 in ranks, "the shared tail colour is unused"
 
 
 def test_building_one_city_does_not_unpublish_the_others(

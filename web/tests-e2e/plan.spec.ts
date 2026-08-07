@@ -129,7 +129,13 @@ test("compare the options: hovering previews, clicking commits", async ({ page }
   // committing to it updates the summary, the selection and the permalink
   const before = await routeMeters(page);
   await cards.last().click();
-  await expect(cards.last()).toHaveClass(/selected/);
+  // Generous on purpose. selectOption defers the panel repaint through
+  // paintPanelWithRoute, which waits for the map to actually *draw* the new
+  // route and only gives up after a 3 s hard stop — so the class legitimately
+  // does not exist yet for up to three seconds after the click, before any
+  // runner slowness. The default 5 s expect timeout left almost no margin and
+  // failed on CI, where the runner is several times slower than a laptop.
+  await expect(cards.last()).toHaveClass(/selected/, { timeout: 20_000 });
   await expect.poll(async () => routeMeters(page), { timeout: 10_000 }).not.toBe(before);
   await expect.poll(() => page.url()).toMatch(/o=direct/);
 });

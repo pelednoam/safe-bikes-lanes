@@ -259,10 +259,16 @@ describe("a street name that came from OpenStreetMap", () => {
     );
   });
 
-  it("escapes an unrecognised class label too", () => {
-    // the label falls back to the raw class string, which is also data
+  it("never renders an unrecognised class at all", () => {
+    // This was written as an escaping test and wasn't one: an unknown class
+    // takes the "type unknown" path, so the raw string never reaches the
+    // output and esc() is not involved. The property that actually holds is
+    // stronger, so assert that instead — every class with a stress multiplier
+    // has a label, so the raw class is only ever rendered for one we reject.
     const html = segmentHtml({ cls: "<b>x</b>" as never, name: "A St" });
     expect(html).not.toContain("<b>x</b>");
+    expect(html).not.toContain("&lt;b&gt;x");
+    expect(html).toContain("type unknown");
   });
 });
 

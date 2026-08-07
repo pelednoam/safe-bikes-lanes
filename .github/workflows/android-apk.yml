@@ -10,6 +10,10 @@ on:
 
 permissions:
   contents: write
+  # the mirror-refresh step at the end dispatches pages.yml, and gh workflow run
+  # is an Actions API write. Without this it fails with a 403 — and it would
+  # fail exactly when a release needs mirroring, which is the whole point.
+  actions: write
 
 jobs:
   apk:

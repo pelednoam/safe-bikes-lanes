@@ -118,6 +118,7 @@ export function segmentHtml(props: SegmentProps, opts: { photo: boolean } = { ph
 }
 
 const photoCache = new Map<string, { url: string | null; captured: number | null }>();
+let photoGen = 0;
 
 /** How far a street-level photo may be and still be *this* street. Beyond this
  * it is a picture of somewhere else, which is worse than showing none. */
@@ -148,16 +149,22 @@ export async function nearestMapillary(
   lon: number,
   lat: number,
   token: string,
-  fields = "id,thumb_256_url,captured_at,computed_geometry",
+  fields = "id,thumb_256_url,captured_at",
 ): Promise<MapillaryNear | null> {
   if (token === "") return null;
+  // computed_geometry is how "nearest" is decided, so it is not the caller's to
+  // forget: without it every image is Infinity away and this returns null for
+  // everything, which looks exactly like "no photos here".
+  const asked = fields.includes("computed_geometry")
+    ? fields
+    : `${fields},computed_geometry`;
   const d = 0.0015; // ~165 m to search
   const url =
     "https://graph.mapillary.com/images?" +
     new URLSearchParams({
       access_token: token,
       bbox: `${lon - d},${lat - d},${lon + d},${lat + d}`,
-      fields,
+      fields: asked,
       limit: "20",
     }).toString();
   const resp = await fetch(url);
@@ -192,14 +199,19 @@ export async function fetchSegmentPhoto(
   const key = `${Math.round(lon / 0.0002)},${Math.round(lat / 0.0002)}`;
   const cached = photoCache.get(key);
   if (cached !== undefined) return cached;
+  const gen = photoGen;
   let result: { url: string | null; captured: number | null } = { url: null, captured: null };
   try {
     const near = await nearestMapillary(lon, lat, token);
     result = { url: near?.thumb_256_url ?? null, captured: near?.captured_at ?? null };
   } catch {
-    // no photo is a fine answer; the card stands without one
+    // A rate limit or a dropped connection is not "there is no photo of this
+    // street". Answer without one, but don't remember it — caching the failure
+    // makes one 429 while panning turn into a permanently photo-less block for
+    // the rest of the session.
+    return { url: null, captured: null };
   }
-  photoCache.set(key, result);
+  if (gen === photoGen) photoCache.set(key, result);
   return result;
 }
 
@@ -208,6 +220,10 @@ export async function fetchSegmentPhoto(
  * corrected token shows no photos until the page is reloaded. */
 export function clearPhotoCache(): void {
   photoCache.clear();
+  // Bump the generation too. Clearing the map doesn't touch a lookup already in
+  // flight, and when that one resolves it writes the old token's answer into
+  // the fresh cache — so correcting a bad token still showed no photos.
+  photoGen++;
 }
 
 /** Fill a card's photo slot once the image resolves, if the card is still up. */

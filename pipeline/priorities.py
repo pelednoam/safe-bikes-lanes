@@ -74,6 +74,7 @@ class Candidate:
     # kid-safe mileage of 76 towns, which tells a reader nothing and reads as an
     # error next to a city page's own 262 km.
     joins_region: bool = False
+    gain_km: str = ""  # the side that gains, as words — not join_names[1]
     dest_unlocked: int = 0
     pop_gaining: float = 0.0
     resident_m_saved: float = 0.0
@@ -287,8 +288,15 @@ def score_severance(
         if len(real) >= 2:
             cand.small_island = min(real[0], real[1], key=lambda kv: kv[1])[0]
             cand.join_m = round(min(real[0][1], real[1][1]), 1)
-            cand.join_names = [f"{real[0][1] / 1000:.1f} km", f"{real[1][1] / 1000:.1f} km"]
-            cand.joins_region = real[0][0] == biggest
+            big, small = max(real[0], real[1], key=lambda kv: kv[1]), min(
+                real[0], real[1], key=lambda kv: kv[1]
+            )
+            # named explicitly rather than by position: the sentence depends on
+            # which side gains, and reading that off real[0]/real[1] silently
+            # inverts the claim the day the sort order changes
+            cand.join_names = [f"{big[1] / 1000:.1f} km", f"{small[1] / 1000:.1f} km"]
+            cand.gain_km = f"{small[1] / 1000:.1f} km"
+            cand.joins_region = big[0] == biggest
         else:
             cand.join_m = 0.0
 
@@ -516,8 +524,7 @@ def summary_sentence(cand: Candidate) -> str:
             # kid-safe street in the region, and printing its mileage next to a
             # city's own read like a typo for the city's figure.
             bits.append(
-                f"connects {cand.join_names[1]} of kid-safe streets"
-                " to the region-wide network"
+                f"connects {cand.gain_km} of kid-safe streets to the region-wide network"
             )
         elif cand.join_names:
             bits.append(f"connects {' and '.join(cand.join_names)} of kid-safe streets")

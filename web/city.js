@@ -65,7 +65,12 @@ function shapeOfTheProblem(s, afterClaim) {
             " a child shouldn't be in."
         : `Measured as a ${s.budget_km} km ride that avoids traffic a child` +
             " shouldn't be in:";
-    const strandedShare = s.safe_km > 0 ? s.pocket_km / s.safe_km : 0;
+    if (s.safe_km <= 0) {
+        // No kid-safe street at all is not "mostly joins up" — the old share
+        // calculation fell back to 0 here and produced exactly that sentence.
+        return `${budget} There is no street in this city a child can ride away from.`;
+    }
+    const strandedShare = s.pocket_km / s.safe_km;
     if (strandedShare >= 0.3) {
         return (`${budget} The streets they can use don't join up: ${s.pocket_km} km of` +
             ` them sit in ${s.pockets} pockets with no safe way out.`);
