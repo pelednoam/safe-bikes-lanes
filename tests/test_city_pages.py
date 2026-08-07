@@ -467,6 +467,7 @@ def test_the_published_set_is_what_a_bare_build_builds() -> None:
     # without arguments is itself the partial build above
     assert "Somerville" in city_pages.CITIES
     assert "Cambridge" in city_pages.CITIES
+    assert "Lexington" in city_pages.CITIES
 
 
 def test_a_cell_with_no_coverage_figure_is_not_counted_as_unserved(
@@ -533,3 +534,46 @@ def test_a_stub_too_small_to_count_is_not_drawn_as_connected(town_fixture: Path)
     assert stub[0]["properties"]["isle"] == city_pages.NAMED_POCKETS + 1, (
         "a stub must share the tail colour, not claim to reach the region"
     )
+
+
+def test_the_main_network_is_the_citys_own_not_the_regions_biggest(
+    town_fixture: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Lexington's kid-safe network runs 486 km across several towns, but it is
+    not the region's single largest island — so defining "connected" as
+    membership in that one island reported "0.0 km reach the wider network" and
+    called all 447 km of it cut off with no safe way out. Most outer towns don't
+    touch the biggest island; the city's own main network is what it has."""
+    with (config.DATA_DIR / "graph.pkl").open("rb") as fh:
+        graph: nx.MultiDiGraph = pickle.load(fh)
+    # a huge kid-safe network somewhere else entirely: the region's biggest, and
+    # nowhere near Testville
+    b = GraphBuilder()
+    b.node(200, 0, lat=41.0)
+    b.node(201, 40_000, lat=41.0)
+    b.edge(200, 201, 40_000, "quiet_street", "Far Away Parkway")
+    graph.add_nodes_from(b.g.nodes(data=True))
+    graph.add_edges_from(b.g.edges(keys=True, data=True))
+
+    city = city_pages.build_city("Testville", graph)
+    s = city["stats"]
+    # Testville's own main piece, not zero
+    assert s["connected_km"] > 0, "the city's main network was reported as nothing"
+    assert s["connected_km"] == 0.4
+    # and it is honest about what that network reaches: 2.4 km region-wide, and
+    # it does leave town (the long edge out to node 5)
+    assert s["connected_region_km"] == 2.4
+    assert s["connected_leaves_city"] is True
+
+
+def test_a_network_that_never_leaves_town_does_not_claim_to(
+    town_fixture: Path,
+) -> None:
+    with (config.DATA_DIR / "graph.pkl").open("rb") as fh:
+        graph: nx.MultiDiGraph = pickle.load(fh)
+    # drop the long edge that runs out of Testville, so nothing leaves
+    graph.remove_node(5)
+    city = city_pages.build_city("Testville", graph)
+    s = city["stats"]
+    assert s["connected_leaves_city"] is False
+    assert s["connected_km"] == s["connected_region_km"] == 0.4

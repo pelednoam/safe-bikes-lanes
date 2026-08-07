@@ -50,7 +50,7 @@ MAX_PROJECTS = 40
 # The cities we publish. build() writes index.json from whatever it is given,
 # and the Pages assembly copies one directory per entry in that index — so
 # building a single city would quietly un-publish the others. Add a city here.
-CITIES = ["Somerville", "Cambridge"]
+CITIES = ["Somerville", "Cambridge", "Lexington"]
 # Shorter than this and a "pocket" is a driveway stub, not a stranded piece of
 # neighbourhood. Applies to both the count and the total, so the page's "N km in
 # M pockets" describes one set of things.
@@ -149,10 +149,6 @@ def build_city(town: str, graph: nx.MultiDiGraph) -> dict[str, Any]:
         return point_in_rings((lon, lat), rings)
 
     island_of, island_m = priorities.safe_islands(graph)
-    # -1 is also the sentinel for "no island" below, so a graph with no kid-safe
-    # streets at all would make every unclassified street rank 0 and read as
-    # "connected to the region" on the page. Use a value no island id can take.
-    biggest_global = max(island_m, key=lambda i: island_m[i], default=-2)
 
     # First pass: how much of each island lies in THIS city. Ranking islands by
     # their global size put every Somerville pocket in the same bucket — they're
@@ -175,8 +171,22 @@ def build_city(town: str, graph: nx.MultiDiGraph) -> dict[str, Any]:
             iid = island_of.get(u, island_of.get(v, -1))
             local_m[iid] = local_m.get(iid, 0.0) + float(data["length"])
 
+    # The city's main network: the island here with the largest REGION-WIDE
+    # extent, not the region's single largest island.
+    #
+    # Using the global biggest was wrong for any town that doesn't touch it, and
+    # most outer towns don't. Lexington's network runs 486 km across several
+    # towns but isn't the 1,422 km one, so its page reported "0.0 km reach the
+    # wider network" and called all 447 km "cut off with no safe way out" — of a
+    # network you can ride to Arlington on. -2 is a sentinel no island id takes,
+    # so a city with no kid-safe street at all gets no rank-0 piece.
+    main_island = max(local_m, key=lambda i: island_m.get(i, 0.0), default=-2)
+    # and whether that network actually leaves the city, rather than being
+    # asserted to: it does if any of it lies outside the boundary
+    leaves_city = island_m.get(main_island, 0.0) > local_m.get(main_island, 0.0) + 1.0
+
     pockets = sorted(
-        ((iid, m) for iid, m in local_m.items() if iid != biggest_global),
+        ((iid, m) for iid, m in local_m.items() if iid != main_island),
         key=lambda kv: kv[1],
         reverse=True,
     )
@@ -191,7 +201,7 @@ def build_city(town: str, graph: nx.MultiDiGraph) -> dict[str, Any]:
     # a reader more pockets on the map than the sentence claimed — the same
     # two-different-sets problem the pocket totals had. Stubs share the tail
     # colour with the long tail of small pockets, which is what they are.
-    rank_of: dict[int, int] = {biggest_global: 0}
+    rank_of: dict[int, int] = {main_island: 0}
     for i, (iid, _m) in enumerate(real_pockets):
         rank_of[iid] = min(i + 1, NAMED_POCKETS + 1)
 
@@ -299,7 +309,12 @@ def build_city(town: str, graph: nx.MultiDiGraph) -> dict[str, Any]:
             # the split that matters to someone who lives here: how much of the
             # kid-safe network can you leave the neighbourhood on, and how much
             # is stranded in pockets
-            "connected_km": round(local_m.get(biggest_global, 0.0) / 1000, 1),
+            "connected_km": round(local_m.get(main_island, 0.0) / 1000, 1),
+            # how far that same network runs in total, and whether it leaves
+            # town at all — so the page can say "reaches the region" only where
+            # that is true, and say what it does reach where it isn't
+            "connected_region_km": round(island_m.get(main_island, 0.0) / 1000, 1),
+            "connected_leaves_city": leaves_city,
             # one set of pockets, counted and measured the same way. These two
             # numbers appear in a single sentence ("33 km stranded in 38
             # pockets"), and summing all of them while counting only the ones

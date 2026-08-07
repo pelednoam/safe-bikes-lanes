@@ -50,7 +50,7 @@ test("the figures split the network into connected and stranded", async ({ page 
   expect(await figures.count()).toBeGreaterThanOrEqual(4);
   const text = (await page.locator("#figures").textContent()) ?? "";
   expect(text).toMatch(/km/);
-  expect(text).toMatch(/reach the wider network/);
+  expect(text).toMatch(/carries on out of town|doesn't leave the city/);
   expect(text).toMatch(/cut off from that network, in \d+ pockets/);
 });
 
@@ -234,7 +234,7 @@ test("tapping a piece of the network says what it is, without a mouse", async ({
   expect(pt).not.toBeNull();
   if (!pt) return;
   await page.mouse.click(pt.x, pt.y);
-  await expect(page.locator(".maplibregl-popup")).toContainText(/Connected|pocket/i, {
+  await expect(page.locator(".maplibregl-popup")).toContainText(/main network|pocket/i, {
     timeout: 10_000,
   });
   // and it still says what the street itself is like

@@ -524,6 +524,10 @@ def summary_sentence(cand: Candidate) -> str:
         # candidate with joins_region set but no gain_km rendered "connects  of
         # kid-safe streets to the region-wide network" — a public claim with a
         # hole in it, where reading join_names[1] at least raised IndexError.
+        # Name the side that gains, then what it joins. "connects 486.3 km and
+        # 18.7 km" makes the reader work out which number is the point, and puts
+        # a network's region-wide extent beside a city page's own figure for the
+        # same streets — the confusion the 1,422 km wording had, one level down.
         if cand.joins_region and cand.gain_km:
             # name the side that actually gains. The other side is every
             # kid-safe street in the region, and printing its mileage next to a
@@ -531,8 +535,11 @@ def summary_sentence(cand: Candidate) -> str:
             bits.append(
                 f"connects {cand.gain_km} of kid-safe streets to the region-wide network"
             )
-        elif cand.join_names:
-            bits.append(f"connects {' and '.join(cand.join_names)} of kid-safe streets")
+        elif cand.gain_km and cand.join_names:
+            bits.append(
+                f"connects {cand.gain_km} of kid-safe streets"
+                f" to a {cand.join_names[0]} network"
+            )
         else:
             bits.append(f"unlocks {cand.join_m / 1000:.1f} km of kid-safe streets")
     if cand.access_computed and (cand.dest_unlocked or cand.pop_gaining > 0):

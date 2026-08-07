@@ -283,11 +283,12 @@ def test_summary_only_claims_what_the_numbers_say() -> None:
 
     cand.join_m = 18_000.0
     cand.join_names = ["24.0 km", "18.0 km"]
+    cand.gain_km = "18.0 km"
     cand.crashes = 1
     cand.towns = ["Somerville"]
     rich = priorities.summary_sentence(cand)
     assert "Somerville" in rich
-    assert "connects 24.0 km and 18.0 km of kid-safe streets" in rich
+    assert "connects 18.0 km of kid-safe streets to a 24.0 km network" in rich
     assert "1 bike crash since 2021" in rich  # singular
 
     # When the big side is the whole region's network, its mileage is not worth
@@ -1006,7 +1007,9 @@ def test_only_the_region_wide_network_is_named_as_such() -> None:
     priorities.score_severance([gap2], island_of2, island_m2)
     assert not gap2.joins_region, "neither side here is the biggest island"
     both = priorities.summary_sentence(gap2)
-    assert "0.4 km and 0.8 km" in both or "0.8 km and 0.4 km" in both
+    # the gaining side first, then what it joins — so which number is the point
+    # doesn't have to be worked out
+    assert "connects 0.4 km of kid-safe streets to a 0.8 km network" in both
     assert "region-wide" not in both
 
 

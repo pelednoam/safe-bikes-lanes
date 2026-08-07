@@ -18,7 +18,10 @@ from typing import Final
 #   1  city-page segments carry name/cls/source/crashes (2026-08-07)
 #   2  city stats carry the measured stranded headcount, projects_shown and
 #      budget_km; the page refuses to draw without them (2026-08-07)
-DATA_FORMAT: Final[int] = 2
+#   3  the connected piece is the city's own main network, with
+#      connected_region_km and connected_leaves_city describing what it reaches
+#      (2026-08-07)
+DATA_FORMAT: Final[int] = 3
 
 DATA_DIR: Final[Path] = Path(__file__).resolve().parent.parent / "data"
 RAW_DIR: Final[Path] = DATA_DIR / "raw"

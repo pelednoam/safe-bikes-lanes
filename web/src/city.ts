@@ -25,6 +25,9 @@ declare global {
 interface CityStats {
   safe_km: number;
   connected_km: number;
+  /** how far that same network runs in total, and whether it leaves town */
+  connected_region_km: number;
+  connected_leaves_city: boolean;
   pocket_km: number;
   pockets: number;
   biggest_pocket_km: number;
@@ -151,6 +154,7 @@ function statsAreUsable(city: CityData): boolean {
   const required: (keyof CityStats)[] = [
     "safe_km",
     "connected_km",
+    "connected_region_km",
     "pocket_km",
     "pockets",
     "projects",
@@ -188,7 +192,13 @@ function summarise(city: CityData): void {
   }
 
   const figures: [string, string, string][] = [
-    [`${s.connected_km} km`, "kid-safe streets that reach the wider network", "good"],
+    [
+      `${s.connected_km} km`,
+      s.connected_leaves_city
+        ? "kid-safe streets on one network that carries on out of town"
+        : "the largest connected piece — it doesn't leave the city",
+      "good",
+    ],
     // "cut off from the main network", not "you can't leave safely": a pocket
     // can run into the next town and still not reach the main network, and the
     // stronger phrasing asserts something this measures nothing about.
@@ -533,7 +543,11 @@ async function start(): Promise<void> {
       const km = props?.["isle_km"];
       const belongs =
         isle === 0
-          ? `<br><small><b>Connected:</b> ${km} km in ${city.name}, and it reaches the rest of the region.</small>`
+          ? city.stats.connected_leaves_city
+            ? `<br><small><b>The main network:</b> ${km} km in ${city.name}, part of` +
+              ` ${N(city.stats.connected_region_km)} km that carries on past the town line.</small>`
+            : `<br><small><b>The main network:</b> ${km} km — the largest connected` +
+              ` piece in ${city.name}, but it doesn't leave the city.</small>`
           : `<br><small><b>A pocket:</b> ${km} km of it in ${city.name}, cut off from` +
             " the main network — you can't leave it without riding something" +
             " hostile.</small>";
