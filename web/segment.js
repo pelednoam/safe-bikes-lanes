@@ -93,9 +93,48 @@ const photoCache = new Map();
 /** How far a street-level photo may be and still be *this* street. Beyond this
  * it is a picture of somewhere else, which is worse than showing none. */
 const PHOTO_MAX_M = 60;
-/** Newest Mapillary street-level photo near a point, or nulls.
+/** The Mapillary image nearest a point, or null if the nearest is too far to be
+ * this street.
  *
- * Cached per ~40 m cell: hovering a street fires this repeatedly, and the same
+ * Search wide, then choose by real distance. A ±44 m box finds a photo on only
+ * some hovers: Mapillary filters bbox on the raw GPS fix while the refined
+ * computed_geometry can sit tens of metres away, so nearby images fall outside
+ * it. A wider box with a hard distance cap finds more of them and still never
+ * shows a picture of the next street over.
+ *
+ * Shared so there is one answer to "which photo is of this place": the settings
+ * preview in app.ts had its own copy and kept the old narrow-box, newest-wins
+ * version of this after the card was fixed.
+ */
+export async function nearestMapillary(lon, lat, token, fields = "id,thumb_256_url,captured_at,computed_geometry") {
+    if (token === "")
+        return null;
+    const d = 0.0015; // ~165 m to search
+    const url = "https://graph.mapillary.com/images?" +
+        new URLSearchParams({
+            access_token: token,
+            bbox: `${lon - d},${lat - d},${lon + d},${lat + d}`,
+            fields,
+            limit: "20",
+        }).toString();
+    const resp = await fetch(url);
+    if (!resp.ok)
+        throw new Error(`mapillary ${resp.status}`);
+    const data = (await resp.json());
+    const kx = 111320 * Math.cos((lat * Math.PI) / 180);
+    const nearest = data.data
+        .map((im) => {
+        const c = im.computed_geometry?.coordinates;
+        const away = c === undefined ? Infinity : Math.hypot((c[0] - lon) * kx, (c[1] - lat) * 110540);
+        return { im, away };
+    })
+        .filter((x) => x.away <= PHOTO_MAX_M)
+        .sort((a, b) => a.away - b.away)[0];
+    return nearest?.im ?? null;
+}
+/** Street-level photo nearest a point, or nulls.
+ *
+ * Cached per ~22 m cell: hovering a street fires this repeatedly, and the same
  * stretch of road shouldn't cost a request per pixel. */
 export async function fetchSegmentPhoto(lon, lat, token) {
     if (token === "")
@@ -107,39 +146,10 @@ export async function fetchSegmentPhoto(lon, lat, token) {
     const cached = photoCache.get(key);
     if (cached !== undefined)
         return cached;
-    // Search wide, then choose by real distance.
-    //
-    // A ±44 m box finds a photo on only some hovers: Mapillary filters bbox on
-    // the raw GPS fix, while the refined computed_geometry can sit tens of metres
-    // away, so nearby images fall outside it. A wider box with a hard distance
-    // cap finds more of them without ever showing a picture of another street.
-    const d = 0.0015; // ~165 m to search
-    const url = "https://graph.mapillary.com/images?" +
-        new URLSearchParams({
-            access_token: token,
-            bbox: `${lon - d},${lat - d},${lon + d},${lat + d}`,
-            fields: "id,thumb_256_url,captured_at,computed_geometry",
-            limit: "20",
-        }).toString();
     let result = { url: null, captured: null };
     try {
-        const resp = await fetch(url);
-        if (resp.ok) {
-            const data = (await resp.json());
-            const kx = 111320 * Math.cos((lat * Math.PI) / 180);
-            const nearest = data.data
-                .map((im) => {
-                const c = im.computed_geometry?.coordinates;
-                const away = c === undefined ? Infinity : Math.hypot((c[0] - lon) * kx, (c[1] - lat) * 110540);
-                return { im, away };
-            })
-                .filter((x) => x.away <= PHOTO_MAX_M)
-                .sort((a, b) => a.away - b.away)[0];
-            result = {
-                url: nearest?.im.thumb_256_url ?? null,
-                captured: nearest?.im.captured_at ?? null,
-            };
-        }
+        const near = await nearestMapillary(lon, lat, token);
+        result = { url: near?.thumb_256_url ?? null, captured: near?.captured_at ?? null };
     }
     catch {
         // no photo is a fine answer; the card stands without one

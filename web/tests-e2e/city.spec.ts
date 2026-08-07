@@ -28,10 +28,19 @@ test("leads with how many people can't reach a school or park", async ({ page })
   await expect(lede).toContainText(/school, playground or library/);
   // and never without the distance it assumes
   await expect(lede).toContainText(/2\.5 km/);
-  // the shape of the problem follows this city's numbers: Somerville's safe
-  // network is mostly one piece, so the page must not call it an archipelago
-  await expect(lede).toContainText(/Most of the safe network here does join up/);
-  await expect(lede).not.toContainText(/don't join up/);
+  // The shape of the problem follows this city's numbers rather than the thesis
+  // the module was written around. Assert the RULE against the data, not the
+  // sentence Somerville happens to produce today: pinning the sentence fails
+  // when the city changes and passes when the threshold breaks.
+  const s = (await (await page.request.get("/data/cities/somerville.json")).json())
+    .stats as Record<string, number>;
+  const strandedShare = (s["pocket_km"] as number) / (s["safe_km"] as number);
+  if (strandedShare >= 0.3) {
+    await expect(lede).toContainText(/The streets they can use don't join up/);
+  } else {
+    await expect(lede).toContainText(/Most of the safe network here does join up/);
+    await expect(lede).not.toContainText(/don't join up/);
+  }
   await expect(page.locator("h1")).toHaveText("Somerville");
 });
 

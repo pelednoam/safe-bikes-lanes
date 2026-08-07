@@ -30,6 +30,54 @@ def test_point_in_rings_handles_multipart_towns() -> None:
     assert not city_pages.point_in_rings((5.0, 5.0), [square])
     # a town with an island offshore is two rings, and both count
     assert city_pages.point_in_rings((11.0, 11.0), [square, far])
+    assert city_pages.point_in_rings((1.0, 1.0), [square, far])
+
+
+def test_a_hole_in_a_town_is_not_in_the_town() -> None:
+    """Rings arrive flattened, outer boundaries and interior holes together.
+    Testing them one at a time answered "inside" for a point in the hole."""
+    outer = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]
+    hole = [(4.0, 4.0), (6.0, 4.0), (6.0, 6.0), (4.0, 6.0)]
+    assert city_pages.point_in_rings((1.0, 1.0), [outer, hole])
+    assert not city_pages.point_in_rings((5.0, 5.0), [outer, hole])
+
+
+def test_a_street_belongs_to_the_town_its_middle_is_in() -> None:
+    """coords[len // 2] is the middle vertex, not the middle. OSM puts vertices
+    on bends, so a straight run with curves bunched at one end has its middle
+    vertex down at that end — and this decides which town a street counts for."""
+    # nine vertices crowded into the first tenth, then one long straight leg
+    coords = [(x / 100, 0.0) for x in range(9)] + [(10.0, 0.0)]
+    assert coords[len(coords) // 2] == (0.05, 0.0)  # the old answer: 5 cm along a 10 m street
+    mx, my = city_pages.midpoint(coords)
+    assert mx == pytest.approx(5.0, abs=0.01) and my == pytest.approx(0.0)
+    # degenerate inputs don't explode
+    assert city_pages.midpoint([(3.0, 4.0)]) == (3.0, 4.0)
+    assert city_pages.midpoint([(0.0, 0.0), (0.0, 0.0)]) == (0.0, 0.0)
+
+
+def test_a_name_with_no_slug_never_overwrites_the_app(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """slugify strips everything non-alphanumeric, and WEB / "" is WEB — so an
+    unsluggable name would write its page over the route planner's index.html."""
+    monkeypatch.setattr(city_pages, "WEB", tmp_path)
+    app = tmp_path / "index.html"
+    app.write_text("the route planner")
+    assert city_pages.slugify("—") == ""
+    with pytest.raises(SystemExit, match="no usable slug"):
+        city_pages.write_page("", "—")
+    assert app.read_text() == "the route planner"
+
+
+def test_a_town_name_cannot_inject_markup_into_its_page(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(city_pages, "WEB", tmp_path)
+    page = city_pages.write_page("x", 'Foo" onload="evil()')
+    written = page.read_text()
+    assert 'onload="evil()' not in written
+    assert "&quot;" in written
 
 
 def test_bbox_covers_every_ring() -> None:
@@ -240,6 +288,7 @@ def test_the_page_carries_its_own_caveats(town_fixture: Path) -> None:
     # the app's limits travel with the city's numbers, plus the one this page
     # introduces by cutting the region up along a town line
     assert len(city["limits"]) == 4
+    assert city["limits"][:3] == ["a limit", "another limit", "a third"]
     assert any("grid cell" in limit for limit in city["limits"]), (
         "the page names a city beside a resident count it assembled itself"
     )
@@ -337,3 +386,16 @@ def test_the_stranded_headcount_is_measured_not_recovered_from_a_percentage(
     assert s["stranded_pct"] == 50
     # and the budget those numbers assume travels with them
     assert s["budget_km"] == round(config.ACCESS_BUDGET_M / 1000, 1)
+
+
+def test_no_pocket_gets_a_colour_the_page_does_not_have(town_fixture: Path) -> None:
+    """Ranks index a palette in city.ts. NAMED_POCKETS individually-coloured
+    pockets plus rank 0 (connected) plus the shared tail is NAMED_POCKETS + 2
+    entries; a rank past the end falls through to the same grey as the tail and
+    silently merges a pocket into it."""
+    with (config.DATA_DIR / "graph.pkl").open("rb") as fh:
+        graph: nx.MultiDiGraph = pickle.load(fh)
+    city = city_pages.build_city("Testville", graph)
+    ranks = {f["properties"]["isle"] for f in city["islands"]["features"]}
+    assert min(ranks) >= 0
+    assert max(ranks) <= city_pages.NAMED_POCKETS + 1

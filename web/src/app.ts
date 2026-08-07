@@ -25,6 +25,7 @@ import {
   CLASS_LABELS,
   clearPhotoCache,
   FACILITY_CLASSES,
+  nearestMapillary,
   fillSegmentPhoto as fillPhotoSlot,
   GRADE_COLORS,
   segmentHtml,
@@ -1051,28 +1052,18 @@ function showSummary(option: RouteOption): void {
 // Mapillary street-level photo previews (free client token; CC BY-SA imagery)
 // ---------------------------------------------------------------------------
 
-interface MapillaryImage {
-  thumb_1024_url?: string;
-  captured_at?: number;
-}
-
 let segPhotoTimer: number | undefined;
 
 async function showMapillaryPreview(lon: number, lat: number): Promise<void> {
-  const d = 0.0005; // ~45 m box
-  const url =
-    "https://graph.mapillary.com/images?" +
-    new URLSearchParams({
-      access_token: mapillaryToken,
-      bbox: `${lon - d},${lat - d},${lon + d},${lat + d}`,
-      fields: "id,thumb_1024_url,captured_at",
-      limit: "3",
-    }).toString();
   try {
-    const resp = await fetch(url);
-    if (!resp.ok) throw new Error(`mapillary ${resp.status}`);
-    const data = (await resp.json()) as { data: MapillaryImage[] };
-    const newest = [...data.data].sort((a, b) => (b.captured_at ?? 0) - (a.captured_at ?? 0))[0];
+    // the same "nearest, and near enough to be here" rule the street card uses;
+    // this used to keep its own narrow-box, newest-wins copy
+    const newest = await nearestMapillary(
+      lon,
+      lat,
+      mapillaryToken,
+      "id,thumb_1024_url,captured_at,computed_geometry",
+    );
     const box = document.createElement("div");
     if (newest?.thumb_1024_url) {
       const img = document.createElement("img");

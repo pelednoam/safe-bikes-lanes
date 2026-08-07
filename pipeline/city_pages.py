@@ -10,9 +10,9 @@ don't. Colouring the pieces separately puts that on the map in a glance, which
 no amount of ranking does.
 
 How bad the split is varies, and the page says whichever is true. Somerville
-turned out to be mostly connected — 179 of its 212 kid-safe kilometres are one
+turned out to be mostly connected — 178 of its 211 kid-safe kilometres are one
 piece — so its page leads with the 7,255 residents who still can't reach a
-school or park, and treats the 23.6 km of pockets as the specific gaps they are.
+school or park, and treats the 23.3 km of pockets as the specific gaps they are.
 The first draft called every city an archipelago; a screenshot disagreed.
 
 Written as a separate step from priorities.py because it needs that module's
@@ -21,7 +21,10 @@ output, and because a city page should be cheap to regenerate.
 
 from __future__ import annotations
 
+import html
+import itertools
 import json
+import math
 import pickle
 import re
 from pathlib import Path
@@ -34,10 +37,12 @@ import priorities
 WEB = config.DATA_DIR.parent / "web"
 OUT = WEB / "data" / "cities"
 
-# The islands worth colouring separately. Beyond this the map is confetti; the
-# rest are drawn in one "small pockets" colour, which is honest — at that size
-# the point isn't which island it is, it's that it's cut off.
-NAMED_ISLANDS = 8
+# How many pockets get a colour of their own. Beyond this the map is confetti,
+# and the rest share the tail colour at rank NAMED_POCKETS + 1 — honest enough,
+# because at that size the point isn't which pocket it is, it's that it's cut
+# off. Rank 0 is always the network that reaches the region, so the page's
+# palette needs NAMED_POCKETS + 2 entries.
+NAMED_POCKETS = 7
 # A city page carries its own streets, so it stays small. Anything longer than
 # this is a regional corridor that the main map is the right place for.
 MAX_PROJECTS = 40
@@ -52,9 +57,17 @@ def slugify(name: str) -> str:
 
 
 def point_in_rings(pt: tuple[float, float], rings: list[list[tuple[float, float]]]) -> bool:
+    """Even-odd across every ring at once.
+
+    Not "inside any ring": these rings arrive flattened, outer boundaries and
+    interior holes together, so testing them one at a time reports a point in a
+    hole as inside the town. Crossing an outer ring puts you in, crossing a hole
+    puts you back out, and a town made of two disjoint pieces still works
+    because a point can only be inside one of them.
+    """
     x, y = pt
+    inside = False
     for ring in rings:
-        inside = False
         for i in range(len(ring)):
             x1, y1 = ring[i]
             x2, y2 = ring[(i + 1) % len(ring)]
@@ -62,9 +75,7 @@ def point_in_rings(pt: tuple[float, float], rings: list[list[tuple[float, float]
                 xi = x1 + (y - y1) / (y2 - y1) * (x2 - x1)
                 if x < xi:
                     inside = not inside
-        if inside:
-            return True
-    return False
+    return inside
 
 
 def city_rings(town: str) -> list[list[tuple[float, float]]]:
@@ -78,6 +89,29 @@ def bbox_of(rings: list[list[tuple[float, float]]]) -> tuple[float, float, float
     xs = [p[0] for ring in rings for p in ring]
     ys = [p[1] for ring in rings for p in ring]
     return (min(xs), min(ys), max(xs), max(ys))
+
+
+def midpoint(coords: list[tuple[float, float]]) -> tuple[float, float]:
+    """The point halfway along a line, by length.
+
+    coords[len // 2] is the middle *vertex*, which is a different thing: OSM
+    puts vertices where a street bends, so a long straight run with a cluster of
+    curves at one end has its middle vertex down at that end. Since this is what
+    decides which town a street belongs to, the error lands on boundary streets
+    — exactly the ones a town-by-town page argues about.
+    """
+    if len(coords) < 2:
+        return coords[0]
+    pairs = list(itertools.pairwise(coords))
+    spans = [math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in pairs]
+    half = sum(spans) / 2
+    run = 0.0
+    for (a, b), span in zip(pairs, spans, strict=True):
+        if run + span >= half:
+            t = (half - run) / span if span else 0.0
+            return (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)
+        run += span
+    return coords[-1]
 
 
 def segment_props(data: dict[str, Any]) -> dict[str, Any]:
@@ -122,7 +156,7 @@ def build_city(town: str, graph: nx.MultiDiGraph) -> dict[str, Any]:
             continue
         seen.add(eid)
         coords = priorities.edge_coords(graph, u, v, data)
-        mid = coords[len(coords) // 2]
+        mid = midpoint(coords)
         if not inside(mid[0], mid[1]):
             continue
         members.append((u, v, data))
@@ -142,7 +176,7 @@ def build_city(town: str, graph: nx.MultiDiGraph) -> dict[str, Any]:
     # city's own cut-off pockets, biggest first
     rank_of: dict[int, int] = {biggest_global: 0}
     for i, (iid, _m) in enumerate(pockets):
-        rank_of[iid] = min(i + 1, NAMED_ISLANDS)
+        rank_of[iid] = min(i + 1, NAMED_POCKETS + 1)
 
     safe_feats: list[dict[str, Any]] = []
     barrier_feats: list[dict[str, Any]] = []
@@ -160,7 +194,7 @@ def build_city(town: str, graph: nx.MultiDiGraph) -> dict[str, Any]:
                     "properties": {
                         # the palette keys off the rank, not the id: ids are
                         # arbitrary and change between builds, ranks don't
-                        "isle": rank_of.get(iid, NAMED_ISLANDS),
+                        "isle": rank_of.get(iid, NAMED_POCKETS + 1),
                         # how much of it is in this city, which is what a
                         # resident is looking at — not the regional figure
                         "isle_km": round(local_m.get(iid, 0.0) / 1000, 1),
@@ -202,15 +236,22 @@ def build_city(town: str, graph: nx.MultiDiGraph) -> dict[str, Any]:
     if access_path.exists():
         for cell in json.loads(access_path.read_text())["features"]:
             ring = cell["geometry"]["coordinates"][0]
-            cx = sum(p[0] for p in ring[:4]) / 4
-            cy = sum(p[1] for p in ring[:4]) / 4
+            # average every vertex, not the first four: those are the corners
+            # only for the rectangles the exporter happens to emit today, and a
+            # clipped or reprojected cell would be assigned to the wrong town
+            pts = ring[:-1] if len(ring) > 1 and ring[0] == ring[-1] else ring
+            cx = sum(p[0] for p in pts) / len(pts)
+            cy = sum(p[1] for p in pts) / len(pts)
             if not inside(cx, cy):
                 continue
             cells.append(cell)
             people = cell["properties"].get("residents")
             if people:
+                # a cell with people but no coverage figure counts as unserved
+                # rather than aborting the build
+                pct = cell["properties"].get("pct_served", 0)
                 residents += float(people)
-                served += float(people) * float(cell["properties"]["pct_served"]) / 100.0
+                served += float(people) * float(pct) / 100.0
 
     meta = json.loads((WEB / "data" / "priorities_meta.json").read_text())
     return {
@@ -341,11 +382,19 @@ PAGE_TEMPLATE = """<!doctype html>
 
 def write_page(slug: str, name: str) -> Path:
     """A directory per city, so the URL is /somerville rather than ?city=."""
+    if slug == "":
+        # slugify strips everything non-alphanumeric, so a name like "—" gives
+        # "". WEB / "" is WEB, and the page would then be written straight over
+        # the route planner's own web/index.html.
+        raise SystemExit(f"{name!r} has no usable slug — refusing to write a page")
     directory = WEB / slug
     directory.mkdir(parents=True, exist_ok=True)
     page = directory / "index.html"
-    description = DESCRIPTION.format(name=name)
-    page.write_text(PAGE_TEMPLATE.format(slug=slug, name=name, description=description))
+    # the name reaches a title, an <h1> and a content="…" attribute; it comes
+    # from a MassGIS layer today, but nothing here should depend on that
+    safe = html.escape(name, quote=True)
+    description = DESCRIPTION.format(name=safe)
+    page.write_text(PAGE_TEMPLATE.format(slug=slug, name=safe, description=description))
     return page
 
 

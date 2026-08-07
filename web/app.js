@@ -1,5 +1,5 @@
 import { isNativeApp, isNewerAppVersion, lastNativeSpeechError, nativeSpeak, startDownload, startBackgroundWatcher, stopBackgroundWatcher, webVoiceCount, } from "./native.js";
-import { CLASS_LABELS, clearPhotoCache, FACILITY_CLASSES, fillSegmentPhoto as fillPhotoSlot, GRADE_COLORS, segmentHtml, } from "./segment.js";
+import { CLASS_LABELS, clearPhotoCache, FACILITY_CLASSES, nearestMapillary, fillSegmentPhoto as fillPhotoSlot, GRADE_COLORS, segmentHtml, } from "./segment.js";
 import { bearingDeg, buildAlerts, buildManeuvers, buildTrack, distM, snapToTrack, sunsetTime, trackBearingAhead, trackSlice, } from "./nav.js";
 import { addHazard, buildReportText, downscalePhoto, getHazardPhoto, HAZARD_LABELS, listHazards, removeHazard, setHazardCategory, } from "./hazards.js";
 import { clearRecent, deletePlace, emojiFor, exportBackup, importBackup, listPlaces, listRecent, pushRecent, savePlace, } from "./places.js";
@@ -930,22 +930,15 @@ function showSummary(option) {
         sunsetBox.style.display = "none";
     }
 }
+// ---------------------------------------------------------------------------
+// Mapillary street-level photo previews (free client token; CC BY-SA imagery)
+// ---------------------------------------------------------------------------
 let segPhotoTimer;
 async function showMapillaryPreview(lon, lat) {
-    const d = 0.0005; // ~45 m box
-    const url = "https://graph.mapillary.com/images?" +
-        new URLSearchParams({
-            access_token: mapillaryToken,
-            bbox: `${lon - d},${lat - d},${lon + d},${lat + d}`,
-            fields: "id,thumb_1024_url,captured_at",
-            limit: "3",
-        }).toString();
     try {
-        const resp = await fetch(url);
-        if (!resp.ok)
-            throw new Error(`mapillary ${resp.status}`);
-        const data = (await resp.json());
-        const newest = [...data.data].sort((a, b) => (b.captured_at ?? 0) - (a.captured_at ?? 0))[0];
+        // the same "nearest, and near enough to be here" rule the street card uses;
+        // this used to keep its own narrow-box, newest-wins copy
+        const newest = await nearestMapillary(lon, lat, mapillaryToken, "id,thumb_1024_url,captured_at,computed_geometry");
         const box = document.createElement("div");
         if (newest?.thumb_1024_url) {
             const img = document.createElement("img");

@@ -4,7 +4,13 @@
 // one module, and why its wording is pinned here.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { classGrade, fetchSegmentPhoto, fillSegmentPhoto, segmentHtml } from "../src/segment.js";
+import {
+  classGrade,
+  fetchSegmentPhoto,
+  fillSegmentPhoto,
+  nearestMapillary,
+  segmentHtml,
+} from "../src/segment.js";
 
 describe("the street card", () => {
   it("grades a street on the same scale as a whole route", () => {
@@ -257,5 +263,59 @@ describe("a street name that came from OpenStreetMap", () => {
     // the label falls back to the raw class string, which is also data
     const html = segmentHtml({ cls: "<b>x</b>" as never, name: "A St" });
     expect(html).not.toContain("<b>x</b>");
+  });
+});
+
+describe("the shared nearest-photo lookup", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("lets a caller ask for a bigger image and still applies the distance cap", async () => {
+    // the settings preview wants thumb_1024_url; it used to keep its own copy of
+    // this search and kept the narrow-box, newest-wins version after the card
+    // was fixed
+    const fetchMock = vi.fn(
+      async (_url: string) =>
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                thumb_1024_url: "https://img/big-far",
+                computed_geometry: { coordinates: [-71.4 + 150 / 82_000, 42.38] },
+              },
+              {
+                thumb_1024_url: "https://img/big-near",
+                computed_geometry: { coordinates: [-71.4 + 10 / 82_000, 42.38] },
+              },
+            ],
+          }),
+          { status: 200 },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const got = await nearestMapillary(
+      -71.4,
+      42.38,
+      "token",
+      "id,thumb_1024_url,captured_at,computed_geometry",
+    );
+    expect(got?.thumb_1024_url).toBe("https://img/big-near");
+    const [firstCall] = fetchMock.mock.calls;
+    expect(String(firstCall?.[0] ?? "")).toContain("thumb_1024_url");
+  });
+
+  it("has nothing to say without a token, and never calls out", async () => {
+    const f = vi.fn();
+    vi.stubGlobal("fetch", f);
+    expect(await nearestMapillary(-71.4, 42.38, "")).toBeNull();
+    expect(f).not.toHaveBeenCalled();
+  });
+
+  it("lets a refusal reach the caller rather than reporting no photo", async () => {
+    // fetchSegmentPhoto turns this into "no photo"; the preview opens Mapillary
+    // in a tab instead, and it can only tell the difference if this throws
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("nope", { status: 429 })));
+    await expect(nearestMapillary(-71.4, 42.38, "token")).rejects.toThrow(/429/);
   });
 });
