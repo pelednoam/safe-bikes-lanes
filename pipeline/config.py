@@ -8,6 +8,16 @@ protected path" — the router will detour up to that ratio to avoid it.
 from pathlib import Path
 from typing import Final
 
+# The shape of what the pipeline writes into web/data. web/data isn't in git —
+# it's a release tarball a deploy downloads — so code and data travel separately
+# and can arrive mismatched. Bump this whenever the app or a city page starts
+# *requiring* a field that older snapshots don't carry; the deploy compares it
+# against the extracted meta.json and refuses in seconds rather than failing
+# eight minutes later inside a browser test.
+#
+#   1  city-page segments carry name/cls/source/crashes (2026-08-07)
+DATA_FORMAT: Final[int] = 1
+
 DATA_DIR: Final[Path] = Path(__file__).resolve().parent.parent / "data"
 RAW_DIR: Final[Path] = DATA_DIR / "raw"
 

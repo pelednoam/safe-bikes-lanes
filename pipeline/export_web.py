@@ -598,6 +598,8 @@ def export_meta() -> None:
         )
     out = {
         "built": datetime.datetime.now(datetime.UTC).isoformat()[:10],
+        # what this snapshot promises the app; see config.DATA_FORMAT
+        "format": config.DATA_FORMAT,
         "sources": sources,
     }
     path = WEB_DATA / "meta.json"

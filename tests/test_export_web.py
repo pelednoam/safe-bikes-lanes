@@ -210,3 +210,21 @@ def test_meta_reports_every_source_and_the_build_date(
     assert meta["sources"][0]["name"] == "crashes_2025"
     assert meta["sources"][0]["retrieved"] == "2026-08-05"
     assert meta["sources"][0]["features"] == 42
+
+
+def test_the_snapshot_declares_what_it_promises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A deploy downloads web/data separately from the code, so the two can
+    arrive mismatched. The snapshot states its format and the deploy checks it
+    (scripts/check-data-format.sh) — without this field an old snapshot reads as
+    format 0 and the deploy stops, which is the intended behaviour, but a
+    *current* snapshot must never look old."""
+    monkeypatch.setattr(export_web, "WEB_DATA", tmp_path)
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    monkeypatch.setattr(config, "RAW_DIR", raw)
+    export_web.export_meta()
+    meta = json.loads((tmp_path / "meta.json").read_text())
+    assert meta["format"] == config.DATA_FORMAT
+    assert isinstance(config.DATA_FORMAT, int) and config.DATA_FORMAT >= 1

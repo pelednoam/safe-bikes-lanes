@@ -36,6 +36,8 @@ jobs:
           fi
           tar xzf web-data.tar.gz -C web
           echo "extracted $(ls web/data/tiles/*.json | grep -vc manifest) routing tiles, $(ls web/data/nettiles/*.json | grep -vc manifest) network tiles"
+      - name: Check the data snapshot matches this commit
+        run: bash scripts/check-data-format.sh
       - uses: actions/setup-node@v4
         with:
           node-version: 22

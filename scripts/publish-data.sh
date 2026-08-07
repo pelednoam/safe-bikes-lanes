@@ -30,3 +30,14 @@ gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" \
 gh release upload "$TAG" "$TARBALL" --clobber
 
 echo "published web-data.tar.gz ($SIZE) to the '$TAG' release"
+
+# Redeploy against what was just uploaded. Publishing and pushing are separate
+# steps, so whichever happens second has to be the one that triggers the build —
+# otherwise a deploy started by the push races the upload and ships the old data.
+if [ "${NO_DEPLOY:-}" = "1" ]; then
+  echo "NO_DEPLOY=1 — not triggering a Pages deploy"
+elif gh workflow run pages.yml >/dev/null 2>&1; then
+  echo "triggered a Pages deploy against the new snapshot"
+else
+  echo "could not trigger the Pages deploy — run: gh workflow run pages.yml"
+fi
