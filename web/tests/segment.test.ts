@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   classGrade,
+  clearPhotoCache,
   fetchSegmentPhoto,
   fillSegmentPhoto,
   nearestMapillary,
@@ -323,5 +324,105 @@ describe("the shared nearest-photo lookup", () => {
     // in a tab instead, and it can only tell the difference if this throws
     vi.stubGlobal("fetch", vi.fn(async () => new Response("nope", { status: 429 })));
     await expect(nearestMapillary(-71.4, 42.38, "token")).rejects.toThrow(/429/);
+  });
+});
+
+describe("what the photo lookup remembers", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    clearPhotoCache();
+  });
+
+  it("does not remember a rate limit as 'no photo here'", async () => {
+    // one 429 while panning used to make that block permanently photo-less for
+    // the rest of the session
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        calls++;
+        return calls === 1
+          ? new Response("slow down", { status: 429 })
+          : new Response(
+              JSON.stringify({
+                data: [
+                  {
+                    thumb_256_url: "https://img/after",
+                    computed_geometry: { coordinates: [-71.6, 42.38] },
+                  },
+                ],
+              }),
+              { status: 200 },
+            );
+      }),
+    );
+    expect((await fetchSegmentPhoto(-71.6, 42.38, "token")).url).toBeNull();
+    // the same spot again: it must ask a second time, not answer from a cache
+    expect((await fetchSegmentPhoto(-71.6, 42.38, "token")).url).toBe("https://img/after");
+    expect(calls).toBe(2);
+  });
+
+  it("still remembers a real 'no photos here' answer", async () => {
+    const f = vi.fn(async () => new Response(JSON.stringify({ data: [] }), { status: 200 }));
+    vi.stubGlobal("fetch", f);
+    expect((await fetchSegmentPhoto(-71.61, 42.38, "token")).url).toBeNull();
+    expect((await fetchSegmentPhoto(-71.61, 42.38, "token")).url).toBeNull();
+    expect(f, "an empty result is an answer, and hovering must not re-ask").toHaveBeenCalledTimes(
+      1,
+    );
+  });
+
+  it("a corrected token is not answered from the old token's lookup", async () => {
+    // The cache is cleared on a token change, but a request already in flight
+    // resolves afterwards and used to write the old token's answer into the
+    // fresh cache — so fixing a bad token still showed nothing.
+    let release: (r: Response) => void = () => undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Promise<Response>((res) => (release = res))),
+    );
+    const inFlight = fetchSegmentPhoto(-71.62, 42.38, "bad-token");
+    clearPhotoCache(); // the user pastes a working token
+    release(new Response(JSON.stringify({ data: [] }), { status: 200 }));
+    await inFlight;
+
+    const good = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                thumb_256_url: "https://img/good",
+                computed_geometry: { coordinates: [-71.62, 42.38] },
+              },
+            ],
+          }),
+          { status: 200 },
+        ),
+    );
+    vi.stubGlobal("fetch", good);
+    expect((await fetchSegmentPhoto(-71.62, 42.38, "good-token")).url).toBe("https://img/good");
+    expect(good).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks for the geometry even when the caller forgot it", async () => {
+    // it is what "nearest" is decided on, so a caller omitting it would get null
+    // for every image — indistinguishable from "no photos here"
+    const f = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: [
+              { thumb_1024_url: "https://img/big", computed_geometry: { coordinates: [-71.63, 42.38] } },
+            ],
+          }),
+          { status: 200 },
+        ),
+    );
+    vi.stubGlobal("fetch", f);
+    const got = await nearestMapillary(-71.63, 42.38, "token", "id,thumb_1024_url");
+    expect(got?.thumb_1024_url).toBe("https://img/big");
+    const [call] = f.mock.calls as unknown as [string][];
+    expect(String(call?.[0] ?? "")).toContain("computed_geometry");
   });
 });

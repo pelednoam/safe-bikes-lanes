@@ -64,11 +64,16 @@ function shapeOfTheProblem(s, afterClaim) {
         ? `That means no route within a ${s.budget_km} km ride that avoids traffic` +
             " a child shouldn't be in."
         : `Measured as a ${s.budget_km} km ride that avoids traffic a child` +
-            " shouldn't be in:";
+            " shouldn't be in.";
     if (s.safe_km <= 0) {
         // No kid-safe street at all is not "mostly joins up" — the old share
         // calculation fell back to 0 here and produced exactly that sentence.
-        return `${budget} There is no street in this city a child can ride away from.`;
+        //
+        // Hedged, and deliberately. safe_km is rounded to one decimal, so it reads 0
+        // for anything under ~50 m, and 0 is also what a city with no data in this
+        // build looks like. "Almost none" is true in all three cases; "there is
+        // none" would be a flat claim resting on a rounded display value.
+        return `${budget} Almost no street here is one a child can ride away from.`;
     }
     const strandedShare = s.pocket_km / s.safe_km;
     if (strandedShare >= 0.3) {

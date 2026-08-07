@@ -519,7 +519,12 @@ def summary_sentence(cand: Candidate) -> str:
     else:
         bits.append(f"{where} — today {today}")
     if cand.join_m > 0:
-        if cand.joins_region and cand.join_names:
+        # gain_km in the guard, not just in the sentence: the three fields are
+        # independent attributes with nothing tying them together, and a
+        # candidate with joins_region set but no gain_km rendered "connects  of
+        # kid-safe streets to the region-wide network" — a public claim with a
+        # hole in it, where reading join_names[1] at least raised IndexError.
+        if cand.joins_region and cand.gain_km:
             # name the side that actually gains. The other side is every
             # kid-safe street in the region, and printing its mileage next to a
             # city's own read like a typo for the city's figure.

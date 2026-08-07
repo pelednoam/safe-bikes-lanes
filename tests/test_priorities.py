@@ -1008,3 +1008,20 @@ def test_only_the_region_wide_network_is_named_as_such() -> None:
     both = priorities.summary_sentence(gap2)
     assert "0.4 km and 0.8 km" in both or "0.8 km and 0.4 km" in both
     assert "region-wide" not in both
+
+
+def test_a_half_filled_candidate_never_renders_a_gap_in_a_sentence() -> None:
+    """joins_region, gain_km and join_names are independent fields. A candidate
+    with the flag but not the figure used to render "connects  of kid-safe
+    streets to the region-wide network" — worse than the IndexError it replaced,
+    because it publishes."""
+    cand = priorities.Candidate(
+        pid="c1", name="Nowhere St", kind="corridor", cls="busy_street", length_m=100.0
+    )
+    cand.join_m = 5_000.0
+    cand.joins_region = True  # set, but gain_km never was
+    out = priorities.summary_sentence(cand)
+    assert "connects  of" not in out
+    assert "region-wide" not in out
+    # it falls back to what it can support
+    assert "unlocks 5.0 km of kid-safe streets" in out

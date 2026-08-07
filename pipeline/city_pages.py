@@ -107,9 +107,11 @@ def midpoint(coords: list[tuple[float, float]]) -> tuple[float, float]:
     """
     if len(coords) < 2:
         return coords[0]
-    # A degree of longitude is ~0.74 of a degree of latitude at this latitude,
-    # so measuring in raw degrees stretches north-south spans by a third and
-    # puts the "halfway" point of a bent street in the wrong place.
+    # A degree of longitude covers ~0.74 of the ground a degree of latitude does
+    # at this latitude, so counting both the same overstates east-west spans by a
+    # third — putting the "halfway" point of a street that bends the wrong side
+    # of its real middle, which is what decides the town it counts for.
+    # kx converts degrees of longitude into the same units as degrees of latitude.
     kx = math.cos(math.radians(coords[0][1]))
     pairs = list(itertools.pairwise(coords))
     spans = [math.hypot((b[0] - a[0]) * kx, b[1] - a[1]) for a, b in pairs]
@@ -260,21 +262,22 @@ def build_city(town: str, graph: nx.MultiDiGraph) -> dict[str, Any]:
             cy = sum(p[1] for p in pts) / len(pts)
             if not inside(cx, cy):
                 continue
-            cells.append(cell)
             people = cell["properties"].get("residents")
-            if not people:
-                continue
             pct = cell["properties"].get("pct_served")
-            if pct is None:
+            if people and pct is None:
                 # Leave the cell out of both sides rather than guessing. The
                 # first version raised a KeyError here; the second defaulted to
                 # 0, which quietly counts everyone in the cell as unable to
                 # reach a school — inflating the single number this page leads
                 # with. An unmeasured cell is unmeasured, not unserved.
+                # ...and it is not drawn either. Shading a cell the numbers
+                # exclude puts a claim on the map the sentence doesn't make.
                 skipped += float(people)
                 continue
-            residents += float(people)
-            served += float(people) * float(pct) / 100.0
+            cells.append(cell)
+            if people:
+                residents += float(people)
+                served += float(people) * float(pct) / 100.0
 
     if skipped:
         # never silently: the denominator of a public claim just got smaller
@@ -312,6 +315,10 @@ def build_city(town: str, graph: nx.MultiDiGraph) -> dict[str, Any]:
             "projects": len(matching),
             "projects_shown": len(projects),
             "residents": round(residents) if residents else None,
+            # residents this page could not measure, so a reader can see whether
+            # the denominator above is the whole town. Printing it only on build
+            # stdout meant a town with poor coverage looked fully measured.
+            "unmeasured_residents": round(skipped),
             # the count itself, not a percentage the page has to multiply back
             # out: `round(residents * round(pct) / 100)` reconstructed "7,225
             # people" from a whole-number 9%, which is four significant digits

@@ -51,6 +51,18 @@ def test_a_street_belongs_to_the_town_its_middle_is_in() -> None:
     assert coords[len(coords) // 2] == (0.05, 0.0)  # the old answer: 5 cm along a 10 m street
     mx, my = city_pages.midpoint(coords)
     assert mx == pytest.approx(5.0, abs=0.01) and my == pytest.approx(0.0)
+
+    # An L: one leg east, one north, equal in DEGREES but not on the ground — at
+    # 42.4°N a degree of longitude is ~0.74 of a degree of latitude, so the east
+    # leg is the shorter one and the true midpoint sits in the north leg. A
+    # midpoint measured in raw degrees lands exactly on the corner, so this is
+    # the case that tells the two apart; the straight line above cannot.
+    lat = 42.4
+    el = [(-71.0, lat), (-70.0, lat), (-70.0, lat + 1.0)]
+    mx2, my2 = city_pages.midpoint(el)
+    assert (mx2, my2) != pytest.approx((-70.0, lat)), "landed on the corner: degrees, not ground"
+    assert mx2 == pytest.approx(-70.0), "the midpoint should be up the north leg"
+    assert my2 > lat, "the north leg is the longer one on the ground"
     # degenerate inputs don't explode
     assert city_pages.midpoint([(3.0, 4.0)]) == (3.0, 4.0)
     assert city_pages.midpoint([(0.0, 0.0), (0.0, 0.0)]) == (0.0, 0.0)
@@ -455,3 +467,69 @@ def test_the_published_set_is_what_a_bare_build_builds() -> None:
     # without arguments is itself the partial build above
     assert "Somerville" in city_pages.CITIES
     assert "Cambridge" in city_pages.CITIES
+
+
+def test_a_cell_with_no_coverage_figure_is_not_counted_as_unserved(
+    town_fixture: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The headline claim's worst failure mode, and it shipped twice: first as a
+    KeyError, then as pct_served defaulting to 0 — which counts everyone in the
+    cell as unable to reach a school and inflates the number the page leads with.
+    An unmeasured cell is unmeasured, not unserved."""
+    access = json.loads((town_fixture / "data" / "access.geojson").read_text())
+    # a second cell inside the town, with people but no coverage figure
+    ring = [[-71.10, 42.3795], [-71.09, 42.3795], [-71.09, 42.3798],
+            [-71.10, 42.3798], [-71.10, 42.3795]]
+    access["features"].append(
+        {
+            "type": "Feature",
+            "geometry": {"type": "Polygon", "coordinates": [ring]},
+            "properties": {"residents": 500, "band": "unknown"},  # no pct_served
+        }
+    )
+    (town_fixture / "data" / "access.geojson").write_text(json.dumps(access))
+
+    with (config.DATA_DIR / "graph.pkl").open("rb") as fh:
+        graph: nx.MultiDiGraph = pickle.load(fh)
+    city = city_pages.build_city("Testville", graph)
+    s = city["stats"]
+
+    # the measured cell alone: 1000 residents, 50% served
+    assert s["residents"] == 1000, "an unmeasured cell inflated the denominator"
+    assert s["stranded"] == 500, "an unmeasured cell was counted as unserved"
+    assert s["stranded_pct"] == 50
+    # and the exclusion is visible rather than silent — in the data and on stdout
+    assert s["unmeasured_residents"] == 500
+    assert "500 residents in cells with no coverage figure" in capsys.readouterr().out
+    # the cell is not drawn either: shading it would put a claim on the map that
+    # the sentence does not make
+    assert len(city["access"]["features"]) == 1
+
+
+def test_a_fully_measured_town_says_so(town_fixture: Path) -> None:
+    with (config.DATA_DIR / "graph.pkl").open("rb") as fh:
+        graph: nx.MultiDiGraph = pickle.load(fh)
+    city = city_pages.build_city("Testville", graph)
+    assert city["stats"]["unmeasured_residents"] == 0
+
+
+def test_a_stub_too_small_to_count_is_not_drawn_as_connected(town_fixture: Path) -> None:
+    """Sub-MIN_POCKET_M islands have no entry in rank_of at all now, so the
+    lookup's default is live for the first time. If it were 0 a stranded stub
+    would be painted with the "reaches the region" colour — the strongest claim
+    the map makes, on the piece that least deserves it."""
+    with (config.DATA_DIR / "graph.pkl").open("rb") as fh:
+        graph: nx.MultiDiGraph = pickle.load(fh)
+    b = GraphBuilder()
+    b.node(90, 700)
+    b.node(91, 750)
+    b.edge(90, 91, 50, "quiet_street", "Stub Way")  # 50 m: far under the threshold
+    graph.add_nodes_from(b.g.nodes(data=True))
+    graph.add_edges_from(b.g.edges(keys=True, data=True))
+
+    city = city_pages.build_city("Testville", graph)
+    stub = [f for f in city["islands"]["features"] if f["properties"]["name"] == "Stub Way"]
+    assert stub, "the stub should still be drawn as safe street"
+    assert stub[0]["properties"]["isle"] == city_pages.NAMED_POCKETS + 1, (
+        "a stub must share the tail colour, not claim to reach the region"
+    )
