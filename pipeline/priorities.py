@@ -69,6 +69,11 @@ class Candidate:
     small_island: int = -1  # the side a build would connect: the smaller of the two
     join_m: float = 0.0  # safe metres joined by building this
     join_names: list[str] = field(default_factory=list)
+    # Whether the larger side is the region-wide network. If it is, its size is
+    # not worth printing: "connects 1422.0 km and 96.5 km" states the total
+    # kid-safe mileage of 76 towns, which tells a reader nothing and reads as an
+    # error next to a city page's own 262 km.
+    joins_region: bool = False
     dest_unlocked: int = 0
     pop_gaining: float = 0.0
     resident_m_saved: float = 0.0
@@ -264,6 +269,7 @@ def score_severance(
     missing link. Connecting a stub to a continent unlocks the stub — the
     marginal gain is what was previously unreachable, which is the min.
     """
+    biggest = max(island_m, key=lambda i: island_m[i], default=-1)
     for cand in candidates:
         seen: dict[int, float] = {}
         for n in cand.nodes:
@@ -282,6 +288,7 @@ def score_severance(
             cand.small_island = min(real[0], real[1], key=lambda kv: kv[1])[0]
             cand.join_m = round(min(real[0][1], real[1][1]), 1)
             cand.join_names = [f"{real[0][1] / 1000:.1f} km", f"{real[1][1] / 1000:.1f} km"]
+            cand.joins_region = real[0][0] == biggest
         else:
             cand.join_m = 0.0
 
@@ -504,12 +511,18 @@ def summary_sentence(cand: Candidate) -> str:
     else:
         bits.append(f"{where} — today {today}")
     if cand.join_m > 0:
-        joined = " and ".join(cand.join_names) if cand.join_names else ""
-        bits.append(
-            f"connects {joined} of kid-safe streets"
-            if joined
-            else f"unlocks {cand.join_m / 1000:.1f} km of kid-safe streets"
-        )
+        if cand.joins_region and cand.join_names:
+            # name the side that actually gains. The other side is every
+            # kid-safe street in the region, and printing its mileage next to a
+            # city's own read like a typo for the city's figure.
+            bits.append(
+                f"connects {cand.join_names[1]} of kid-safe streets"
+                " to the region-wide network"
+            )
+        elif cand.join_names:
+            bits.append(f"connects {' and '.join(cand.join_names)} of kid-safe streets")
+        else:
+            bits.append(f"unlocks {cand.join_m / 1000:.1f} km of kid-safe streets")
     if cand.access_computed and (cand.dest_unlocked or cand.pop_gaining > 0):
         reach: list[str] = []
         if cand.dest_unlocked:

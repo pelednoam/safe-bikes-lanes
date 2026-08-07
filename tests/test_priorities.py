@@ -290,6 +290,15 @@ def test_summary_only_claims_what_the_numbers_say() -> None:
     assert "connects 24.0 km and 18.0 km of kid-safe streets" in rich
     assert "1 bike crash since 2021" in rich  # singular
 
+    # When the big side is the whole region's network, its mileage is not worth
+    # printing: "connects 1422.0 km and 96.5 km" states the kid-safe total of 76
+    # towns, which says nothing and, on a city page reporting 262 km, reads like
+    # a typo. Name the side that gains instead.
+    cand.joins_region = True
+    regional = priorities.summary_sentence(cand)
+    assert "connects 18.0 km of kid-safe streets to the region-wide network" in regional
+    assert "24.0 km" not in regional
+
 
 def test_cost_proxy_scales_with_length_for_corridors() -> None:
     corridor = priorities.Candidate(
@@ -956,3 +965,28 @@ def test_build_runs_end_to_end_on_a_small_network(
     assert fc["features"][0]["properties"]["pid"] == top.pid
     meta = json.loads((web / "priorities_meta.json").read_text())
     assert meta["candidates"] == len(out)
+
+
+def test_only_the_region_wide_network_is_named_as_such() -> None:
+    """Two mid-sized pockets joining each other still get both figures — the
+    phrasing is about which island is the region's, not about size."""
+    b = GraphBuilder()
+    for i, x in ((0, 0), (1, 400), (2, 420), (3, 1200)):
+        b.node(i, x)
+    b.edge(0, 1, 400, "quiet_street", "A St")   # a 400 m island
+    b.edge(1, 2, 20, "busy_street", "The Gap")  # the candidate's street
+    b.edge(2, 3, 780, "quiet_street", "B St")   # a 780 m island, the biggest
+    island_of, island_m = priorities.safe_islands(b.g)
+
+    gap = priorities.Candidate(
+        pid="c1", name="The Gap", kind="corridor", cls="busy_street", length_m=20.0
+    )
+    gap.nodes = [1, 2]
+    priorities.score_severance([gap], island_of, island_m)
+    assert gap.joins_region, "the larger side here IS the biggest island in the graph"
+    assert "to the region-wide network" in priorities.summary_sentence(gap)
+
+    # take the region's network out of the candidate's reach and both are named
+    gap.joins_region = False
+    both = priorities.summary_sentence(gap)
+    assert " and " in both and "region-wide" not in both
