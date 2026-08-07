@@ -21,6 +21,13 @@ import {
   stopBackgroundWatcher,
   webVoiceCount,
 } from "./native.js";
+import {
+  CLASS_LABELS,
+  FACILITY_CLASSES,
+  fillSegmentPhoto as fillPhotoSlot,
+  GRADE_COLORS,
+  segmentHtml,
+} from "./segment.js";
 import type { Maneuver, RideAlert, Track } from "./nav.js";
 import {
   bearingDeg,
@@ -77,7 +84,6 @@ import type {
   ProtectionClass,
   RouteOption,
   RouteSummary,
-  SafetyGrade,
 } from "./types.js";
 
 declare const maplibregl: typeof import("maplibre-gl");
@@ -92,18 +98,6 @@ interface NominatimResult {
 // constants
 // ---------------------------------------------------------------------------
 
-const CLASS_LABELS: Record<ProtectionClass, string> = {
-  path: "off-street path",
-  separated: "separated lane",
-  buffered: "buffered lane",
-  quiet_street: "quiet street",
-  service: "alley/service",
-  lane: "painted lane",
-  sharrow: "sharrow",
-  moderate_street: "moderate street",
-  busy_street: "busy street",
-};
-
 const CLASS_COLORS: Record<ProtectionClass, string> = {
   path: "#1a9850",
   separated: "#66bd63",
@@ -114,33 +108,6 @@ const CLASS_COLORS: Record<ProtectionClass, string> = {
   sharrow: "#fdae61",
   moderate_street: "#f46d43",
   busy_street: "#d73027",
-};
-
-/** What each class means for riding with kids, in plain words. */
-const CLASS_SAFETY: Record<ProtectionClass, string> = {
-  path: "off-street — no car traffic at all",
-  separated: "physically protected from car traffic",
-  buffered: "painted buffer only — no physical protection",
-  quiet_street: "low-traffic residential street, riding with cars",
-  service: "alley / service way, occasional vehicles",
-  lane: "paint only, directly beside moving traffic",
-  sharrow: "shared with car traffic, marking only",
-  moderate_street: "no bike facility, moderate traffic",
-  busy_street: "no protection on a busy street",
-};
-
-/** Segment grade on the same kid-stress scale used for whole routes. */
-function classGrade(cls: ProtectionClass): SafetyGrade {
-  const m = PROFILES.young_kids.mult[cls];
-  return m <= 1.6 ? "A" : m <= 2.4 ? "B" : m <= 4 ? "C" : m <= 8 ? "D" : "F";
-}
-
-const GRADE_COLORS: Record<SafetyGrade, string> = {
-  A: "#1a9850",
-  B: "#66bd63",
-  C: "#fdae61",
-  D: "#f46d43",
-  F: "#d73027",
 };
 
 const POI_META: Record<string, { emoji: string; label: string; color: string }> = {
@@ -1092,58 +1059,6 @@ interface MapillaryImage {
 const segPhotoCache = new Map<string, { url: string | null; captured: number | null }>();
 let segPhotoTimer: number | undefined;
 
-async function fetchSegmentPhoto(
-  lon: number,
-  lat: number,
-): Promise<{ url: string | null; captured: number | null }> {
-  const key = `${Math.round(lon / 0.0005)},${Math.round(lat / 0.0005)}`;
-  const cached = segPhotoCache.get(key);
-  if (cached !== undefined) return cached;
-  const d = 0.0004;
-  const url =
-    "https://graph.mapillary.com/images?" +
-    new URLSearchParams({
-      access_token: mapillaryToken,
-      bbox: `${lon - d},${lat - d},${lon + d},${lat + d}`,
-      fields: "id,thumb_256_url,captured_at",
-      limit: "5",
-    }).toString();
-  let result: { url: string | null; captured: number | null } = { url: null, captured: null };
-  try {
-    const resp = await fetch(url);
-    if (resp.ok) {
-      const data = (await resp.json()) as {
-        data: { thumb_256_url?: string; captured_at?: number }[];
-      };
-      const newest = [...data.data].sort(
-        (a, b) => (b.captured_at ?? 0) - (a.captured_at ?? 0),
-      )[0];
-      result = { url: newest?.thumb_256_url ?? null, captured: newest?.captured_at ?? null };
-    }
-  } catch {
-    // offline or rate-limited: cache the miss too, avoids retry storms
-  }
-  segPhotoCache.set(key, result);
-  return result;
-}
-
-function fillSegmentPhoto(popup: Popup, lon: number, lat: number): void {
-  void fetchSegmentPhoto(lon, lat).then(({ url, captured }) => {
-    if (popup !== hoverPopup) return; // hover moved on
-    const slot = popup.getElement()?.querySelector<HTMLDivElement>("div[data-seg-photo]");
-    if (!slot || !slot.isConnected) return;
-    if (url === null) {
-      slot.innerHTML = `<small><i>no street-level photo here</i></small>`;
-      return;
-    }
-    const when =
-      captured !== null ? ` <small>${new Date(captured).toLocaleDateString()}</small>` : "";
-    slot.innerHTML =
-      `<img src="${url}" alt="" style="max-width:210px;border-radius:6px;display:block;` +
-      `margin-top:4px">📷${when}`;
-  });
-}
-
 async function showMapillaryPreview(lon: number, lat: number): Promise<void> {
   const d = 0.0005; // ~45 m box
   const url =
@@ -1606,7 +1521,6 @@ function renderSketchy(): void {
 // layers + interaction wiring
 // ---------------------------------------------------------------------------
 
-const FACILITY_CLASSES = ["path", "separated", "buffered", "lane"];
 
 map.on("load", () => {
   // dark basemap (CARTO dark matter), toggled with the UI theme
@@ -2254,34 +2168,8 @@ map.on("load", () => {
         crashes?: number;
         source?: string;
       };
-      const cls = props.cls;
-      const label = cls !== undefined ? CLASS_LABELS[cls] ?? cls : "?";
-      const grade = cls !== undefined ? classGrade(cls) : null;
-      const badge =
-        grade !== null
-          ? `<span style="background:${GRADE_COLORS[grade]};color:#fff;border-radius:5px;` +
-            `padding:0 6px;font-weight:700">${grade}</span> `
-          : "";
-      const meaning = cls !== undefined ? `<br>${CLASS_SAFETY[cls]}` : "";
-      const mult = cls !== undefined ? PROFILES.young_kids.mult[cls] : null;
-      const stress =
-        mult !== null
-          ? `<br><small>kid-stress ×${mult} — young kids would detour up to ` +
-            `${mult}× the distance to avoid ${mult > 1.6 ? "this" : "worse"}</small>`
-          : "";
-      const crashes =
-        props.crashes !== undefined && props.crashes > 0
-          ? `<br><small>⚠ ${props.crashes} bike crash${props.crashes > 1 ? "es" : ""} ` +
-            `recorded nearby (2021–26)</small>`
-          : "";
-      const unconfirmed =
-        props.source === "osm" && cls !== undefined && FACILITY_CLASSES.includes(cls)
-          ? "<br><small><i>facility per OSM only (not in official layers yet)</i></small>"
-          : "";
-      const photoSlot = mapillaryToken !== "" ? `<div data-seg-photo></div>` : "";
       const html =
-        `${badge}<b>${props.name ?? "unnamed"}</b><br>${label}${meaning}${stress}` +
-        `${crashes}${unconfirmed}${photoSlot}` +
+        segmentHtml(props, { photo: mapillaryToken !== "" }) +
         // "right-click" means nothing on a phone
         `<br><small>${
           window.matchMedia("(hover: none)").matches
@@ -2299,7 +2187,7 @@ map.on("load", () => {
         const { lng, lat } = e.lngLat;
         // debounce: only fetch once the cursor rests on a segment
         segPhotoTimer = window.setTimeout(() => {
-          fillSegmentPhoto(popup, lng, lat);
+          fillPhotoSlot(popup.getElement(), lng, lat, mapillaryToken, () => popup === hoverPopup);
         }, 300);
       }
     });

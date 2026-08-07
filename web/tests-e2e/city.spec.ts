@@ -166,11 +166,21 @@ test("tapping a piece of the network says what it is, without a mouse", async ({
     .toBeGreaterThan(0);
   const pt = await page.evaluate(() => {
     const map = window._map;
-    const f = map?.queryRenderedFeatures(undefined, { layers: ["islands"] })[0];
-    if (!map || !f || f.geometry.type !== "LineString") return null;
-    const mid = f.geometry.coordinates[Math.floor(f.geometry.coordinates.length / 2)];
-    const p = map.project(mid as [number, number]);
-    return { x: Math.round(p.x), y: Math.round(p.y) };
+    if (!map) return null;
+    // a pixel where only the safe network is drawn: barriers sit above the
+    // islands, so a shared pixel legitimately answers about the barrier
+    for (const f of map.queryRenderedFeatures(undefined, { layers: ["islands"] })) {
+      if (f.geometry.type !== "LineString") continue;
+      const mid = f.geometry.coordinates[Math.floor(f.geometry.coordinates.length / 2)];
+      const p = map.project(mid as [number, number]);
+      const box: [[number, number], [number, number]] = [
+        [p.x - 6, p.y - 6],
+        [p.x + 6, p.y + 6],
+      ];
+      if (map.queryRenderedFeatures(box, { layers: ["barriers"] }).length > 0) continue;
+      return { x: Math.round(p.x), y: Math.round(p.y) };
+    }
+    return null;
   });
   expect(pt).not.toBeNull();
   if (!pt) return;
@@ -178,6 +188,8 @@ test("tapping a piece of the network says what it is, without a mouse", async ({
   await expect(page.locator(".maplibregl-popup")).toContainText(/Connected|pocket/i, {
     timeout: 10_000,
   });
+  // and it still says what the street itself is like
+  await expect(page.locator(".maplibregl-popup")).toContainText(/kid-stress ×/);
 });
 
 test("the project list is reachable by keyboard", async ({ page }) => {
@@ -254,4 +266,67 @@ test("tabbing through the list previews too", async ({ page }) => {
       ),
     )
     .toBe(await rows.nth(1).getAttribute("data-pid"));
+});
+
+test("a street on the city page explains itself the way the planner does", async ({ page }) => {
+  // the card is the app's, shared through src/segment.ts: a councillor looking
+  // at a red line should get the same account of it a parent gets in the planner
+  await openCity(page);
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () => window._map?.queryRenderedFeatures(undefined, { layers: ["barriers"] }).length ?? 0,
+        ),
+      { timeout: 30_000 },
+    )
+    .toBeGreaterThan(0);
+  const pt = await page.evaluate(() => {
+    const map = window._map;
+    const f = map?.queryRenderedFeatures(undefined, { layers: ["barriers"] })[0];
+    if (!map || !f || f.geometry.type !== "LineString") return null;
+    const mid = f.geometry.coordinates[Math.floor(f.geometry.coordinates.length / 2)];
+    const p = map.project(mid as [number, number]);
+    return { x: Math.round(p.x), y: Math.round(p.y) };
+  });
+  expect(pt).not.toBeNull();
+  if (!pt) return;
+  await page.mouse.move(pt.x, pt.y);
+  const card = page.locator(".maplibregl-popup-content");
+  await expect(card).toBeVisible({ timeout: 10_000 });
+  // what it is, and what that means for a child — not just a colour
+  await expect(card).toContainText(/busy street|moderate street|painted lane|sharrow/);
+  await expect(card).toContainText(/traffic|protection/);
+  await expect(card).toContainText(/kid-stress ×/);
+  // and why it's on this map at all
+  await expect(card).toContainText(/barrier/i);
+  // the photo slot always settles: a picture, or a plain statement there isn't one
+  await expect(card.locator("[data-seg-photo]")).not.toBeEmpty({ timeout: 15_000 });
+});
+
+test("moving off a street takes its card away", async ({ page }) => {
+  await openCity(page);
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () => window._map?.queryRenderedFeatures(undefined, { layers: ["islands"] }).length ?? 0,
+        ),
+      { timeout: 30_000 },
+    )
+    .toBeGreaterThan(0);
+  const pt = await page.evaluate(() => {
+    const map = window._map;
+    const f = map?.queryRenderedFeatures(undefined, { layers: ["islands"] })[0];
+    if (!map || !f || f.geometry.type !== "LineString") return null;
+    const mid = f.geometry.coordinates[Math.floor(f.geometry.coordinates.length / 2)];
+    const p = map.project(mid as [number, number]);
+    return { x: Math.round(p.x), y: Math.round(p.y) };
+  });
+  if (!pt) return;
+  await page.mouse.move(pt.x, pt.y);
+  await expect(page.locator(".maplibregl-popup")).toBeVisible({ timeout: 10_000 });
+  // an empty patch of map: the card must not follow the pointer around
+  await page.mouse.move(5, 830);
+  await expect(page.locator(".maplibregl-popup")).toHaveCount(0, { timeout: 10_000 });
 });

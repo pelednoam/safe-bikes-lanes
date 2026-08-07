@@ -20,10 +20,10 @@ export default defineConfig({
       // Set just under what the suite achieves today, so this ratchets rather
       // than blocks: raise them when the number rises, never lower them to pass.
       thresholds: {
-        statements: 88,
-        branches: 74,
-        functions: 87,
-        lines: 92,
+        statements: 90,
+        branches: 78,
+        functions: 89,
+        lines: 94,
       },
     },
   },

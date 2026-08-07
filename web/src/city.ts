@@ -9,6 +9,8 @@
 // Deliberately not part of the app bundle: no router, no tiles, no navigation.
 // A page a councillor opens should load a map and a paragraph, not a trip
 // planner.
+import { fillSegmentPhoto, segmentHtml } from "./segment.js";
+import type { SegmentProps } from "./segment.js";
 import type * as maplibregl from "maplibre-gl";
 import type { Map as MLMap } from "maplibre-gl";
 
@@ -63,6 +65,8 @@ const ISLAND_COLORS = [
 ];
 
 const N = (n: number): string => n.toLocaleString();
+
+let mapillaryToken = "";
 
 function el<T extends HTMLElement>(id: string): T {
   const node = document.getElementById(id);
@@ -393,6 +397,15 @@ async function start(): Promise<void> {
     return;
   }
 
+  // the same Mapillary client token the planner uses; absent is fine, the card
+  // simply has no photo in it
+  try {
+    const keys = (await (await fetch("../data/keys.json")).json()) as { mapillary?: string };
+    mapillaryToken = keys.mapillary ?? "";
+  } catch {
+    mapillaryToken = "";
+  }
+
   document.title = `${city.name} — where to build for family biking`;
   summarise(city);
 
@@ -429,37 +442,67 @@ async function start(): Promise<void> {
     wireLayerToggles(map);
     renderProjects(city, map);
 
+    // The street card, in the route planner's own words (src/segment.ts), plus
+    // what this page knows that it doesn't: which piece of the network the
+    // street belongs to, and whether you can leave it.
     const popup = new window.maplibregl.Popup({ closeButton: false, closeOnClick: false });
-    map.on("mousemove", "islands", (e) => {
-      const p = e.features?.[0]?.properties as { isle?: number; isle_km?: number } | undefined;
-      if (!p) return;
+    let photoTimer: number | undefined;
+    let openFor = "";
+
+    const cardFor = (
+      props: Record<string, unknown> | null | undefined,
+      layer: "islands" | "barriers",
+    ): string => {
+      const seg: SegmentProps = {
+        cls: props?.["cls"] as SegmentProps["cls"],
+        name: props?.["name"] as string | null,
+        crashes: props?.["crashes"] as number | null,
+        source: props?.["source"] as string | undefined,
+      };
+      const body = segmentHtml(seg, { photo: mapillaryToken !== "" });
+      if (layer === "barriers") {
+        return `${body}<br><small><b>A barrier.</b> This is what cuts the safe pieces apart.</small>`;
+      }
+      const isle = Number(props?.["isle"] ?? -1);
+      const km = props?.["isle_km"];
+      const belongs =
+        isle === 0
+          ? `<br><small><b>Connected:</b> ${km} km in ${city.name}, and it reaches the rest of the region.</small>`
+          : `<br><small><b>A pocket:</b> ${km} km of safe street you can't leave without riding something hostile.</small>`;
+      return body + belongs;
+    };
+
+    const show = (
+      e: maplibregl.MapLayerMouseEvent,
+      layer: "islands" | "barriers",
+    ): void => {
+      const f = e.features?.[0];
+      if (!f) return;
+      const id = `${layer}:${String(f.properties?.["name"] ?? "")}:${e.lngLat.lng.toFixed(4)}`;
       map.getCanvas().style.cursor = "pointer";
-      popup
-        .setLngLat(e.lngLat)
-        .setHTML(
-          p.isle === 0
-            ? `<b>Connected</b><br>${p.isle_km} km in ${city.name}, and it reaches the rest of the region`
-            : `<b>A pocket</b><br>${p.isle_km} km of safe street you can't leave without riding something hostile`,
-        )
-        .addTo(map);
-    });
-    map.on("mouseleave", "islands", () => {
-      map.getCanvas().style.cursor = "";
-      popup.remove();
-    });
-    // a phone has no hover, and the pockets are the whole point of the map
-    map.on("click", "islands", (e) => {
-      const p = e.features?.[0]?.properties as { isle?: number; isle_km?: number } | undefined;
-      if (!p) return;
-      popup
-        .setLngLat(e.lngLat)
-        .setHTML(
-          p.isle === 0
-            ? `<b>Connected</b><br>${p.isle_km} km in ${city.name}, and it reaches the rest of the region`
-            : `<b>A pocket</b><br>${p.isle_km} km of safe street you can't leave without riding something hostile`,
-        )
-        .addTo(map);
-    });
+      popup.setLngLat(e.lngLat).setHTML(cardFor(f.properties, layer)).addTo(map);
+      if (id === openFor) return;
+      openFor = id;
+      // debounced like the planner's: the photo is for the street you settled
+      // on, not every street the pointer crossed getting there
+      window.clearTimeout(photoTimer);
+      const { lng, lat } = e.lngLat;
+      photoTimer = window.setTimeout(() => {
+        fillSegmentPhoto(popup.getElement(), lng, lat, mapillaryToken, () => openFor === id);
+      }, 300);
+    };
+
+    for (const layer of ["islands", "barriers"] as const) {
+      map.on("mousemove", layer, (e) => show(e, layer));
+      // a phone has no hover, and these cards are the whole point of the map
+      map.on("click", layer, (e) => show(e, layer));
+      map.on("mouseleave", layer, () => {
+        map.getCanvas().style.cursor = "";
+        openFor = "";
+        window.clearTimeout(photoTimer);
+        popup.remove();
+      });
+    }
   });
 }
 

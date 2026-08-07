@@ -76,6 +76,17 @@ def bbox_of(rings: list[list[tuple[float, float]]]) -> tuple[float, float, float
     return (min(xs), min(ys), max(xs), max(ys))
 
 
+def segment_props(data: dict[str, Any]) -> dict[str, Any]:
+    """What the page needs to explain one street, matching the route planner's
+    own card: the class, who says so, and whether anyone has crashed there."""
+    return {
+        "name": priorities._street_key(data)[0],
+        "cls": str(data.get("cls", "")),
+        "source": str(data.get("cls_source", "")),
+        "crashes": int(data["crash_count"]) if "crash_count" in data else None,
+    }
+
+
 def build_city(town: str, graph: nx.MultiDiGraph) -> dict[str, Any]:
     """Everything one city's page needs, in one file it can fetch."""
     rings = city_rings(town)
@@ -143,6 +154,9 @@ def build_city(town: str, graph: nx.MultiDiGraph) -> dict[str, Any]:
                         # how much of it is in this city, which is what a
                         # resident is looking at — not the regional figure
                         "isle_km": round(local_m.get(iid, 0.0) / 1000, 1),
+                        # enough for the page to explain the street itself, in
+                        # the same words the route planner uses
+                        **segment_props(data),
                     },
                 }
             )
@@ -151,10 +165,7 @@ def build_city(town: str, graph: nx.MultiDiGraph) -> dict[str, Any]:
                 {
                     "type": "Feature",
                     "geometry": {"type": "LineString", "coordinates": line},
-                    "properties": {
-                        "name": priorities._street_key(data)[0],
-                        "cls": str(data.get("cls", "")),
-                    },
+                    "properties": segment_props(data),
                 }
             )
 
@@ -210,15 +221,21 @@ def build_city(town: str, graph: nx.MultiDiGraph) -> dict[str, Any]:
     }
 
 
+# Kept out of the template so the source can wrap without putting line breaks
+# inside the attribute value, which is what search results and link previews show.
+DESCRIPTION = (
+    "Where new bike infrastructure would do the most good in {name}: the streets a "
+    "child can actually use, the barriers that cut them apart, and the projects that would "
+    "join them up."
+)
+
 PAGE_TEMPLATE = """<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <title>{name} — where to build for family biking</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="description" content="Where new bike infrastructure would do the most
- good in {name}: the streets a child can use, the barriers that cut them apart,
- and the projects that would join them up.">
+<meta name="description" content="{description}">
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
 <link rel="stylesheet" href="../city.css">
 <script>window.__CITY__ = "{slug}";</script>
@@ -278,7 +295,8 @@ def write_page(slug: str, name: str) -> Path:
     directory = WEB / slug
     directory.mkdir(parents=True, exist_ok=True)
     page = directory / "index.html"
-    page.write_text(PAGE_TEMPLATE.format(slug=slug, name=name))
+    description = DESCRIPTION.format(name=name)
+    page.write_text(PAGE_TEMPLATE.format(slug=slug, name=name, description=description))
     return page
 
 

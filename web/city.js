@@ -1,3 +1,15 @@
+// One city's page: /somerville, /cambridge, …
+//
+// The regional map answers "which project first" across 130 towns. This answers
+// "what is wrong here", and the answer is a picture rather than a list. Take a
+// city's streets, keep only the ones a child can use, and the network becomes
+// an archipelago — a quiet grid, a pocket, another pocket, each ending at the
+// same few arterials. Colouring the pieces separately says that in one glance.
+//
+// Deliberately not part of the app bundle: no router, no tiles, no navigation.
+// A page a councillor opens should load a map and a paragraph, not a trip
+// planner.
+import { fillSegmentPhoto, segmentHtml } from "./segment.js";
 /** One hue per pocket. Rank 0 is the network that leaves the city, so it gets
  * the safety green everything else in the app uses for "you can ride this";
  * the rest are distinguishable rather than ranked — a pocket isn't better for
@@ -14,6 +26,7 @@ const ISLAND_COLORS = [
     "#9aa5ab", // 8: the long tail of small pockets
 ];
 const N = (n) => n.toLocaleString();
+let mapillaryToken = "";
 function el(id) {
     const node = document.getElementById(id);
     if (node === null)
@@ -320,6 +333,15 @@ async function start() {
         tellUser("No page for that city yet.");
         return;
     }
+    // the same Mapillary client token the planner uses; absent is fine, the card
+    // simply has no photo in it
+    try {
+        const keys = (await (await fetch("../data/keys.json")).json());
+        mapillaryToken = keys.mapillary ?? "";
+    }
+    catch {
+        mapillaryToken = "";
+    }
     document.title = `${city.name} — where to build for family biking`;
     summarise(city);
     const map = new window.maplibregl.Map({
@@ -353,36 +375,59 @@ async function start() {
         addLayers(map, city);
         wireLayerToggles(map);
         renderProjects(city, map);
+        // The street card, in the route planner's own words (src/segment.ts), plus
+        // what this page knows that it doesn't: which piece of the network the
+        // street belongs to, and whether you can leave it.
         const popup = new window.maplibregl.Popup({ closeButton: false, closeOnClick: false });
-        map.on("mousemove", "islands", (e) => {
-            const p = e.features?.[0]?.properties;
-            if (!p)
+        let photoTimer;
+        let openFor = "";
+        const cardFor = (props, layer) => {
+            const seg = {
+                cls: props?.["cls"],
+                name: props?.["name"],
+                crashes: props?.["crashes"],
+                source: props?.["source"],
+            };
+            const body = segmentHtml(seg, { photo: mapillaryToken !== "" });
+            if (layer === "barriers") {
+                return `${body}<br><small><b>A barrier.</b> This is what cuts the safe pieces apart.</small>`;
+            }
+            const isle = Number(props?.["isle"] ?? -1);
+            const km = props?.["isle_km"];
+            const belongs = isle === 0
+                ? `<br><small><b>Connected:</b> ${km} km in ${city.name}, and it reaches the rest of the region.</small>`
+                : `<br><small><b>A pocket:</b> ${km} km of safe street you can't leave without riding something hostile.</small>`;
+            return body + belongs;
+        };
+        const show = (e, layer) => {
+            const f = e.features?.[0];
+            if (!f)
                 return;
+            const id = `${layer}:${String(f.properties?.["name"] ?? "")}:${e.lngLat.lng.toFixed(4)}`;
             map.getCanvas().style.cursor = "pointer";
-            popup
-                .setLngLat(e.lngLat)
-                .setHTML(p.isle === 0
-                ? `<b>Connected</b><br>${p.isle_km} km in ${city.name}, and it reaches the rest of the region`
-                : `<b>A pocket</b><br>${p.isle_km} km of safe street you can't leave without riding something hostile`)
-                .addTo(map);
-        });
-        map.on("mouseleave", "islands", () => {
-            map.getCanvas().style.cursor = "";
-            popup.remove();
-        });
-        // a phone has no hover, and the pockets are the whole point of the map
-        map.on("click", "islands", (e) => {
-            const p = e.features?.[0]?.properties;
-            if (!p)
+            popup.setLngLat(e.lngLat).setHTML(cardFor(f.properties, layer)).addTo(map);
+            if (id === openFor)
                 return;
-            popup
-                .setLngLat(e.lngLat)
-                .setHTML(p.isle === 0
-                ? `<b>Connected</b><br>${p.isle_km} km in ${city.name}, and it reaches the rest of the region`
-                : `<b>A pocket</b><br>${p.isle_km} km of safe street you can't leave without riding something hostile`)
-                .addTo(map);
-        });
+            openFor = id;
+            // debounced like the planner's: the photo is for the street you settled
+            // on, not every street the pointer crossed getting there
+            window.clearTimeout(photoTimer);
+            const { lng, lat } = e.lngLat;
+            photoTimer = window.setTimeout(() => {
+                fillSegmentPhoto(popup.getElement(), lng, lat, mapillaryToken, () => openFor === id);
+            }, 300);
+        };
+        for (const layer of ["islands", "barriers"]) {
+            map.on("mousemove", layer, (e) => show(e, layer));
+            // a phone has no hover, and these cards are the whole point of the map
+            map.on("click", layer, (e) => show(e, layer));
+            map.on("mouseleave", layer, () => {
+                map.getCanvas().style.cursor = "";
+                openFor = "";
+                window.clearTimeout(photoTimer);
+                popup.remove();
+            });
+        }
     });
 }
 void start();
-export {};
