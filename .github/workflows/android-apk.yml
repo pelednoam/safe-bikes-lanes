@@ -105,3 +105,14 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: family-bike-router.apk
+      - name: Refresh the Pages mirror of the APK
+        # The site serves /app/family-bike-router.apk and /app/version.json by
+        # copying them from releases/latest at *deploy* time, and the in-app
+        # updater reads version.json. Publishing a release therefore doesn't
+        # reach anyone until Pages happens to rebuild: app-v48 shipped while the
+        # mirror still offered v47. Whichever of the two runs second has to
+        # trigger the other, so trigger it here.
+        if: startsWith(github.ref, 'refs/tags/app-v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run pages.yml --ref main
