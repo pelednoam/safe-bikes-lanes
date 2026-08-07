@@ -256,7 +256,17 @@ def build_city(town: str, graph: nx.MultiDiGraph) -> dict[str, Any]:
         "projects": {"type": "FeatureCollection", "features": projects},
         "access": {"type": "FeatureCollection", "features": cells},
         "population_is_headcount": bool(meta.get("population", {}).get("is_headcount")),
-        "limits": meta.get("limits", []),
+        # the regional limits, plus the one this page introduces by cutting a
+        # region up along a town line: a resident count assembled from grid
+        # cells is not the census figure, and the page names the city next to
+        # it, so it has to say so
+        "limits": [
+            *meta.get("limits", []),
+            "Residents are counted by assigning each population grid cell to the"
+            " town its centre falls in, so a cell straddling the line counts"
+            " wholly one way. The total is close to the census count for the"
+            " town but is not it.",
+        ],
     }
 
 

@@ -156,6 +156,9 @@ test("it says how it was worked out and what it doesn't mean", async ({ page }) 
   const limits = page.locator("#limits-list li");
   expect(await limits.count()).toBeGreaterThanOrEqual(3);
   await expect(page.locator("#limits-list")).toContainText(/model output|not measurement/i);
+  // the caveat this page introduces by cutting a region up along a town line:
+  // it names the city beside a resident count it assembled from grid cells
+  await expect(page.locator("#limits-list")).toContainText(/grid cell/i);
   await expect(page.locator("#built")).not.toHaveText("—");
 });
 

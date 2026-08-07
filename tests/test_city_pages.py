@@ -237,8 +237,12 @@ def test_the_page_carries_its_own_caveats(town_fixture: Path) -> None:
     with (config.DATA_DIR / "graph.pkl").open("rb") as fh:
         graph: nx.MultiDiGraph = pickle.load(fh)
     city = city_pages.build_city("Testville", graph)
-    # the same limits the app shows, travelling with the city's numbers
-    assert len(city["limits"]) == 3
+    # the app's limits travel with the city's numbers, plus the one this page
+    # introduces by cutting the region up along a town line
+    assert len(city["limits"]) == 4
+    assert any("grid cell" in limit for limit in city["limits"]), (
+        "the page names a city beside a resident count it assembled itself"
+    )
     assert city["population_is_headcount"] is True
     assert city["built"] == "2026-08-06"
 
