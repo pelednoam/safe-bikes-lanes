@@ -112,6 +112,16 @@ jobs:
         # reach anyone until Pages happens to rebuild: app-v48 shipped while the
         # mirror still offered v47. Whichever of the two runs second has to
         # trigger the other, so trigger it here.
+        #
+        # And it has to be workflow_dispatch, not `on: release: [published]` in
+        # pages.yml, however much tidier that would read. The release above is
+        # created with the default GITHUB_TOKEN, and events raised by that token
+        # do not start workflow runs — workflow_dispatch and repository_dispatch
+        # are the documented exceptions, which is why this works and the release
+        # event wouldn't. Switching would fail silently: the release publishes,
+        # no deploy runs, every phone keeps being offered the previous version.
+        # Using the release event needs a PAT on the release step instead.
+        # https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow
         if: startsWith(github.ref, 'refs/tags/app-v')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
