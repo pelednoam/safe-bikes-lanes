@@ -577,3 +577,56 @@ def test_a_network_that_never_leaves_town_does_not_claim_to(
     s = city["stats"]
     assert s["connected_leaves_city"] is False
     assert s["connected_km"] == s["connected_region_km"] == 0.4
+
+
+def test_a_sliver_of_a_bigger_network_is_not_the_citys_main_network(
+    town_fixture: Path,
+) -> None:
+    """Ranking the city's islands by their REGION-WIDE extent let a town that
+    merely clips a corner of a huge island with one short street report that
+    sliver as its main network — connected_km ~ 0.05 — and call its own real
+    network stranded pockets. That is the Lexington failure in a new town."""
+    with (config.DATA_DIR / "graph.pkl").open("rb") as fh:
+        graph: nx.MultiDiGraph = pickle.load(fh)
+    # a 40 km network out of town that reaches just inside the boundary
+    b = GraphBuilder()
+    b.node(300, -40_000)
+    b.node(301, -820)   # outside: the town line is at about -822 m
+    b.node(302, -700)   # inside, by a whisker
+    b.edge(300, 301, 39_180, "quiet_street", "Regional Parkway")
+    b.edge(301, 302, 120, "quiet_street", "Regional Parkway")
+    graph.add_nodes_from(b.g.nodes(data=True))
+    graph.add_edges_from(b.g.edges(keys=True, data=True))
+
+    city = city_pages.build_city("Testville", graph)
+    s = city["stats"]
+    # Testville's own 400 m network, not the 120 m sliver of a 39 km one
+    assert s["connected_km"] == 0.4, "a sliver of a bigger network was called the main one"
+    assert s["connected_region_km"] == 2.4
+
+
+def test_a_network_crossing_the_line_is_not_reported_as_internal(
+    town_fixture: Path,
+) -> None:
+    """leaves_city used to be inferred from island_m - local_m. An edge is
+    assigned wholly to whichever side its midpoint falls on, so a network that
+    crosses the boundary on one such edge showed a difference of zero and was
+    reported as never leaving town."""
+    with (config.DATA_DIR / "graph.pkl").open("rb") as fh:
+        graph: nx.MultiDiGraph = pickle.load(fh)
+    # Remove the long edge that leaves town by a clear margin, and replace it
+    # with one that straddles the line: node 6 is outside at -1600 m, but the
+    # edge's midpoint (-800 m) is inside, so its whole length is booked as local
+    # and both island_m - local_m and any outside-mileage tally come to zero.
+    # Only the endpoints show that this network leaves town.
+    graph.remove_node(5)
+    b = GraphBuilder()
+    b.node(6, -1600)
+    b.edge(0, 6, 1600, "quiet_street", "Straddle Street")
+    graph.add_nodes_from(b.g.nodes(data=True))
+    graph.add_edges_from(b.g.edges(keys=True, data=True))
+
+    city = city_pages.build_city("Testville", graph)
+    assert city["stats"]["connected_leaves_city"] is True, (
+        "a network whose only way out straddles the line was called internal"
+    )

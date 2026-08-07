@@ -1022,9 +1022,13 @@ def test_a_half_filled_candidate_never_renders_a_gap_in_a_sentence() -> None:
         pid="c1", name="Nowhere St", kind="corridor", cls="busy_street", length_m=100.0
     )
     cand.join_m = 5_000.0
-    cand.joins_region = True  # set, but gain_km never was
+    cand.joins_region = True
+    # join_names populated but gain_km not: without this the old code skipped
+    # the region branch too, and the test passed against the bug it names.
+    cand.join_names = ["24.0 km", "18.0 km"]
     out = priorities.summary_sentence(cand)
     assert "connects  of" not in out
     assert "region-wide" not in out
     # it falls back to what it can support
     assert "unlocks 5.0 km of kid-safe streets" in out
+    assert "24.0 km" not in out

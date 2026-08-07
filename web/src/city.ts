@@ -161,6 +161,11 @@ function statsAreUsable(city: CityData): boolean {
     "projects_shown",
     "budget_km",
   ];
+  // connected_leaves_city is checked separately: it's a boolean the page states
+  // as fact either way, so a missing field would quietly render "it doesn't
+  // leave the city" — a claim about a real place, made because a field was
+  // absent rather than because anyone measured it.
+  if (typeof s.connected_leaves_city !== "boolean") return false;
   return required.every((k) => Number.isFinite(s[k] as number));
 }
 

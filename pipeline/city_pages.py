@@ -155,6 +155,7 @@ def build_city(town: str, graph: nx.MultiDiGraph) -> dict[str, Any]:
     # all tiny next to a 1,422 km region — so the map showed two colours and the
     # archipelago the page exists to show didn't appear. Rank them locally.
     local_m: dict[int, float] = {}
+    leaves: set[int] = set()
     members: list[tuple[int, int, dict[str, Any]]] = []
     seen: set[tuple[int, int, int]] = set()
     for u, v, k, data in graph.edges(keys=True, data=True):
@@ -164,12 +165,20 @@ def build_city(town: str, graph: nx.MultiDiGraph) -> dict[str, Any]:
         seen.add(eid)
         coords = priorities.edge_coords(graph, u, v, data)
         mid = midpoint(coords)
-        if not inside(mid[0], mid[1]):
-            continue
-        members.append((u, v, data))
+        here = inside(mid[0], mid[1])
         if priorities.is_kid_safe(data):
             iid = island_of.get(u, island_of.get(v, -1))
-            local_m[iid] = local_m.get(iid, 0.0) + float(data["length"])
+            if here:
+                local_m[iid] = local_m.get(iid, 0.0) + float(data["length"])
+            # Does this island have any street outside the town? Judged on the
+            # ENDPOINTS, not on where the mileage was booked. A street crossing
+            # the line is assigned wholly to whichever side its midpoint falls,
+            # so a network whose only way out is one such street looks entirely
+            # internal both by mileage and by island_m - local_m.
+            if not (inside(*coords[0]) and inside(*coords[-1])):
+                leaves.add(iid)
+        if here:
+            members.append((u, v, data))
 
     # The city's main network: the island here with the largest REGION-WIDE
     # extent, not the region's single largest island.
@@ -180,13 +189,18 @@ def build_city(town: str, graph: nx.MultiDiGraph) -> dict[str, Any]:
     # wider network" and called all 447 km "cut off with no safe way out" — of a
     # network you can ride to Arlington on. -2 is a sentinel no island id takes,
     # so a city with no kid-safe street at all gets no rank-0 piece.
-    main_island = max(local_m, key=lambda i: island_m.get(i, 0.0), default=-2)
-    # and whether that network actually leaves the city, rather than being
-    # asserted to: it does if any of it lies outside the boundary
-    leaves_city = island_m.get(main_island, 0.0) > local_m.get(main_island, 0.0) + 1.0
+    # measured HERE, not region-wide: ranking by region-wide extent let a town
+    # that merely clips a corner of the 1,422 km island with one short street
+    # report that sliver as its main network and call its own 400 km of streets
+    # stranded pockets — the Lexington failure again, in a different town.
+    # -1 is the "no island" bucket from the lookup above and is not a network.
+    ranked = {i: m for i, m in local_m.items() if i != -1}
+    main_island = max(ranked, key=lambda i: ranked[i], default=-2)
+    # and whether that network actually leaves the city — counted, not inferred
+    leaves_city = main_island in leaves
 
     pockets = sorted(
-        ((iid, m) for iid, m in local_m.items() if iid != main_island),
+        ((iid, m) for iid, m in ranked.items() if iid != main_island),
         key=lambda kv: kv[1],
         reverse=True,
     )
