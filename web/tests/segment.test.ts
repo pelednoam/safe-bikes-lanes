@@ -208,3 +208,25 @@ describe("putting the photo into a card that's already on screen", () => {
     expect(gone.slot.innerHTML).toBe(""); // the card was closed mid-flight
   });
 });
+
+describe("a street whose class we don't recognise", () => {
+  // a page can be a build behind the data it fetches, so this is reachable
+  it("says so, instead of grading it the worst", () => {
+    for (const cls of ["", "trolley_portal", undefined]) {
+      const html = segmentHtml({ cls: cls as never, name: "Mystery Ave" });
+      expect(html).toContain("Mystery Ave");
+      expect(html).toContain("type unknown");
+      expect(html).not.toContain(">F<"); // an F is a claim; we don't have one
+      expect(html).not.toContain("kid-stress");
+      expect(html).not.toContain("undefined");
+    }
+    expect(classGrade("" as never)).toBeNull();
+  });
+
+  it("still reports what it does know about it", () => {
+    const html = segmentHtml({ cls: "" as never, crashes: 3, source: "osm" });
+    expect(html).toContain("3 bike crashes recorded");
+    // but not a facility caveat about a facility we can't name
+    expect(html).not.toContain("OSM only");
+  });
+});

@@ -45,9 +45,16 @@ export const GRADE_COLORS: Record<SafetyGrade, string> = {
  * merely tolerate. Used to flag one that only OSM knows about. */
 export const FACILITY_CLASSES: ProtectionClass[] = ["path", "separated", "buffered", "lane"];
 
-/** Segment grade on the same kid-stress scale used for whole routes. */
-export function classGrade(cls: ProtectionClass): SafetyGrade {
+/** Segment grade on the same kid-stress scale used for whole routes, or null if
+ * we don't recognise the class.
+ *
+ * Null rather than a default grade on purpose: these properties come out of a
+ * data file that a page may be a build behind, and an unlabelled street silently
+ * falling through the comparisons came out as an F — the map telling a parent a
+ * street is as bad as it gets when we simply don't know. */
+export function classGrade(cls: ProtectionClass): SafetyGrade | null {
   const m = PROFILES.young_kids.mult[cls];
+  if (typeof m !== "number" || !Number.isFinite(m)) return null;
   return m <= 1.6 ? "A" : m <= 2.4 ? "B" : m <= 4 ? "C" : m <= 8 ? "D" : "F";
 }
 
@@ -64,15 +71,18 @@ export interface SegmentProps {
  * how far they'd detour to avoid it, and whether anyone has crashed there. */
 export function segmentHtml(props: SegmentProps, opts: { photo: boolean } = { photo: false }): string {
   const cls = props.cls;
-  const label = cls !== undefined ? CLASS_LABELS[cls] ?? cls : "?";
+  // a class we can't grade is a class we can't describe either: say nothing
+  // rather than something confident and wrong
   const grade = cls !== undefined ? classGrade(cls) : null;
+  const known = cls !== undefined && grade !== null;
+  const label = known ? CLASS_LABELS[cls] ?? cls : "type unknown";
   const badge =
     grade !== null
       ? `<span style="background:${GRADE_COLORS[grade]};color:#fff;border-radius:5px;` +
         `padding:0 6px;font-weight:700">${grade}</span> `
       : "";
-  const meaning = cls !== undefined ? `<br>${CLASS_SAFETY[cls]}` : "";
-  const mult = cls !== undefined ? PROFILES.young_kids.mult[cls] : null;
+  const meaning = known ? `<br>${CLASS_SAFETY[cls]}` : "";
+  const mult = known ? PROFILES.young_kids.mult[cls] : null;
   const stress =
     mult !== null
       ? `<br><small>kid-stress ×${mult} — young kids would detour up to ` +
@@ -85,7 +95,7 @@ export function segmentHtml(props: SegmentProps, opts: { photo: boolean } = { ph
         `recorded nearby (2021–26)</small>`
       : "";
   const unconfirmed =
-    props.source === "osm" && cls !== undefined && FACILITY_CLASSES.includes(cls)
+    props.source === "osm" && known && FACILITY_CLASSES.includes(cls)
       ? "<br><small><i>facility per OSM only (not in official layers yet)</i></small>"
       : "";
   const photoSlot = opts.photo ? `<div data-seg-photo></div>` : "";
