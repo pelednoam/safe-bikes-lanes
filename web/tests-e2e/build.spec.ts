@@ -462,3 +462,35 @@ test("the one-pager stands alone: numbers, provenance, and caveats", async ({ pa
   expect(text).toMatch(/sorting proxy, not an estimate/);
   await sheet.close();
 });
+
+test("hovering a project in the app previews it without losing the selection", async ({
+  page,
+}) => {
+  await openBuild(page);
+  const rows = page.locator(".build-row");
+  await expect(rows.first()).toBeVisible({ timeout: 20_000 });
+  await rows.first().click(); // selecting turns the layer on
+  const chosen = await rows.first().getAttribute("data-pid");
+
+  const hovered = async (): Promise<string> =>
+    page.evaluate(() =>
+      String((window._map?.getFilter("build-hover") as unknown[] | undefined)?.[2] ?? ""),
+    );
+  // clicking leaves the pointer on the row, so it is legitimately previewed —
+  // move off before asserting the cleared state
+  await page.locator("#build-intro").hover();
+  await expect.poll(hovered).toBe("");
+
+  await rows.nth(2).hover();
+  const pid = await rows.nth(2).getAttribute("data-pid");
+  await expect.poll(hovered).toBe(pid);
+  // the picked one stays picked
+  expect(
+    await page.evaluate(() =>
+      String((window._map?.getFilter("build-selected") as unknown[] | undefined)?.[2] ?? ""),
+    ),
+  ).toBe(chosen);
+
+  await page.locator("#build-intro").hover();
+  await expect.poll(hovered).toBe("");
+});

@@ -1933,6 +1933,17 @@ map.on("load", () => {
         layout: { visibility: "none", "line-cap": "round" },
         paint: { "line-color": "#1440a0", "line-width": 11, "line-opacity": 0.45 },
     });
+    // Running the mouse down the list should show where each one is without
+    // losing the one you picked. Magenta because it appears nowhere else on this
+    // map — the safety palette owns every other strong colour here.
+    map.addLayer({
+        id: "build-hover",
+        type: "line",
+        source: "build",
+        filter: ["==", ["get", "pid"], ""],
+        layout: { visibility: "none", "line-cap": "round" },
+        paint: { "line-color": "#e6007e", "line-width": 9, "line-opacity": 0.9 },
+    });
     // Spot fixes, as points. They're in the projects layer too, but 14 m of line
     // is invisible at the zoom a city looks at, and these are the cheapest
     // projects on the list.
@@ -4681,6 +4692,17 @@ function renderBuildList() {
         const act = () => {
             focusProject(p.pid);
         };
+        const preview = (on) => {
+            if (map.getLayer("build-hover") === undefined)
+                return;
+            map.setFilter("build-hover", ["==", ["get", "pid"], on ? p.pid : ""]);
+            // only useful once the layer is drawable; focusProject turns it on
+            map.setLayoutProperty("build-hover", "visibility", on && el("show-build").checked ? "visible" : "none");
+        };
+        row.addEventListener("mouseenter", () => preview(true));
+        row.addEventListener("mouseleave", () => preview(false));
+        row.addEventListener("focus", () => preview(true));
+        row.addEventListener("blur", () => preview(false));
         row.addEventListener("click", act);
         row.addEventListener("keydown", (e) => {
             if (e.key === "Enter" || e.key === " ") {

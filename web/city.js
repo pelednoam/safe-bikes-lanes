@@ -161,6 +161,15 @@ function renderProjects(city, map) {
                 [e, n],
             ], { padding: framePadding(), maxZoom: 16.5, duration: 600 });
         };
+        const preview = (on) => {
+            map.setFilter("project-hover", ["==", ["get", "pid"], on ? String(p["pid"] ?? "") : ""]);
+        };
+        row.addEventListener("mouseenter", () => preview(true));
+        row.addEventListener("mouseleave", () => preview(false));
+        // keyboard parity: tabbing through the list previews the same way hovering
+        // does, or the map is only legible to people using a mouse
+        row.addEventListener("focus", () => preview(true));
+        row.addEventListener("blur", () => preview(false));
         row.addEventListener("click", focus);
         row.addEventListener("keydown", (ev) => {
             if (ev.key === "Enter" || ev.key === " ") {
@@ -237,6 +246,19 @@ function addLayers(map, city) {
         source: "projects",
         filter: ["==", ["get", "pid"], ""],
         paint: { "line-color": "#1440a0", "line-width": 12, "line-opacity": 0.4 },
+    });
+    // Separate from the selection halo: running the mouse down the list should
+    // show you where each one is without losing the one you picked, and without
+    // moving the camera — a map that jumps under the cursor can't be scanned.
+    map.addLayer({
+        id: "project-hover",
+        type: "line",
+        source: "projects",
+        filter: ["==", ["get", "pid"], ""],
+        // Magenta on purpose: it appears nowhere else here. The first try was amber,
+        // which sat next to the orange pocket colour and read as another category
+        // rather than as "the one you're pointing at".
+        paint: { "line-color": "#e6007e", "line-width": 10, "line-opacity": 0.9 },
     });
     map.addLayer({
         id: "projects",

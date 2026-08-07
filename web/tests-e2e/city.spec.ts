@@ -189,3 +189,69 @@ test("the project list is reachable by keyboard", async ({ page }) => {
   await page.keyboard.press("Enter");
   await expect(first).toHaveClass(/on/);
 });
+
+test("hovering a project previews it on the map, without moving the camera", async ({
+  page,
+}) => {
+  await openCity(page);
+  const rows = page.locator(".project");
+  await expect(rows.first()).toBeVisible({ timeout: 20_000 });
+
+  const hovered = async (): Promise<string> =>
+    page.evaluate(() => {
+      const f = window._map?.getFilter("project-hover") as unknown[] | undefined;
+      return String(f?.[2] ?? "");
+    });
+  const camera = async (): Promise<string> =>
+    page.evaluate(() => {
+      const c = window._map?.getCenter();
+      return `${c?.lng.toFixed(5)},${c?.lat.toFixed(5)},${window._map?.getZoom().toFixed(3)}`;
+    });
+
+  expect(await hovered()).toBe("");
+  const before = await camera();
+
+  const second = rows.nth(1);
+  await second.hover();
+  const pid = await second.getAttribute("data-pid");
+  await expect.poll(hovered).toBe(pid);
+  // scanning the list must not drag the map around under the cursor
+  expect(await camera()).toBe(before);
+
+  // moving on clears it
+  await page.locator("h1").hover();
+  await expect.poll(hovered).toBe("");
+});
+
+test("the preview and the selection are independent", async ({ page }) => {
+  await openCity(page);
+  const rows = page.locator(".project");
+  await expect(rows.first()).toBeVisible({ timeout: 20_000 });
+  await rows.first().click();
+  const chosen = await rows.first().getAttribute("data-pid");
+
+  await rows.nth(2).hover();
+  const state = await page.evaluate(() => {
+    const g = (id: string): string =>
+      String((window._map?.getFilter(id) as unknown[] | undefined)?.[2] ?? "");
+    return { picked: g("project-hi"), hovered: g("project-hover") };
+  });
+  // previewing a different one must not lose the one you picked
+  expect(state.picked).toBe(chosen);
+  expect(state.hovered).not.toBe(chosen);
+  await expect(rows.first()).toHaveClass(/on/);
+});
+
+test("tabbing through the list previews too", async ({ page }) => {
+  await openCity(page);
+  const rows = page.locator(".project");
+  await expect(rows.first()).toBeVisible({ timeout: 20_000 });
+  await rows.nth(1).focus();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => String((window._map?.getFilter("project-hover") as unknown[] | undefined)?.[2] ?? ""),
+      ),
+    )
+    .toBe(await rows.nth(1).getAttribute("data-pid"));
+});
