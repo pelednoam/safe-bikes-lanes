@@ -399,3 +399,23 @@ def test_no_pocket_gets_a_colour_the_page_does_not_have(town_fixture: Path) -> N
     ranks = {f["properties"]["isle"] for f in city["islands"]["features"]}
     assert min(ranks) >= 0
     assert max(ranks) <= city_pages.NAMED_POCKETS + 1
+
+
+def test_building_one_city_does_not_unpublish_the_others(
+    town_fixture: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """index.json is what the Pages assembly walks to decide which city
+    directories to copy, so a partial build silently drops the rest of the site.
+    It stays a partial build — being told is the point."""
+    monkeypatch.setattr(city_pages, "CITIES", ["Testville", "Elsewhere"])
+    city_pages.build(["Testville"])
+    index = json.loads((town_fixture / "data" / "cities" / "index.json").read_text())
+    assert [c["slug"] for c in index] == ["testville"]
+    assert "will drop off the site" in capsys.readouterr().out
+
+
+def test_the_published_set_is_what_a_bare_build_builds() -> None:
+    # the default has to be every city we publish, or running the generator
+    # without arguments is itself the partial build above
+    assert "Somerville" in city_pages.CITIES
+    assert "Cambridge" in city_pages.CITIES

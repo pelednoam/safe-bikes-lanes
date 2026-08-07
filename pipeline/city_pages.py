@@ -46,6 +46,11 @@ NAMED_POCKETS = 7
 # A city page carries its own streets, so it stays small. Anything longer than
 # this is a regional corridor that the main map is the right place for.
 MAX_PROJECTS = 40
+
+# The cities we publish. build() writes index.json from whatever it is given,
+# and the Pages assembly copies one directory per entry in that index — so
+# building a single city would quietly un-publish the others. Add a city here.
+CITIES = ["Somerville", "Cambridge"]
 # Shorter than this and a "pocket" is a driveway stub, not a stranded piece of
 # neighbourhood. Applies to both the count and the total, so the page's "N km in
 # M pockets" describes one set of things.
@@ -419,9 +424,13 @@ def build(towns: list[str]) -> None:
         )
         index.append({"slug": data["slug"], "name": data["name"], **stats})
     (OUT / "index.json").write_text(json.dumps(index, indent=1))
+    listed = ", ".join(c["slug"] for c in index)
+    print(f"index.json lists {len(index)} cit{'y' if len(index) == 1 else 'ies'}: {listed}")
+    if len(index) < len(CITIES):
+        print(f"  note: {len(CITIES)} are published — the rest will drop off the site")
 
 
 if __name__ == "__main__":
     import sys
 
-    build(sys.argv[1:] or ["Somerville"])
+    build(sys.argv[1:] or CITIES)

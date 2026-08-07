@@ -449,3 +449,39 @@ test("a photo that has arrived survives the pointer moving on the same street", 
     expect(await slot.innerHTML()).toBe(settled);
   }
 });
+
+test("every published city gets a page describing that city", async ({ page }) => {
+  // Driven by the generator's own index rather than a list typed here, so a new
+  // city is covered the moment it's published — and so nothing in the page can
+  // quietly become true of Somerville only.
+  const index = (await (await page.request.get("/data/cities/index.json")).json()) as {
+    slug: string;
+    name: string;
+  }[];
+  expect(index.length).toBeGreaterThan(1); // one city can't show a page is general
+
+  for (const city of index) {
+    await openCity(page, city.slug);
+    await expect(page.locator("h1")).toHaveText(city.name);
+    await expect(page).toHaveTitle(new RegExp(`^${city.name} — `));
+
+    const s = (await (await page.request.get(`/data/cities/${city.slug}.json`)).json())
+      .stats as Record<string, number>;
+    const N = (n: number): string => n.toLocaleString("en-US");
+    const lede = (await page.locator("#lede").textContent()) ?? "";
+    // its own numbers, and its own name beside them
+    expect(lede).toContain(`of ${city.name}'s ${N(s["residents"] as number)} residents`);
+    expect(lede).toContain(`About ${N(s["stranded"] as number)} of`);
+    const figures = (await page.locator("#figures").textContent()) ?? "";
+    expect(figures).toContain(`${String(s["connected_km"])} km`);
+    expect(figures).toContain(`${String(s["pockets"])} pockets`);
+
+    // and a map of that city, not of the region
+    const drawn = await page.evaluate(
+      () => window._map?.queryRenderedFeatures(undefined, { layers: ["islands"] }).length ?? 0,
+    );
+    expect(drawn, `${city.name} drew no safe streets`).toBeGreaterThan(0);
+    const other = index.find((c) => c.slug !== city.slug);
+    if (other) expect(lede).not.toContain(other.name);
+  }
+});
