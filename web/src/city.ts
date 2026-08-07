@@ -524,7 +524,9 @@ async function start(): Promise<void> {
       const belongs =
         isle === 0
           ? `<br><small><b>Connected:</b> ${km} km in ${city.name}, and it reaches the rest of the region.</small>`
-          : `<br><small><b>A pocket:</b> ${km} km of safe street you can't leave without riding something hostile.</small>`;
+          : `<br><small><b>A pocket:</b> ${km} km of it in ${city.name}, cut off from` +
+            " the main network — you can't leave it without riding something" +
+            " hostile.</small>";
       return body + belongs;
     };
 
@@ -534,15 +536,20 @@ async function start(): Promise<void> {
     ): void => {
       const f = e.features?.[0];
       if (!f) return;
-      const id = `${layer}:${String(f.properties?.["name"] ?? "")}:${e.lngLat.lng.toFixed(4)}`;
+      const { lng, lat } = e.lngLat;
+      const id = `${layer}:${String(f.properties?.["name"] ?? "")}:${lng.toFixed(4)},${lat.toFixed(4)}`;
       map.getCanvas().style.cursor = "pointer";
-      popup.setLngLat(e.lngLat).setHTML(cardFor(f.properties, layer)).addTo(map);
+      // Reposition freely, but only rewrite the card when it's a different card.
+      // setHTML on every mousemove replaced the popup's DOM — including a photo
+      // that had already arrived — and the early return below then stopped it
+      // ever being fetched again, so settling on a street lost its picture.
+      popup.setLngLat(e.lngLat).addTo(map);
       if (id === openFor) return;
       openFor = id;
+      popup.setHTML(cardFor(f.properties, layer));
       // debounced like the planner's: the photo is for the street you settled
       // on, not every street the pointer crossed getting there
       window.clearTimeout(photoTimer);
-      const { lng, lat } = e.lngLat;
       photoTimer = window.setTimeout(() => {
         fillSegmentPhoto(popup.getElement(), lng, lat, mapillaryToken, () => openFor === id);
       }, 300);

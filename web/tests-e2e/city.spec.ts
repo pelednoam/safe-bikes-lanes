@@ -395,3 +395,57 @@ test("turning off the projects layer also stops the hover preview drawing", asyn
   await page.locator("#show-projects").check();
   expect(await vis()).toBe("visible");
 });
+
+test("a photo that has arrived survives the pointer moving on the same street", async ({
+  page,
+}) => {
+  // the card was rewritten on every mousemove, which replaced the popup's DOM
+  // and threw away a photo that had already loaded — and the "same card" early
+  // return then stopped it ever being fetched again
+  await openCity(page);
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () => window._map?.queryRenderedFeatures(undefined, { layers: ["islands"] }).length ?? 0,
+        ),
+      { timeout: 30_000 },
+    )
+    .toBeGreaterThan(0);
+  const pt = await page.evaluate(() => {
+    const map = window._map;
+    if (!map) return null;
+    for (const f of map.queryRenderedFeatures(undefined, { layers: ["islands"] })) {
+      if (f.geometry.type !== "LineString") continue;
+      const p = map.project(
+        f.geometry.coordinates[Math.floor(f.geometry.coordinates.length / 2)] as [number, number],
+      );
+      if (p.x < 40 || p.y < 40) continue;
+      return { x: Math.round(p.x), y: Math.round(p.y) };
+    }
+    return null;
+  });
+  if (!pt) return;
+  await page.mouse.move(pt.x, pt.y);
+  const slot = page.locator(".maplibregl-popup-content [data-seg-photo]");
+  // wait for the slot to settle (a picture, or a plain statement there isn't one)
+  await expect(slot).not.toBeEmpty({ timeout: 15_000 });
+  const settled = await slot.innerHTML();
+  expect(settled).not.toBe("");
+
+  // A move far enough to be a different point legitimately starts a new card
+  // with an empty slot. The bug was the other case: a mousemove landing on the
+  // *same* card — pointer jitter, a re-render — rewrote the popup's DOM anyway,
+  // throwing away a photo that had arrived, and the "same card" early return
+  // then stopped it ever being fetched again. Dispatch that exact event.
+  for (let i = 0; i < 3; i++) {
+    await page.evaluate(
+      ({ x, y }) =>
+        window._map
+          ?.getCanvas()
+          .dispatchEvent(new MouseEvent("mousemove", { clientX: x, clientY: y, bubbles: true })),
+      pt,
+    );
+    expect(await slot.innerHTML()).toBe(settled);
+  }
+});
