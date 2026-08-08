@@ -328,6 +328,29 @@ function renderProjects(city: CityData, map: MLMap): void {
 }
 
 function addLayers(map: MLMap, city: CityData): void {
+  // Aerial imagery, added first so it sits directly above the basemap and below
+  // everything this page draws. Off by default on purpose: the whole-town view
+  // is a pattern read at a glance — one green mass or six coloured pockets —
+  // and photography drowns it. It earns its place once you pick a project and
+  // want to know whether the street has room for what's proposed.
+  //
+  // Same MassGIS orthos the route planner uses, so both show the same ground.
+  map.addSource("aerial", {
+    type: "raster",
+    tiles: [
+      "https://tiles.arcgis.com/tiles/hGdibHYSPO59RG1h/arcgis/rest/services/" +
+        "orthos2023/MapServer/tile/{z}/{y}/{x}",
+    ],
+    tileSize: 256,
+    attribution: "MassGIS 2023 orthoimagery",
+  });
+  map.addLayer({
+    id: "aerial",
+    type: "raster",
+    source: "aerial",
+    layout: { visibility: "none" },
+  });
+
   map.addSource("mask", { type: "geojson", data: maskOf(city.boundary) });
   map.addLayer({
     id: "mask",
@@ -363,6 +386,21 @@ function addLayers(map: MLMap, city: CityData): void {
   });
 
   map.addSource("barriers", { type: "geojson", data: city.barriers });
+  // A dark halo under each coloured line, shown only over imagery. Green and
+  // red hold up against a pale basemap and lose against bright pavement and
+  // rooftops — the planner learned this the same way. Wider than the line it
+  // sits under, so it reads as an outline rather than a second line.
+  map.addLayer({
+    id: "barriers-casing",
+    type: "line",
+    source: "barriers",
+    layout: { visibility: "none", "line-cap": "round", "line-join": "round" },
+    paint: {
+      "line-color": "#0b0f11",
+      "line-width": ["interpolate", ["linear"], ["zoom"], 12, 3.4, 16, 8],
+      "line-opacity": 0.8,
+    },
+  });
   map.addLayer({
     id: "barriers",
     type: "line",
@@ -371,6 +409,17 @@ function addLayers(map: MLMap, city: CityData): void {
   });
 
   map.addSource("islands", { type: "geojson", data: city.islands });
+  map.addLayer({
+    id: "islands-casing",
+    type: "line",
+    source: "islands",
+    layout: { visibility: "none", "line-cap": "round", "line-join": "round" },
+    paint: {
+      "line-color": "#0b0f11",
+      "line-width": ["interpolate", ["linear"], ["zoom"], 12, 3.4, 16, 8],
+      "line-opacity": 0.8,
+    },
+  });
   map.addLayer({
     id: "islands",
     type: "line",
@@ -411,6 +460,7 @@ function addLayers(map: MLMap, city: CityData): void {
     // rather than as "the one you're pointing at".
     paint: { "line-color": "#e6007e", "line-width": 10, "line-opacity": 0.9 },
   });
+
   map.addLayer({
     id: "projects",
     type: "line",
@@ -420,6 +470,36 @@ function addLayers(map: MLMap, city: CityData): void {
       "line-color": "#111619",
       "line-width": ["interpolate", ["linear"], ["zoom"], 12, 2.5, 16, 6],
       "line-dasharray": [1.4, 1.1],
+    },
+  });
+
+  // Added last, so it sits above everything. Carto draws street names along
+  // street centrelines — precisely where this page draws its network — so
+  // adding it earlier put every label under a 4 px green line.
+  // Orthophotos carry no street names, and this page deliberately uses a
+  // label-free basemap — so over imagery you can see a red line without being
+  // able to say which street it is. A labels-only raster rather than a symbol
+  // layer: it needs no glyph fonts, which are a dependency that has gone
+  // missing here before and fails silently when it does.
+  map.addSource("labels", {
+    type: "raster",
+    tiles: ["https://basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}.png"],
+    tileSize: 256,
+    attribution: "© OpenStreetMap contributors © CARTO",
+  });
+  map.addLayer({
+    id: "labels",
+    type: "raster",
+    source: "labels",
+    layout: { visibility: "none" },
+    paint: {
+      // Both of Carto's label sets draw charcoal text — the "dark" one is the
+      // set FOR a dark basemap, not text drawn light — and charcoal on
+      // photography is unreadable. Pinning the brightness range to the top end
+      // pushes every non-transparent pixel to white while leaving the alpha
+      // alone, so the type comes out light against the imagery.
+      "raster-brightness-min": 1,
+      "raster-opacity": 0.9,
     },
   });
 }
@@ -433,13 +513,37 @@ function wireLayerToggles(map: MLMap): void {
     ["show-projects", ["projects", "project-hi", "project-hover"]],
     ["show-access", ["access"]],
   ];
+  const vis = (on: boolean): "visible" | "none" => (on ? "visible" : "none");
   for (const [box, layers] of pairs) {
     const input = el<HTMLInputElement>(box);
     input.addEventListener("change", () => {
       for (const layer of layers) {
-        map.setLayoutProperty(layer, "visibility", input.checked ? "visible" : "none");
+        map.setLayoutProperty(layer, "visibility", vis(input.checked));
       }
+      if (box === "show-islands" || box === "show-barriers") syncCasings(map);
     });
+  }
+
+  const aerial = el<HTMLInputElement>("show-aerial");
+  aerial.addEventListener("change", () => {
+    for (const layer of ["aerial", "labels"]) {
+      map.setLayoutProperty(layer, "visibility", vis(aerial.checked));
+    }
+    syncCasings(map);
+  });
+}
+
+/** The dark halos exist only to keep coloured lines legible over photography,
+ * and only under lines that are actually drawn — a casing under a layer the
+ * reader switched off is just a black line with nothing to outline. */
+function syncCasings(map: MLMap): void {
+  const on = el<HTMLInputElement>("show-aerial").checked;
+  for (const [box, casing] of [
+    ["show-islands", "islands-casing"],
+    ["show-barriers", "barriers-casing"],
+  ] as const) {
+    const shown = on && el<HTMLInputElement>(box).checked;
+    map.setLayoutProperty(casing, "visibility", shown ? "visible" : "none");
   }
 }
 

@@ -485,3 +485,49 @@ test("every published city gets a page describing that city", async ({ page }) =
     if (other) expect(lede).not.toContain(other.name);
   }
 });
+
+test("the aerial view keeps the colours, and the street names, on top of it", async ({ page }) => {
+  await openCity(page);
+  const layer = async (id: string): Promise<string> =>
+    await page.evaluate(
+      (l) => (window._map?.getLayoutProperty(l, "visibility") as string) ?? "visible",
+      id,
+    );
+
+  // off by default: the whole-town view is a pattern read at a glance, and
+  // photography drowns it
+  expect(await layer("aerial")).toBe("none");
+  expect(await layer("labels")).toBe("none");
+  expect(await layer("islands-casing")).toBe("none");
+
+  await page.locator("#show-aerial").check();
+  expect(await layer("aerial")).toBe("visible");
+  // street names, because orthophotos carry none and this page's basemap is
+  // deliberately label-free — without them you can see a red line but can't say
+  // which street it is
+  expect(await layer("labels")).toBe("visible");
+  // and the dark halos that keep green and red legible against bright pavement
+  expect(await layer("islands-casing")).toBe("visible");
+  expect(await layer("barriers-casing")).toBe("visible");
+
+  const order = await page.evaluate(() => window._map!.getStyle().layers.map((l) => l.id));
+  // the network draws over the imagery, and the labels over both. Labels sit
+  // along street centrelines — exactly where this page draws its own lines — so
+  // putting them anywhere but last hid every one of them under a green line.
+  expect(order.indexOf("islands")).toBeGreaterThan(order.indexOf("aerial"));
+  expect(order.indexOf("barriers")).toBeGreaterThan(order.indexOf("aerial"));
+  expect(order.indexOf("labels")).toBe(order.length - 1);
+  // each casing immediately under the line it outlines
+  expect(order.indexOf("islands-casing")).toBe(order.indexOf("islands") - 1);
+  expect(order.indexOf("barriers-casing")).toBe(order.indexOf("barriers") - 1);
+
+  // a casing with nothing to outline is just a black line
+  await page.locator("#show-islands").uncheck();
+  expect(await layer("islands-casing")).toBe("none");
+  expect(await layer("barriers-casing")).toBe("visible");
+
+  await page.locator("#show-aerial").uncheck();
+  expect(await layer("aerial")).toBe("none");
+  expect(await layer("labels")).toBe("none");
+  expect(await layer("barriers-casing")).toBe("none");
+});

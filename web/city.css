@@ -105,3 +105,9 @@ details.limits li { margin-bottom: 3px; }
   }
   h1 { font-size: 25px; }
 }
+
+/* the aerial toggle's swatch: a scrap of imagery rather than a colour, since it
+   switches the ground under the map rather than adding a layer to it */
+.swatch.photo {
+  background: linear-gradient(135deg, #6b7f5a 0%, #8a9a6d 40%, #b9a888 60%, #7d8f66 100%);
+}

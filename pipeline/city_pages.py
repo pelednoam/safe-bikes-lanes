@@ -421,6 +421,9 @@ PAGE_TEMPLATE = """<!doctype html>
     <label class="layer"><input type="checkbox" id="show-access">
       <span class="swatch" style="background:#d73027;opacity:.5"></span>
       Who can't reach a school or park</label>
+    <label class="layer"><input type="checkbox" id="show-aerial">
+      <span class="swatch photo"></span>
+      Aerial photo — see what a street actually has room for</label>
   </div>
 
   <h2>What to build first</h2>
