@@ -62,7 +62,7 @@ export function classGrade(cls: ProtectionClass): SafetyGrade | null {
  * render this card through MapLibre's setHTML — i.e. innerHTML. A name of
  * `<img src=x onerror=...>` would then run script on the page's own origin,
  * where the rider's saved routes live. Escape anything that came from data. */
-function esc(text: string): string {
+export function esc(text: string): string {
   return text
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")

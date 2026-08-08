@@ -3,12 +3,19 @@
 <head>
 <meta charset="utf-8">
 <title>Cambridge — where to build for family biking</title>
+<!-- Nothing here loads third-party script: MapLibre is served from this origin.
+     Kept strict so a crafted name in OpenStreetMap or a work-zone feed cannot
+     turn a popup into code execution, and so a compromised CDN has nothing to
+     compromise. Pages can't set headers, so it goes in a meta tag — which is
+     also why there's no frame-ancestors here: it is ignored unless delivered
+     as a header, and leaving it in only logs a warning on every load. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://basemaps.cartocdn.com https://tiles.arcgis.com https://*.fbcdn.net; connect-src 'self' https://basemaps.cartocdn.com https://tiles.arcgis.com https://graph.mapillary.com; worker-src 'self' blob:; frame-src 'none'; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="description" content="Where new bike infrastructure would do the most good in Cambridge: the streets a child can actually use, the barriers that cut them apart, and the projects that would join them up.">
-<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<link rel="stylesheet" href="../maplibre-gl.css">
 <link rel="stylesheet" href="../city.css">
-<script>window.__CITY__ = "cambridge";</script>
-<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<meta name="city-slug" content="cambridge">
+<script src="../maplibre-gl.js"></script>
 </head>
 <body>
 <div id="map"></div>

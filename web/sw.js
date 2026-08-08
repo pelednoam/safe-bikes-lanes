@@ -53,7 +53,9 @@ self.addEventListener("activate", (event) => {
 });
 
 const TILE_CACHE = "bike-tiles-v1";
-const TILE_HOSTS = ["tile.openstreetmap.org", "basemaps.cartocdn.com"];
+// tile.openstreetmap.org stays listed only so basemap tiles cached by an older
+// build still serve offline; nothing requests it any more.
+const TILE_HOSTS = ["tile.openstreetmap.org", "basemaps.cartocdn.com", "tiles.arcgis.com"];
 
 /** The app shell must never be served stale: bypass the HTTP cache so the
  * SW's network fetch can't return a CDN-cached old app.js/index.html. */

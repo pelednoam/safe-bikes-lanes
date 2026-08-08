@@ -387,17 +387,47 @@ DESCRIPTION = (
     "join them up."
 )
 
+# What this page is allowed to talk to. Deliberately narrower than the route
+# planner's: a city page fetches its own JSON, basemap and orthophoto tiles, and
+# Mapillary for the street photo — no geocoding, no GitHub, no elevation, and it
+# frames nothing at all. MapLibre is served from this origin, so no third-party
+# script is permitted at all, which is the point: a crafted street name in
+# OpenStreetMap should not be able to become code execution.
+#
+# Delivered as a meta tag because GitHub Pages cannot set headers — which is
+# also why frame-ancestors is absent: it is ignored unless sent as a header, and
+# including it only logs a warning on every page load.
+CSP = (
+    "default-src 'self'; "
+    "script-src 'self'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data: blob: https://basemaps.cartocdn.com "
+    "https://tiles.arcgis.com https://*.fbcdn.net; "
+    "connect-src 'self' https://basemaps.cartocdn.com https://tiles.arcgis.com "
+    "https://graph.mapillary.com; "
+    "worker-src 'self' blob:; frame-src 'none'; font-src 'self'; "
+    "object-src 'none'; base-uri 'self'; form-action 'none'"
+)
+
+
 PAGE_TEMPLATE = """<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <title>{name} — where to build for family biking</title>
+<!-- Nothing here loads third-party script: MapLibre is served from this origin.
+     Kept strict so a crafted name in OpenStreetMap or a work-zone feed cannot
+     turn a popup into code execution, and so a compromised CDN has nothing to
+     compromise. Pages can't set headers, so it goes in a meta tag — which is
+     also why there's no frame-ancestors here: it is ignored unless delivered
+     as a header, and leaving it in only logs a warning on every load. -->
+<meta http-equiv="Content-Security-Policy" content="{csp}">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="description" content="{description}">
-<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<link rel="stylesheet" href="../maplibre-gl.css">
 <link rel="stylesheet" href="../city.css">
-<script>window.__CITY__ = "{slug}";</script>
-<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<meta name="city-slug" content="{slug}">
+<script src="../maplibre-gl.js"></script>
 </head>
 <body>
 <div id="map"></div>
@@ -465,7 +495,9 @@ def write_page(slug: str, name: str) -> Path:
     # from a MassGIS layer today, but nothing here should depend on that
     safe = html.escape(name, quote=True)
     description = DESCRIPTION.format(name=safe)
-    page.write_text(PAGE_TEMPLATE.format(slug=slug, name=safe, description=description))
+    page.write_text(
+        PAGE_TEMPLATE.format(slug=slug, name=safe, description=description, csp=CSP)
+    )
     return page
 
 

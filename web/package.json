@@ -4,15 +4,16 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc",
+    "build": "npm run vendor && tsc",
     "check": "tsc --noEmit -p tsconfig.check.json",
     "test": "vitest run",
     "build:app": "bash scripts/assemble.sh",
     "app:sync": "npm run build:app && npx cap sync android",
-    "e2e": "playwright test",
+    "e2e": "npm run vendor && playwright test",
     "e2e:native": "playwright test -c playwright.native.config.ts",
     "e2e:ride": "playwright test -c playwright.ride.config.ts",
-    "coverage:app": "playwright test --config=playwright.coverage.config.ts --reporter=list"
+    "coverage:app": "playwright test --config=playwright.coverage.config.ts --reporter=list",
+    "vendor": "cp node_modules/maplibre-gl/dist/maplibre-gl.js node_modules/maplibre-gl/dist/maplibre-gl.css ."
   },
   "devDependencies": {
     "@capacitor/cli": "^8.4.2",

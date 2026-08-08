@@ -49,7 +49,7 @@ export function classGrade(cls) {
  * render this card through MapLibre's setHTML — i.e. innerHTML. A name of
  * `<img src=x onerror=...>` would then run script on the page's own origin,
  * where the rider's saved routes live. Escape anything that came from data. */
-function esc(text) {
+export function esc(text) {
     return text
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;")

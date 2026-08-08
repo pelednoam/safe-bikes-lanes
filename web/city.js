@@ -487,7 +487,16 @@ function tellUser(message) {
             `<p><a href="../">Back to the route planner</a></p></div>`;
 }
 async function start() {
-    const slug = window.__CITY__ ?? window.location.pathname.replace(/\/+$/, "").split("/").pop();
+    // A meta tag rather than an inline script, so the page can run under a strict
+    // script-src. The path is the fallback for a page opened as /slug/index.html.
+    const declared = document
+        .querySelector('meta[name="city-slug"]')
+        ?.content.trim();
+    const fromPath = window.location.pathname
+        .replace(/\/(index\.html)?$/, "")
+        .split("/")
+        .pop();
+    const slug = declared !== undefined && declared !== "" ? declared : fromPath;
     if (slug === undefined || slug === "") {
         tellUser("No city in this address.");
         return;

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   classGrade,
   clearPhotoCache,
+  esc,
   fetchSegmentPhoto,
   fillSegmentPhoto,
   nearestMapillary,
@@ -424,5 +425,18 @@ describe("what the photo lookup remembers", () => {
     expect(got?.thumb_1024_url).toBe("https://img/big");
     const [call] = f.mock.calls as unknown as [string][];
     expect(String(call?.[0] ?? "")).toContain("computed_geometry");
+  });
+});
+
+describe("escaping data the project does not control", () => {
+  it("neutralises markup wherever it came from", () => {
+    // OSM place names, work-zone feed text and the rider's own hazard notes all
+    // reach popups through setHTML. OSM in particular is world-editable.
+    expect(esc('<img src=x onerror="a()">')).not.toContain("<img");
+    expect(esc('"')).toBe("&quot;");
+    expect(esc("<")).toBe("&lt;");
+    expect(esc(">")).toBe("&gt;");
+    // ampersands first, or every other escape gets double-encoded
+    expect(esc("Tom & Jerry's <b>")).toBe("Tom &amp; Jerry's &lt;b&gt;");
   });
 });

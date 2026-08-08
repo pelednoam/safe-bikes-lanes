@@ -531,3 +531,29 @@ test("the aerial view keeps the colours, and the street names, on top of it", as
   expect(await layer("labels")).toBe("none");
   expect(await layer("barriers-casing")).toBe("none");
 });
+
+test("the page runs no third-party script and violates no policy of its own", async ({ page }) => {
+  // Both matter for a public launch. A CDN script tag means whoever controls
+  // that CDN can run code on this origin; and a CSP that the page itself trips
+  // over gets switched off by the next person who sees the console.
+  const violations: string[] = [];
+  const thirdParty: string[] = [];
+  page.on("console", (m) => {
+    if (/Content Security Policy|Refused to/i.test(m.text())) violations.push(m.text().slice(0, 140));
+  });
+  page.on("request", (r) => {
+    const u = r.url();
+    if (r.resourceType() === "script" && !u.includes("127.0.0.1") && !u.startsWith("blob:")) {
+      thirdParty.push(u);
+    }
+  });
+  await openCity(page);
+  await page.locator("#show-aerial").check();
+  await page.waitForTimeout(2500);
+  expect(thirdParty, "scripts must be served from this origin").toHaveLength(0);
+  expect(violations, violations.join(" | ")).toHaveLength(0);
+  // and the policy is actually present
+  const csp = await page.locator('meta[http-equiv="Content-Security-Policy"]').getAttribute("content");
+  expect(csp).toContain("script-src 'self'");
+  expect(csp).not.toContain("unsafe-eval");
+});

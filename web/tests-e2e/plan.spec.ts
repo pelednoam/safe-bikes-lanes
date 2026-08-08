@@ -418,3 +418,19 @@ test("the about dialog is one tap away, without scrolling the panel", async ({ p
   await page.mouse.click(5, 5);
   await expect(page.locator("#about")).not.toBeVisible();
 });
+
+
+test("the planner asks nothing of OpenStreetMap's donated tile servers", async ({ page }) => {
+  // tile.openstreetmap.org and Nominatim are donated infrastructure whose usage
+  // policies rule out a public product building on them — they block by
+  // referrer, and when that happens the map breaks for everybody at once. The
+  // basemap moved to Carto; geocoding still uses Nominatim, deliberately, but
+  // only on an explicit search and it is debounced and cached.
+  const tiles: string[] = [];
+  page.on("request", (r) => {
+    if (r.url().includes("tile.openstreetmap.org")) tiles.push(r.url());
+  });
+  await boot(page, "#s=-71.122258,42.396748&e=-71.086705,42.362552&m=young_kids");
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
+  expect(tiles, "basemap tiles must not come from OSM's servers").toHaveLength(0);
+});

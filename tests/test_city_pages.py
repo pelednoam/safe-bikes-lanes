@@ -280,7 +280,10 @@ def test_build_writes_a_page_and_an_index(town_fixture: Path) -> None:
     assert page.exists()
     html = page.read_text()
     # the slug the script reads, and the relative paths a /testville/ URL needs
-    assert 'window.__CITY__ = "testville"' in html
+    # a meta tag, not an inline script: the page runs under script-src 'self'
+    assert '<meta name="city-slug" content="testville">' in html
+    assert "<script>" not in html, "an inline script would need unsafe-inline"
+    assert "Content-Security-Policy" in html
     assert "../city.js" in html
     assert "../city.css" in html
     assert "<title>Testville" in html

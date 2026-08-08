@@ -1,5 +1,5 @@
 import { isNativeApp, isNewerAppVersion, lastNativeSpeechError, nativeSpeak, startDownload, startBackgroundWatcher, stopBackgroundWatcher, webVoiceCount, } from "./native.js";
-import { CLASS_LABELS, clearPhotoCache, FACILITY_CLASSES, nearestMapillary, fillSegmentPhoto as fillPhotoSlot, GRADE_COLORS, segmentHtml, } from "./segment.js";
+import { CLASS_LABELS, clearPhotoCache, esc, FACILITY_CLASSES, nearestMapillary, fillSegmentPhoto as fillPhotoSlot, GRADE_COLORS, segmentHtml, } from "./segment.js";
 import { bearingDeg, buildAlerts, buildManeuvers, buildTrack, distM, snapToTrack, sunsetTime, trackBearingAhead, trackSlice, } from "./nav.js";
 import { addHazard, buildReportText, downscalePhoto, getHazardPhoto, HAZARD_LABELS, listHazards, removeHazard, setHazardCategory, } from "./hazards.js";
 import { clearRecent, deletePlace, emojiFor, exportBackup, importBackup, listPlaces, listRecent, pushRecent, savePlace, } from "./places.js";
@@ -105,9 +105,14 @@ const map = new maplibregl.Map({
         sources: {
             osm: {
                 type: "raster",
-                tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
+                // Carto, not tile.openstreetmap.org. OSM's tile servers are donated
+                // infrastructure and their usage policy rules out building a public
+                // product on them — they block by referrer, and when that happens the
+                // map breaks for every user at once. Carto renders the same OSM data
+                // and is already the source for this app's other basemap styles.
+                tiles: ["https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"],
                 tileSize: 256,
-                attribution: "© OpenStreetMap contributors",
+                attribution: "© OpenStreetMap contributors © CARTO",
             },
         },
         // vendored SDF glyph ranges (Noto Sans, Latin + Latin-1): the label layer
@@ -1900,19 +1905,19 @@ map.on("load", () => {
             const kind = typeof p["kind"] === "string" ? p["kind"] : "";
             const meta = POI_META[kind];
             const name = typeof p["name"] === "string" && p["name"] !== "" ? p["name"] : null;
-            return `${meta?.emoji ?? "📍"} <b>${name ?? meta?.label ?? "stop"}</b>` +
+            return `${meta?.emoji ?? "📍"} <b>${esc(name ?? meta?.label ?? "stop")}</b>` +
                 (name ? `<br><small>${meta?.label ?? ""}</small>` : "");
         },
         gateways: () => "🚦 <b>safe crossing</b><br><small>signalized crossing of a busy street</small>",
         hazardpts: (p) => {
             const cat = typeof p["category"] === "string" ? p["category"] : null;
-            const note = typeof p["note"] === "string" && p["note"] !== "" ? `<br>${p["note"]}` : "";
+            const note = typeof p["note"] === "string" && p["note"] !== "" ? `<br>${esc(p["note"])}` : "";
             const when = typeof p["t"] === "number"
                 ? `<br><small>${new Date(p["t"]).toLocaleDateString()} · click to remove</small>`
                 : "";
             // photo placeholder — filled asynchronously from IndexedDB below
             const photo = p["hasPhoto"] === true || p["hasPhoto"] === "true"
-                ? `<img data-hazard-photo="${String(p["id"] ?? "")}" alt=""
+                ? `<img data-hazard-photo="${esc(String(p["id"] ?? ""))}" alt=""
                style="max-width:180px;display:block;border-radius:6px;margin-top:4px">`
                 : "";
             return `⚠ <b>${cat !== null ? HAZARD_LABELS[cat] : "hazard"}</b>${note}${photo}${when}`;
@@ -1922,14 +1927,14 @@ map.on("load", () => {
     };
     function constructionHtml(p) {
         const name = typeof p["name"] === "string" && p["name"] !== "" ? p["name"] : "construction";
-        const kind = typeof p["kind"] === "string" ? ` · ${p["kind"]}` : "";
-        const address = typeof p["address"] === "string" && p["address"] !== "" ? `<br>${p["address"]}` : "";
-        const detail = typeof p["detail"] === "string" && p["detail"] !== "" ? `<br>${p["detail"]}` : "";
+        const kind = typeof p["kind"] === "string" ? ` · ${esc(p["kind"])}` : "";
+        const address = typeof p["address"] === "string" && p["address"] !== "" ? `<br>${esc(p["address"])}` : "";
+        const detail = typeof p["detail"] === "string" && p["detail"] !== "" ? `<br>${esc(p["detail"])}` : "";
         const source = p["src"] === "massdot_wzdx" ? "MassDOT work zone" : "Cambridge street permit";
         const dates = typeof p["start"] === "string" && typeof p["end"] === "string"
-            ? ` · ${p["start"]} → ${p["end"]}`
+            ? ` · ${esc(p["start"])} → ${esc(p["end"])}`
             : "";
-        return `🚧 <b>${name}</b>${kind}${address}${detail}<br><small>${source}${dates}</small>`;
+        return `🚧 <b>${esc(name)}</b>${kind}${address}${detail}<br><small>${source}${dates}</small>`;
     }
     for (const [layer, html] of Object.entries(hoverHtml)) {
         map.on("mousemove", layer, (e) => {
@@ -2048,7 +2053,7 @@ map.on("load", () => {
         const meta = props.kind !== undefined ? POI_META[props.kind] : undefined;
         new maplibregl.Popup()
             .setLngLat(e.lngLat)
-            .setHTML(`${meta?.emoji ?? ""} <b>${props.name || meta?.label || "?"}</b>`)
+            .setHTML(`${meta?.emoji ?? ""} <b>${esc(String(props.name || meta?.label || "?"))}</b>`)
             .addTo(map);
     });
     map.on("mousemove", "lanemap", (e) => {
@@ -4228,7 +4233,11 @@ window._map = map;
 // in-app update check (native app only): compare the bundled build version
 // against the latest release published next to the mirrored APK
 // ---------------------------------------------------------------------------
-const APK_URL = "https://pelednoam.github.io/safe-bikes-lanes/app/family-bike-router.apk";
+// The release asset, not the Pages mirror. Pages has a ~100 GB/month bandwidth
+// allowance and the APK is 90 MB, so a thousand downloads would be the entire
+// month's budget and would take the site down with it. Release downloads don't
+// count against that at all.
+const APK_URL = "https://github.com/pelednoam/safe-bikes-lanes/releases/latest/download/family-bike-router.apk";
 async function checkAppUpdate() {
     if (!isNativeApp())
         return;

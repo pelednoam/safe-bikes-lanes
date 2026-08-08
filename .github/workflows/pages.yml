@@ -73,17 +73,14 @@ jobs:
               fi
             done
           fi
-      - name: Mirror latest APK + version manifest
+      - name: Publish the app version manifest
         run: |
           mkdir -p _site/app
-          for i in 1 2 3 4 5; do
-            curl -sL --fail -o _site/app/family-bike-router.apk \
-              https://github.com/${{ github.repository }}/releases/latest/download/family-bike-router.apk \
-              && break
-            echo "APK not available yet (attempt $i) — retrying in 20s"
-            sleep 20
-          done
-          [ -f _site/app/family-bike-router.apk ] || echo "no release yet — skipping APK mirror"
+          # The APK itself is NOT mirrored here: it is 90 MB, Pages allows about
+          # 100 GB a month, and a thousand downloads would spend the lot and
+          # take the site down. The app links to the release asset instead,
+          # which doesn't count against that. Only version.json is served here,
+          # because the in-app updater polls it.
           # The releases/latest API lags the download redirect under GitHub's
           # eventual consistency, so retry rather than silently skip
           # version.json (a miss breaks the in-app updater).

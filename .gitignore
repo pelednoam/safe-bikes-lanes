@@ -13,3 +13,8 @@ data/*
 .coverage
 coverage/
 htmlcov/
+
+# vendored at build time from node_modules (npm run vendor), so the site
+# serves its own copy instead of executing a CDN's script at runtime
+web/maplibre-gl.js
+web/maplibre-gl.css
