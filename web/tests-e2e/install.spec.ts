@@ -68,3 +68,40 @@ test("the planner points people here", async ({ page }) => {
   const link = page.locator("#about a[href='install/']");
   await expect(link).toBeVisible();
 });
+
+test("the policy actually permits the download it advertises", async ({ page, request }) => {
+  // The updater hands the APK to a hidden iframe, so frame-src governs it — and
+  // GitHub redirects release downloads to a host of its own choosing
+  // (objects.githubusercontent.com once, release-assets. now). Naming a single
+  // host blocked the download outright, on the one code path a rider can't work
+  // around. Check the policy against where the link really goes.
+  await page.goto("/");
+  const csp =
+    (await page.locator('meta[http-equiv="Content-Security-Policy"]').getAttribute("content")) ??
+    "";
+  const frameSrc = /frame-src ([^;]*)/.exec(csp)?.[1] ?? "";
+  expect(frameSrc).toContain("github.com");
+
+  let finalHost: string;
+  try {
+    const resp = await request.head(
+      "https://github.com/pelednoam/safe-bikes-lanes/releases/latest/download/family-bike-router.apk",
+      { maxRedirects: 5, timeout: 20_000 },
+    );
+    finalHost = new URL(resp.url()).host;
+  } catch {
+    test.skip(true, "no network for the live redirect check");
+    return;
+  }
+  // the wildcard in the policy has to cover wherever that landed
+  const allowed = frameSrc
+    .split(/\s+/)
+    .filter((s) => s.startsWith("https://"))
+    .some((src) => {
+      const pattern = src.replace("https://", "");
+      return pattern.startsWith("*.")
+        ? finalHost.endsWith(pattern.slice(1))
+        : finalHost === pattern;
+    });
+  expect(allowed, `frame-src does not permit ${finalHost}`).toBe(true);
+});

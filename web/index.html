@@ -11,8 +11,11 @@
      pelednoam.github.io is listed because in the Android WebView the app is
      served from a local origin, so the update check and the fresh-data
      download are cross-origin — omitting it broke both, silently. frame-src
-     is here because the APK download is handed to a hidden iframe. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://basemaps.cartocdn.com https://tiles.arcgis.com https://s3.amazonaws.com https://*.fbcdn.net; connect-src 'self' https://pelednoam.github.io https://basemaps.cartocdn.com https://tiles.arcgis.com https://s3.amazonaws.com https://graph.mapillary.com https://nominatim.openstreetmap.org https://github.com https://api.github.com; worker-src 'self' blob:; frame-src 'self' blob: https://github.com https://objects.githubusercontent.com; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
+     is here because the APK download is handed to a hidden iframe, and it
+     wildcards githubusercontent.com because the release redirects to a host
+     GitHub picks — objects. once, release-assets. now. Naming one of them
+     blocked the download outright. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://basemaps.cartocdn.com https://tiles.arcgis.com https://s3.amazonaws.com https://*.fbcdn.net; connect-src 'self' https://pelednoam.github.io https://basemaps.cartocdn.com https://tiles.arcgis.com https://s3.amazonaws.com https://graph.mapillary.com https://nominatim.openstreetmap.org https://github.com https://api.github.com; worker-src 'self' blob:; frame-src 'self' blob: https://github.com https://*.githubusercontent.com; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#1a9850">
 <title>Family Bike Router — Cambridge, Somerville &amp; neighbors</title>
