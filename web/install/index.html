@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- This page loads no script at all, so its policy can be the strictest on
+     the site: nothing but its own stylesheet and its own icons. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; img-src 'self' data:; font-src 'self'; base-uri 'self'; form-action 'none'">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Put the bike router on your phone</title>
+<meta name="description" content="Install the family bike route planner: an Android app to download, or add it to your iPhone home screen from Safari.">
+<link rel="stylesheet" href="../install.css">
+<link rel="apple-touch-icon" href="../icon-192.png">
+<meta name="theme-color" content="#1a9850">
+</head>
+<body>
+<main>
+  <header>
+    <p class="kicker">Install</p>
+    <h1>Put it on your phone</h1>
+    <p class="lede">The route planner works in any browser. On a phone it does more:
+      it follows your position as you ride, speaks the turns so nobody has to look
+      down at a screen, and keeps working where there's no signal.</p>
+    <p class="lede">Which route you take below is decided by the phone you own.</p>
+  </header>
+
+  <div class="paths">
+    <section class="path">
+      <h2>Android</h2>
+      <p class="sub">A real app, installed from a file.</p>
+      <a class="get" href="https://github.com/pelednoam/safe-bikes-lanes/releases/latest/download/family-bike-router.apk">Download the app</a>
+      <p class="size">About 90 MB — most of it is the map, which is why it works offline.</p>
+      <ol>
+        <li>Tap <b>Download the app</b>. Your browser will ask whether to keep the file.</li>
+        <li>Open it. Android will say it doesn't normally allow installs from your
+          browser, and ask you to turn that on for this one download.</li>
+        <li>Install, then find <b>Bike Router</b> with your other apps.</li>
+      </ol>
+      <p class="note"><b>About that warning.</b> It appears because the app isn't
+        distributed through the Play Store, not because of anything it does. If you'd
+        rather not, the iPhone instructions work on Android too — open this site in
+        Chrome and choose <b>Install app</b> from the menu.</p>
+      <p class="note">Updates arrive in the app: it tells you when a new version is
+        out and downloads it the same way.</p>
+    </section>
+
+    <section class="path">
+      <h2>iPhone &amp; iPad</h2>
+      <p class="sub">No app store, no download — Safari can do this itself.</p>
+      <ol>
+        <li>Open <b>pelednoam.github.io/safe-bikes-lanes</b> in <b>Safari</b>.
+          It has to be Safari; other browsers on iOS may not offer the step below.</li>
+        <li>Tap the <b>Share</b> button
+          <svg class="share-glyph" viewBox="0 0 20 24" aria-hidden="true" focusable="false">
+            <path d="M6 9H4.5A1.5 1.5 0 0 0 3 10.5v10A1.5 1.5 0 0 0 4.5 22h11a1.5 1.5 0
+                     0 0 1.5-1.5v-10A1.5 1.5 0 0 0 15.5 9H14"/>
+            <path d="M10 15V2.5"/>
+            <path d="M5.8 6.6 10 2.4l4.2 4.2"/>
+          </svg>
+          — the square with an arrow coming out of the top of it, in the toolbar.</li>
+        <li>Scroll down the list and choose <b>Add to Home Screen</b>.</li>
+      </ol>
+      <p class="note">You get an icon on your home screen that opens full screen with
+        no browser bars around it, and it works offline once you've ridden or
+        pre-loaded an area. It is the same planner, not a cut-down version.</p>
+      <p class="note"><b>One iOS quirk.</b> Safari won't let a page speak until you've
+        tapped something, so press <b>Test voice</b> in the app's voice settings once.
+        After that, guidance speaks on its own.</p>
+    </section>
+  </div>
+
+  <section class="after">
+    <h2>Before your first ride</h2>
+    <ul>
+      <li><b>Plan the route at home and tap ⬇ Offline map.</b> That stores the map
+        along it, so the phone doesn't need signal on the road.</li>
+      <li><b>Let it use your location</b> when it asks — that's how it follows you and
+        knows when to call a turn. Your position never leaves the phone.</li>
+      <li><b>Nothing you save is sent anywhere.</b> Routes, the streets you've marked
+        as sketchy, and hazard photos all stay on the device.</li>
+    </ul>
+  </section>
+
+  <footer>
+    <p>Not sure yet? <a href="../">Try it in this browser first</a> — it's the same
+      planner. Or read what it says about
+      <a href="../somerville/">Somerville</a>,
+      <a href="../cambridge/">Cambridge</a> or
+      <a href="../lexington/">Lexington</a>.</p>
+  </footer>
+</main>
+</body>
+</html>

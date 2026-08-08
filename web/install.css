@@ -1,0 +1,115 @@
+/* The install page. A reading page with two paths through it, sharing the type
+   and colour of the city pages so it doesn't feel like a different site. */
+@font-face {
+  font-family: "Barlow"; font-style: normal; font-weight: 400; font-display: swap;
+  src: url("fonts/Barlow-400.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Barlow"; font-style: normal; font-weight: 600; font-display: swap;
+  src: url("fonts/Barlow-600.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Barlow"; font-style: normal; font-weight: 700; font-display: swap;
+  src: url("fonts/Barlow-700.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Barlow Semi Condensed"; font-style: normal; font-weight: 700; font-display: swap;
+  src: url("fonts/BarlowSemiCondensed-700.woff2") format("woff2");
+}
+
+:root {
+  --ink: #111619;
+  --muted: #5c6a72;
+  --line: rgba(17, 22, 25, 0.12);
+  --surface: #ffffff;
+  --field: rgba(17, 22, 25, 0.045);
+  --accent: #12833f;
+  --r-sm: 9px;
+  --r-md: 14px;
+  --font: "Barlow", system-ui, -apple-system, sans-serif;
+  --font-cond: "Barlow Semi Condensed", var(--font);
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 0 20px 64px;
+  font-family: var(--font); color: var(--ink); background: #eef1f3;
+  line-height: 1.5;
+}
+main { max-width: 760px; margin: 0 auto; }
+
+header { padding: 40px 0 8px; }
+.kicker {
+  font-size: 12px; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase;
+  color: var(--accent); margin: 0 0 6px;
+}
+h1 {
+  font-family: var(--font-cond); font-size: clamp(32px, 7vw, 44px); line-height: 1.02;
+  margin: 0 0 10px; letter-spacing: -0.02em;
+}
+.lede { font-size: 17px; margin: 0 0 6px; max-width: 60ch; }
+.lede + .lede { color: var(--muted); font-size: 15px; }
+
+/* Two ways in, and which one you take is decided for you by the phone in your
+   pocket — so they get equal weight rather than a primary and a footnote. */
+.paths { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin: 30px 0 0; }
+.path {
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md);
+  padding: 20px 20px 22px;
+}
+.path h2 {
+  font-family: var(--font-cond); font-size: 25px; margin: 0 0 2px; letter-spacing: -0.01em;
+}
+.path .sub { color: var(--muted); font-size: 13.5px; margin: 0 0 16px; }
+
+/* Numbered because these genuinely are a sequence: doing step 3 before step 2
+   leaves you looking at a file Android won't open. */
+ol { margin: 0; padding-left: 0; list-style: none; counter-reset: step; }
+ol li {
+  counter-increment: step; position: relative; padding-left: 34px; margin-bottom: 13px;
+  font-size: 14.5px;
+}
+ol li::before {
+  content: counter(step); position: absolute; left: 0; top: -1px;
+  width: 23px; height: 23px; border-radius: 50%; background: var(--field);
+  color: var(--accent); font-family: var(--font-cond); font-weight: 700; font-size: 14px;
+  display: grid; place-items: center;
+}
+ol li b { font-weight: 600; }
+
+.get {
+  display: inline-block; background: var(--accent); color: #fff; text-decoration: none;
+  font-weight: 600; font-size: 15px; padding: 11px 18px; border-radius: var(--r-sm);
+  margin: 2px 0 14px;
+}
+.get:hover { background: #0e6c34; }
+.get:focus-visible { outline: 3px solid #0e6c34; outline-offset: 2px; }
+.size { color: var(--muted); font-size: 12.5px; margin: 0 0 16px; }
+
+/* iOS's share icon, drawn rather than approximated with a box and an arrow:
+   this is the one picture on the page doing real work, since "the share button"
+   means nothing to someone who has never gone looking for it. */
+.share-glyph {
+  width: 17px; height: 20px; vertical-align: -5px; margin: 0 1px;
+  fill: none; stroke: var(--ink); stroke-width: 1.9;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+
+.note {
+  border-top: 1px solid var(--line); margin-top: 16px; padding-top: 13px;
+  font-size: 13px; color: var(--muted);
+}
+.note b { color: var(--ink); font-weight: 600; }
+
+.after { margin-top: 30px; background: var(--field); border-radius: var(--r-md); padding: 20px 22px; }
+.after h2 { font-family: var(--font-cond); font-size: 21px; margin: 0 0 10px; }
+.after ul { margin: 0; padding-left: 18px; font-size: 14.5px; }
+.after li { margin-bottom: 7px; }
+
+footer { margin-top: 34px; font-size: 13.5px; color: var(--muted); }
+a { color: var(--accent); }
+
+@media (max-width: 700px) {
+  .paths { grid-template-columns: 1fr; }
+  header { padding-top: 28px; }
+}
