@@ -796,23 +796,38 @@ async function requestLoop(): Promise<void> {
   const errBox = el<HTMLDivElement>("error");
   errBox.style.display = "none";
   if (!start) {
-    errBox.textContent = "click the map to set a start point first";
-    errBox.style.display = "block";
-    return;
+    // A round trip starts where you are, so find that rather than refusing.
+    // Telling someone to "click the map to set a start point first" is asking
+    // them to do work the app can do, in answer to a button they just pressed.
+    showStage("Finding your location…");
+    try {
+      start = makeMarker(await currentPosition(), "#2b83ba", "start");
+      syncOD();
+    } catch {
+      el<HTMLDivElement>("loading").style.display = "none";
+      errBox.textContent =
+        "Couldn't get your location — tap 🗺 next to the start field to pick where the ride begins.";
+      errBox.style.display = "block";
+      return;
+    }
   }
   await poisReady;
   const km = Number(el<HTMLSelectElement>("loop-dist").value);
   const kind = el<HTMLSelectElement>("loop-stop").value;
   const candidates = kind === "any" ? pois : pois.filter((p) => p.properties.kind === kind);
   const loading = el<HTMLDivElement>("loading");
-  loading.textContent = "planning loop…";
-  loading.style.display = "block";
+  showStage("Loading the map around you…");
+  onTileProgress = (done, total): void => {
+    if (total > 4) showStage("Loading the map around you…", `${done} of ${total}`);
+  };
   await new Promise((resolve) => setTimeout(resolve, 0));
   try {
     const s = start.getLngLat();
     // a loop can range out to roughly half its length from the start
     const r = await ensureRouter([[s.lng, s.lat]], km * 500, 2);
     if (!r) throw new Error("this area isn't mapped for routing yet");
+    onTileProgress = undefined;
+    showStage(`Finding a ${km} km loop…`);
     const { option, poi } = r.loopRoute(
       [s.lng, s.lat],
       km * 1000,
@@ -835,6 +850,7 @@ async function requestLoop(): Promise<void> {
     errBox.textContent = err instanceof Error ? err.message : String(err);
     errBox.style.display = "block";
   } finally {
+    onTileProgress = undefined;
     loading.style.display = "none";
   }
 }

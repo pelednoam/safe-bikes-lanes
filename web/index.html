@@ -249,6 +249,10 @@
   /* The wait here is mostly the map downloading — about 90 tiles for an
      ordinary trip — and a motionless line of text through all of it read as a
      frozen app. Something has to be moving. */
+  #loop-row { display:flex; align-items:center; gap:6px; margin-top:7px; flex-wrap:wrap; }
+  #loop-row .or { color:var(--muted); font-size:12.5px; }
+  #loop-row button { margin:0; }
+  #loop-row select { padding:3px 4px; }
   #loading { display:none; align-items:center; gap:8px; color:var(--muted); margin-top:8px; }
   #loading small { margin-left:auto; font-variant-numeric:tabular-nums; opacity:.8; }
   .spinner {
@@ -558,6 +562,24 @@
       <button id="from-pick" type="button" title="Pick the start by tapping the map">🗺</button>
     </div>
     <input id="search" type="search" placeholder="Where to?" autocomplete="off">
+    <!-- A round trip is a different intent from "where to", not an advanced
+         option: nowhere in particular, back here, about this long. It lived in a
+         collapsed drawer called "Other trip types", which is the same as not
+         having it. -->
+    <div id="loop-row">
+      <span class="or">or</span>
+      <button id="loop-btn" type="button" title="A ride that comes back to where it started, with a stop halfway">↻ Round trip</button>
+      <select id="loop-dist" aria-label="Round trip length" title="how far you want to ride">
+        <option value="3">3 km</option><option value="5" selected>5 km</option>
+        <option value="8">8 km</option><option value="12">12 km</option>
+      </select>
+      <select id="loop-stop" aria-label="Stop halfway" title="what to stop at halfway round">
+        <option value="playground">🛝 playground</option>
+        <option value="ice_cream">🍦 ice cream</option>
+        <option value="library">📚 library</option>
+        <option value="any">any stop</option>
+      </select>
+    </div>
   </div>
   <div id="search-results"></div>
   <div id="places-list" title="Saved places — add via the ☆ in search results or right-click the map"></div>
@@ -641,17 +663,6 @@
     <summary>🧭 Other trip types</summary>
     <div class="tool-row">
       <button id="shed-btn" style="margin:0" title="Show everything reachable from a point at your comfort level">🗺 Reach map</button>
-      <select id="loop-dist" title="loop length">
-        <option value="3">3 km</option><option value="5" selected>5 km</option>
-        <option value="8">8 km</option><option value="12">12 km</option>
-      </select>
-      <select id="loop-stop" title="loop stop">
-        <option value="playground">🛝 playground</option>
-        <option value="ice_cream">🍦 ice cream</option>
-        <option value="library">📚 library</option>
-        <option value="any">any stop</option>
-      </select>
-      <button id="loop-btn" style="margin:0" title="Round trip from the start marker with a stop halfway">↻ Loop</button>
       <button id="record-btn" style="margin:0" title="Record a free ride (no planned route); saved to your ride history">● Record</button>
     </div>
     <div id="shed-panel">

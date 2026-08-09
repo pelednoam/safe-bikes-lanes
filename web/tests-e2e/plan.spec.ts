@@ -502,3 +502,48 @@ test("a rider who already allowed location gets their start without asking", asy
     .poll(() => page.locator(".maplibregl-marker").count(), { timeout: 20_000 })
     .toBeGreaterThan(0);
 });
+
+test("a round trip can be planned without hunting for it", async ({ page, context }) => {
+  // The loop planner existed but lived inside a collapsed section called "Other
+  // trip types", which is the same as not having it: you had to know it was
+  // there to find it. It belongs beside "Where to?", because "a ride that comes
+  // back here" is a different intent, not an advanced option.
+  await context.grantPermissions(["geolocation"]);
+  await context.setGeolocation({ latitude: 42.3875, longitude: -71.0995 });
+  await page.goto("/");
+  await page.waitForFunction(() => window._map !== undefined, null, { timeout: 60_000 });
+
+  const loop = page.locator("#loop-btn");
+  await expect(loop, "the round-trip button must be visible without opening anything").toBeVisible();
+  // and it must not be inside something collapsed
+  const hidden = await loop.evaluate((b) => b.closest("details:not([open])") !== null);
+  expect(hidden, "the button is inside a collapsed section").toBe(false);
+
+  // pressing it with no start set finds one rather than refusing
+  await loop.click();
+  await page.waitForFunction(
+    () => {
+      const s = window._map?.getSource("route") as { _data?: { features?: unknown[] } } | undefined;
+      return (s?._data?.features ?? []).length > 0;
+    },
+    null,
+    { timeout: 60_000 },
+  );
+  await expect(page.locator("#error")).not.toBeVisible();
+
+  // it is a loop: the drawn line comes back to where it started
+  const closed = await page.evaluate(() => {
+    const src = window._map?.getSource("route") as
+      | { _data?: GeoJSON.FeatureCollection }
+      | undefined;
+    const coords = (src?._data?.features ?? []).flatMap((f) =>
+      f.geometry.type === "LineString" ? (f.geometry.coordinates as [number, number][]) : [],
+    );
+    if (coords.length < 2) return -1;
+    const a = coords[0] as [number, number];
+    const b = coords[coords.length - 1] as [number, number];
+    return Math.hypot((b[0] - a[0]) * 82_000, (b[1] - a[1]) * 111_000); // metres apart
+  });
+  expect(closed, "a round trip should end roughly where it began").toBeGreaterThanOrEqual(0);
+  expect(closed).toBeLessThan(400);
+});
