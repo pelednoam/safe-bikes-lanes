@@ -814,7 +814,11 @@ async function requestLoop(): Promise<void> {
   await poisReady;
   const km = Number(el<HTMLSelectElement>("loop-dist").value);
   const kind = el<HTMLSelectElement>("loop-stop").value;
-  const candidates = kind === "any" ? pois : pois.filter((p) => p.properties.kind === kind);
+  // null is "no stop wanted" — the router picks a turnaround geometrically,
+  // because sometimes the point is just to be out. An empty list is different:
+  // it means the stop they asked for has none near enough, which is an error.
+  const candidates =
+    kind === "none" ? null : kind === "any" ? pois : pois.filter((p) => p.properties.kind === kind);
   const loading = el<HTMLDivElement>("loading");
   showStage("Loading the map around you…");
   onTileProgress = (done, total): void => {
@@ -841,11 +845,16 @@ async function requestLoop(): Promise<void> {
     loopParams = { km, kind };
     selectOption("loop");
     poiMarker?.remove();
-    poiMarker = new maplibregl.Marker({ color: "#e67e22" })
-      .setLngLat(poi.geometry.coordinates)
-      .addTo(map);
-    const meta = POI_META[poi.properties.kind];
-    poiMarker.getElement().title = `${meta?.emoji ?? ""} ${poi.properties.name || meta?.label || "stop"}`;
+    poiMarker = null;
+    if (poi !== null) {
+      // no marker on a ride with no stop: the loop is the whole of it
+      poiMarker = new maplibregl.Marker({ color: "#e67e22" })
+        .setLngLat(poi.geometry.coordinates)
+        .addTo(map);
+      const meta = POI_META[poi.properties.kind];
+      poiMarker.getElement().title =
+        `${meta?.emoji ?? ""} ${poi.properties.name || meta?.label || "stop"}`;
+    }
   } catch (err) {
     errBox.textContent = err instanceof Error ? err.message : String(err);
     errBox.style.display = "block";
@@ -3336,14 +3345,8 @@ let navFixesSinceStash = 0;
 let navSpeed = 0;
 let navLastFixAt = 0;
 let recorder: RideRecorder | null = null;
-let recordMode = false;
-let recordWatchId: number | null = null;
-/** Background (native) watcher ids — used instead of web watches in the app. */
+/** Background (native) watcher id — used instead of a web watch in the app. */
 let navBgWatcherId: string | null = null;
-let recordBgWatcherId: string | null = null;
-
-/** Free-record auto-stop: end the ride after this long with no movement. */
-const RECORD_IDLE_STOP_MS = 10 * 60_000;
 
 function finishAndSaveRide(): void {
   const ride = recorder?.finish(profileId);
@@ -4219,112 +4222,10 @@ el<HTMLButtonElement>("nav-hazard").addEventListener("click", () => {
   window.setTimeout(hideRideAlert, 4000);
 });
 
-// ---------------------------------------------------------------------------
-// free ride recording (no planned route): ● Record in the tool row
-// ---------------------------------------------------------------------------
-
-function recordOnPosition(pos: GeolocationPosition): void {
-  recordOnFix(toFix(pos));
-}
-
-function recordOnFix(fix: NativeFix): void {
-  if (!recordMode || !recorder) return;
-  const lon = fix.lon;
-  const lat = fix.lat;
-  navLastPos = [lon, lat];
-  if (!navDot) {
-    const dot = document.createElement("div");
-    dot.className = "nav-dot";
-    navDot = new maplibregl.Marker({ element: dot }).setLngLat([lon, lat]).addTo(map);
-  } else {
-    navDot.setLngLat([lon, lat]);
-  }
-  recorder.addPoint(Date.now(), lon, lat, router?.edgeClassAt(lon, lat) ?? null);
-  el<HTMLElement>("nav-dist").textContent = fmtDist(recorder.metersSoFar);
-  const mins = Math.round(recorder.durationSoFar / 60);
-  el<HTMLElement>("nav-remaining").textContent = `recording · ${mins} min`;
-  if (navFollowing) {
-    map.easeTo({ center: [lon, lat], zoom: 16, duration: 900 });
-  }
-  if (Date.now() - recorder.lastMovedAt > RECORD_IDLE_STOP_MS) {
-    speak("no movement for a while.");
-    stopRecording();
-  }
-}
-
-function startRecording(): void {
-  if (navActive || recordMode) return;
-  recordMode = true;
-  recorder = new RideRecorder();
-  navFollowing = true;
-  document.body.classList.add("navigating");
-  el<HTMLDivElement>("nav-banner").style.display = "block";
-  el<HTMLDivElement>("nav-tools").style.display = "none";
-  el<HTMLElement>("nav-icon").textContent = "🔴";
-  el<HTMLElement>("nav-dist").textContent = "0 m";
-  el<HTMLElement>("nav-street").textContent = "recording ride…";
-  el<HTMLElement>("nav-remaining").textContent = "";
-  void navigator.wakeLock
-    ?.request("screen")
-    .then((wl) => {
-      wakeLock = wl;
-    })
-    .catch(() => undefined);
-  void (async () => {
-    if (isNativeApp()) {
-      recordBgWatcherId = await startBackgroundWatcher(
-        "Family Bike Router",
-        "Recording your ride",
-        recordOnFix,
-        (message) => {
-          el<HTMLElement>("nav-street").textContent = message;
-        },
-      );
-    }
-    if (recordBgWatcherId === null) {
-      recordWatchId = navigator.geolocation.watchPosition(
-        recordOnPosition,
-        () => {
-          el<HTMLElement>("nav-street").textContent = "location unavailable — check permissions";
-        },
-        { enableHighAccuracy: true, maximumAge: 1000, timeout: 15000 },
-      );
-    }
-  })();
-  speak("recording. ride on!");
-}
-
-function stopRecording(): void {
-  if (!recordMode) return;
-  recordMode = false;
-  if (recordWatchId !== null) navigator.geolocation.clearWatch(recordWatchId);
-  recordWatchId = null;
-  if (recordBgWatcherId !== null) void stopBackgroundWatcher(recordBgWatcherId);
-  recordBgWatcherId = null;
-  finishAndSaveRide();
-  void wakeLock?.release().catch(() => undefined);
-  wakeLock = null;
-  navDot?.remove();
-  navDot = null;
-  navLastPos = null;
-  document.body.classList.remove("navigating");
-  el<HTMLDivElement>("nav-banner").style.display = "none";
-  el<HTMLDivElement>("nav-tools").style.display = "block";
-}
-
-el<HTMLButtonElement>("record-btn").addEventListener("click", () => {
-  if (recordMode) stopRecording();
-  else startRecording();
-});
-
 el<HTMLButtonElement>("nav-btn").addEventListener("click", () => {
   void startNav();
 });
 el<HTMLButtonElement>("nav-exit").addEventListener("click", () => {
-  if (recordMode) {
-    stopRecording();
-    return;
-  }
   // it used to end the ride outright, and sat 9 px from the mute button
   askDuringRide("End the ride now?", exitNav);
 });

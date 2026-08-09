@@ -226,11 +226,23 @@ describe("loop planning", () => {
     expect(option.label).toMatch(/Toy Park/);
     expect(option.payload.summary.meters).toBeGreaterThanOrEqual(220);
     expect(option.payload.summary.explanation?.[0]).toMatch(/loop/i);
-    expect(poi.properties.name).toBe("Toy Park");
+    expect(poi?.properties.name).toBe("Toy Park");
   });
 
-  it("fails clearly when no stop fits the distance", () => {
+  it("fails clearly when the stop you asked for has none near enough", () => {
+    // an empty candidate list is "you wanted a library and there isn't one",
+    // which is worth saying out loud
     expect(() => toyRouter().loopRoute(A, 300, [], "young_kids", false)).toThrow(/no suitable/);
+  });
+
+  it("plans a loop with no stop at all when none is wanted", () => {
+    // null is a different thing from []: sometimes the point is just to be out
+    const { option, poi } = toyRouter().loopRoute(A, 400, null, "young_kids", false);
+    expect(poi).toBeNull();
+    expect(option.id).toBe("loop");
+    expect(option.payload.summary.meters).toBeGreaterThan(0);
+    expect(option.payload.summary.explanation?.[0]).toMatch(/from where you started and back/i);
+    expect(option.payload.summary.explanation?.[0]).not.toMatch(/stop at/i);
   });
 });
 

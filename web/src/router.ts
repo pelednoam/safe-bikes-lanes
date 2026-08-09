@@ -1088,33 +1088,57 @@ export class Router {
 
   /** Plan a round trip of roughly targetM meters with a stop at a POI.
    * The return leg penalizes outbound edges so it comes back a different way. */
+  /** A ride that returns to where it started.
+   *
+   * With a list of `pois`, one of them becomes a stop roughly a third of the
+   * way round. With `null` the ride has no destination at all — sometimes the
+   * point is just to be out for an hour — and the turnaround is chosen
+   * geometrically instead: eight bearings at the same distance a stop would
+   * have been, whichever produces the loop closest to the length asked for.
+   *
+   * null and [] mean different things on purpose. An empty list is "I asked for
+   * a playground and there are none near enough", which is an error worth
+   * showing; null is "I don't want one".
+   */
   loopRoute(
     start: [number, number],
     targetM: number,
-    pois: PoiFeature[],
+    pois: PoiFeature[] | null,
     profileId: ProfileId,
     preferFlat: boolean,
-  ): { option: RouteOption; poi: PoiFeature } {
+  ): { option: RouteOption; poi: PoiFeature | null } {
     const from = this.nearestNode(start[0], start[1]);
     const profile = PROFILES[profileId];
     const w = this.weights(profile, preferFlat);
     const scaleX = Math.cos((start[1] * Math.PI) / 180) * 111_320;
     const ideal = targetM * 0.35;
-    const candidates = pois
-      .map((p) => {
-        const [lon, lat] = p.geometry.coordinates;
-        const beeline = Math.hypot((lon - start[0]) * scaleX, (lat - start[1]) * 110_540);
-        return { p, beeline };
-      })
-      .filter((c) => c.beeline > targetM * 0.08 && c.beeline < targetM * 0.55)
-      .sort((x, y) => Math.abs(x.beeline - ideal) - Math.abs(y.beeline - ideal))
-      .slice(0, 12);
+    const wandering = pois === null;
+    const candidates: { p: PoiFeature | null; at: [number, number] }[] = wandering
+      ? Array.from({ length: 8 }, (_v, i) => {
+          const bearing = (i * Math.PI * 2) / 8;
+          return {
+            p: null,
+            at: [
+              start[0] + (Math.sin(bearing) * ideal) / scaleX,
+              start[1] + (Math.cos(bearing) * ideal) / 110_540,
+            ] as [number, number],
+          };
+        })
+      : (pois ?? [])
+          .map((p) => {
+            const [lon, lat] = p.geometry.coordinates;
+            const beeline = Math.hypot((lon - start[0]) * scaleX, (lat - start[1]) * 110_540);
+            return { p, beeline, at: p.geometry.coordinates };
+          })
+          .filter((c) => c.beeline > targetM * 0.08 && c.beeline < targetM * 0.55)
+          .sort((x, y) => Math.abs(x.beeline - ideal) - Math.abs(y.beeline - ideal))
+          .slice(0, 12);
     if (candidates.length === 0) {
       throw new Error("no suitable stop found for that loop length — try another distance");
     }
-    let best: { path: number[]; poi: PoiFeature; total: number } | null = null;
+    let best: { path: number[]; poi: PoiFeature | null; total: number } | null = null;
     for (const c of candidates) {
-      const [lon, lat] = c.p.geometry.coordinates;
+      const [lon, lat] = c.at;
       let poiNode: number;
       try {
         poiNode = this.nearestNode(lon, lat);
@@ -1144,11 +1168,17 @@ export class Router {
     if (best === null) throw new Error("could not build a loop — try another distance");
     const payload = this.payload(best.path, profile);
     const { grade, reason } = this.gradeRoute(best.path);
-    const poiName = best.poi.properties.name || best.poi.properties.kind.replace("_", " ");
     const runs = this.protectedRuns(best.path).filter((r) => r.meters >= 300);
+    const poiName =
+      best.poi === null
+        ? null
+        : best.poi.properties.name || best.poi.properties.kind.replace("_", " ");
     const explanation = [
-      `A ${fmt(best.total)} loop with a stop at ${poiName} roughly halfway, ` +
-        `returning a different way than it goes out.`,
+      poiName === null
+        ? `A ${fmt(best.total)} loop from where you started and back, returning a ` +
+          `different way than it goes out.`
+        : `A ${fmt(best.total)} loop with a stop at ${poiName} roughly halfway, ` +
+          `returning a different way than it goes out.`,
     ];
     if (runs.length > 0) {
       explanation.push(

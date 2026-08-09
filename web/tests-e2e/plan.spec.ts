@@ -515,6 +515,11 @@ test("a round trip can be planned without hunting for it", async ({ page, contex
 
   const loop = page.locator("#loop-btn");
   await expect(loop, "the round-trip button must be visible without opening anything").toBeVisible();
+  // the action comes after the choices: length, then stop, then go
+  const order = await page.evaluate(() =>
+    [...document.querySelectorAll("#loop-row select, #loop-row button")].map((e) => e.id),
+  );
+  expect(order).toEqual(["loop-dist", "loop-stop", "loop-btn"]);
   // and it must not be inside something collapsed
   const hidden = await loop.evaluate((b) => b.closest("details:not([open])") !== null);
   expect(hidden, "the button is inside a collapsed section").toBe(false);
@@ -546,4 +551,42 @@ test("a round trip can be planned without hunting for it", async ({ page, contex
   });
   expect(closed, "a round trip should end roughly where it began").toBeGreaterThanOrEqual(0);
   expect(closed).toBeLessThan(400);
+});
+
+
+test("a round trip can have no stop at all", async ({ page, context }) => {
+  // "just get us out for an hour" is a real ask, and every option in the list
+  // used to be a place you had to visit
+  await context.grantPermissions(["geolocation"]);
+  await context.setGeolocation({ latitude: 42.3875, longitude: -71.0995 });
+  await page.goto("/");
+  await page.waitForFunction(() => window._map !== undefined, null, { timeout: 60_000 });
+
+  await expect(page.locator("#loop-stop option[value='none']")).toHaveCount(1);
+  await page.locator("#loop-stop").selectOption("none");
+  await page.locator("#loop-btn").click();
+  await page.waitForFunction(
+    () => {
+      const s = window._map?.getSource("route") as { _data?: { features?: unknown[] } } | undefined;
+      return (s?._data?.features ?? []).length > 0;
+    },
+    null,
+    { timeout: 60_000 },
+  );
+  // no stop marker, and the explanation doesn't promise one
+  const markers = await page.evaluate(
+    () => document.querySelectorAll('.maplibregl-marker[style*="e67e22"]').length,
+  );
+  expect(markers, "a no-stop loop must not drop a stop marker").toBe(0);
+  await expect(page.locator("#summary")).not.toContainText(/stop at/i);
+});
+
+test("the free-ride recorder is gone, but rides are still saved while navigating", async ({
+  page,
+}) => {
+  await boot(page, HOME_VIEW);
+  expect(await page.locator("#record-btn").count(), "the Record button was removed").toBe(0);
+  // the recorder itself stays: a navigated ride still lands in the history,
+  // which is the case that was actually worth keeping
+  await expect(page.locator("#nav-btn")).toBeAttached();
 });
