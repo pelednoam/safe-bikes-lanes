@@ -145,6 +145,23 @@ export interface MapillaryNear {
  * preview in app.ts had its own copy and kept the old narrow-box, newest-wins
  * version of this after the card was fixed.
  */
+/** When to stop asking after Mapillary pushes back.
+ *
+ * One token is shared by everyone using the published site, and it is rate
+ * limited per token — so at any real number of users the answer to some hovers
+ * is 429. Not caching that was right (a rate limit is not "there is no photo
+ * here"), but it left every hover retrying into a limit that is still in force.
+ * Back off instead, and lengthen the pause while it keeps failing.
+ */
+const PHOTO_BACKOFF_MS = [15_000, 60_000, 300_000];
+let photoPausedUntil = 0;
+let photoFailures = 0;
+
+/** Why there is no photo, when the reason isn't "nobody has taken one". */
+export function photosPaused(): boolean {
+  return Date.now() < photoPausedUntil;
+}
+
 export async function nearestMapillary(
   lon: number,
   lat: number,
@@ -167,8 +184,18 @@ export async function nearestMapillary(
       fields: asked,
       limit: "20",
     }).toString();
+  if (photosPaused()) throw new Error("mapillary paused");
   const resp = await fetch(url);
-  if (!resp.ok) throw new Error(`mapillary ${resp.status}`);
+  if (!resp.ok) {
+    // 429 is the one we expect; treat any refusal the same way, since hammering
+    // a service that just said no is how a shared token gets shut off entirely
+    photoFailures++;
+    const wait = PHOTO_BACKOFF_MS[Math.min(photoFailures - 1, PHOTO_BACKOFF_MS.length - 1)] ?? 0;
+    photoPausedUntil = Date.now() + wait;
+    throw new Error(`mapillary ${resp.status}`);
+  }
+  photoFailures = 0;
+  photoPausedUntil = 0;
   const data = (await resp.json()) as { data: MapillaryNear[] };
   const kx = 111_320 * Math.cos((lat * Math.PI) / 180);
   const nearest = data.data
@@ -220,6 +247,9 @@ export async function fetchSegmentPhoto(
  * corrected token shows no photos until the page is reloaded. */
 export function clearPhotoCache(): void {
   photoCache.clear();
+  // and the back-off: a pause earned by the old token shouldn't outlive it
+  photoPausedUntil = 0;
+  photoFailures = 0;
   // Bump the generation too. Clearing the map doesn't touch a lookup already in
   // flight, and when that one resolves it writes the old token's answer into
   // the fresh cache — so correcting a bad token still showed no photos.
@@ -240,7 +270,11 @@ export function fillSegmentPhoto(
     const slot = slotOwner.querySelector<HTMLDivElement>("div[data-seg-photo]");
     if (!slot || !slot.isConnected) return;
     if (url === null) {
-      slot.innerHTML = `<small><i>no street-level photo here</i></small>`;
+      // "no photo here" is a claim about the world; when we simply stopped
+      // asking, it isn't one we can make
+      slot.innerHTML = photosPaused()
+        ? `<small><i>street-level photos are rate-limited right now</i></small>`
+        : `<small><i>no street-level photo here</i></small>`;
       return;
     }
     const when =

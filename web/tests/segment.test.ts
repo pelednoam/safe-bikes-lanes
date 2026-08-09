@@ -2,17 +2,24 @@
 // per-city pages. It states what a street is like for a child, so the two pages
 // must not be able to describe the same street differently — that's why it's
 // one module, and why its wording is pinned here.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   classGrade,
   clearPhotoCache,
   esc,
+  photosPaused,
   fetchSegmentPhoto,
   fillSegmentPhoto,
   nearestMapillary,
   segmentHtml,
 } from "../src/segment.js";
+
+// The lookup holds a cache and a rate-limit back-off between calls, so a test
+// that trips either would otherwise change the answer the next test gets.
+beforeEach(() => {
+  clearPhotoCache();
+});
 
 describe("the street card", () => {
   it("grades a street on the same scale as a whole route", () => {
@@ -334,9 +341,12 @@ describe("what the photo lookup remembers", () => {
     clearPhotoCache();
   });
 
-  it("does not remember a rate limit as 'no photo here'", async () => {
-    // one 429 while panning used to make that block permanently photo-less for
-    // the rest of the session
+  it("waits out a rate limit instead of hammering it, then asks again", async () => {
+    // A 429 is not "there is no photo of this street", so it must not be cached
+    // as one — but retrying every hover into a limit that is still in force is
+    // how a shared token gets shut off for everybody. Back off, then resume.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-09T12:00:00Z"));
     let calls = 0;
     vi.stubGlobal(
       "fetch",
@@ -358,9 +368,20 @@ describe("what the photo lookup remembers", () => {
       }),
     );
     expect((await fetchSegmentPhoto(-71.6, 42.38, "token")).url).toBeNull();
-    // the same spot again: it must ask a second time, not answer from a cache
+    expect(calls).toBe(1);
+
+    // a different street, straight away: it must not ask while paused
+    expect((await fetchSegmentPhoto(-71.65, 42.38, "token")).url).toBeNull();
+    expect(calls, "asked again while still rate-limited").toBe(1);
+    expect(photosPaused()).toBe(true);
+
+    // once the pause is over it tries again, and the earlier refusal was never
+    // written down as an answer
+    vi.setSystemTime(new Date("2026-08-09T12:00:20Z"));
+    expect(photosPaused()).toBe(false);
     expect((await fetchSegmentPhoto(-71.6, 42.38, "token")).url).toBe("https://img/after");
     expect(calls).toBe(2);
+    vi.useRealTimers();
   });
 
   it("still remembers a real 'no photos here' answer", async () => {

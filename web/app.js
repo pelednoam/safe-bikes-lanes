@@ -237,6 +237,21 @@ let builtTileCount = -1;
 /** Fetch the tiles covering `points` (± padM metres, plus a margin), then
  * return a Router built over the current tile set — rebuilt only when the
  * loaded set actually grew. Null if the area has no mapped tiles. */
+/** What the loading line is doing right now.
+ *
+ * Routing was showing a motionless "routing…" for the whole wait, which is
+ * mostly the map downloading — about 90 tiles for an ordinary trip — so the app
+ * looked frozen while it was in fact busy and fine. Say which of the two things
+ * is happening, and show the one that has a denominator.
+ */
+let onTileProgress;
+function showStage(text, sub = "") {
+    const box = el("loading");
+    box.innerHTML =
+        `<span class="spinner" aria-hidden="true"></span><span>${esc(text)}</span>` +
+            (sub === "" ? "" : `<small>${esc(sub)}</small>`);
+    box.style.display = "flex";
+}
 async function ensureRouter(points, padM, margin = 1) {
     await manifestReady;
     // Corridor, not bounding box: for a cross-metro trip the endpoints' bbox
@@ -250,7 +265,7 @@ async function ensureRouter(points, padM, margin = 1) {
     // measurably cheaper but produced a less safe route (50% -> 34% protected
     // on Wellesley->Revere), which is the wrong trade for this app.
     const marginCells = margin + Math.round(padM / 2200);
-    await tiles.ensureCorridor(points, marginCells);
+    await tiles.ensureCorridor(points, marginCells, onTileProgress);
     if (tiles.loadedCount === 0)
         return null;
     if (router === null || builtTileCount !== tiles.loadedCount) {
@@ -387,6 +402,38 @@ function currentPosition() {
     });
 }
 /** Reflect the origin state in the From field. */
+/** Put the start on the map at load, when we can do it without asking.
+ *
+ * The From field promises "Your location", and until this ran it was a promise
+ * the app hadn't kept: nothing was located until a route was requested, so the
+ * map opened somewhere generic and the field described a start that didn't
+ * exist. Cold-prompting every first-time visitor for location is the other
+ * failure — people deny it, and a denied permission is hard to take back — so
+ * this only acts where the browser says permission is already granted. Everyone
+ * else is located on demand, the first time they ask for a route.
+ */
+async function locateIfAlreadyAllowed() {
+    if (!fromCurrent || start !== null || !navigator.geolocation)
+        return;
+    try {
+        const perms = navigator.permissions;
+        if (perms === undefined)
+            return; // Safari <16: don't guess, wait to be asked
+        const status = await perms.query({ name: "geolocation" });
+        if (status.state !== "granted")
+            return;
+        const at = await currentPosition();
+        if (!fromCurrent || start !== null)
+            return; // the rider got there first
+        start = makeMarker(at, "#2b83ba", "start");
+        syncOD();
+        map.easeTo({ center: at, zoom: Math.max(map.getZoom(), 14), duration: 600 });
+    }
+    catch {
+        // no position, revoked between the check and the call, or simply slow:
+        // the on-demand path still runs when a route is asked for
+    }
+}
 function syncOD() {
     const f = el("from-field");
     if (f.classList.contains("picking"))
@@ -422,12 +469,47 @@ function revCache() {
         return {};
     }
 }
+/** The router once it exists, or null if it hasn't within `ms`. */
+async function withRouter(ms) {
+    const deadline = Date.now() + ms;
+    while (router === null && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 120));
+    }
+    return router;
+}
 async function reverseGeocode(lon, lat) {
     const key = revKey(lon, lat);
     const cache = revCache();
     const hit = cache[key];
     if (hit !== undefined)
         return hit;
+    // The map we already loaded knows the street. Ask it first: it is instant,
+    // it works with no signal, and it keeps a pin drop from costing a request to
+    // OpenStreetMap's geocoder, which is donated infrastructure that a public app
+    // is not supposed to lean on. Outside the mapped area, fall through and ask.
+    //
+    // Wait for the router if it isn't built yet: pins from a permalink are named
+    // before the first tiles land, which is precisely the common case, and
+    // answering those from Nominatim would leave the local path unused where it
+    // matters most. The wait is generous because naming is fire-and-forget — the
+    // field fills a beat later either way — and a slow phone on a cold start
+    // shouldn't be the reason a request goes out that didn't need to.
+    // A tight radius on purpose. Within a few metres of a street the local name
+    // is the right answer and costs nothing; further out the pin is probably on a
+    // building or in a park, where the geocoder's answer is better than the name
+    // of the nearest road — a pin on Kendall Square should say "Google", not the
+    // street it happens to sit beside.
+    const local = (await withRouter(10000))?.streetNameAt(lon, lat, 20) ?? null;
+    if (local !== null) {
+        cache[key] = local;
+        try {
+            localStorage.setItem(REVGEO_KEY, JSON.stringify(cache));
+        }
+        catch {
+            /* private mode: the name just won't be remembered */
+        }
+        return local;
+    }
     const url = "https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18" +
         `&lon=${lon.toFixed(6)}&lat=${lat.toFixed(6)}`;
     const resp = await fetch(url, { headers: { Accept: "application/json" } });
@@ -526,7 +608,7 @@ async function requestRoute() {
     if (!start) {
         if (!fromCurrent)
             return;
-        loading.textContent = "finding your location…";
+        showStage("Finding your location…");
         loading.style.display = "block";
         try {
             start = makeMarker(await currentPosition(), "#2b83ba", "start");
@@ -540,8 +622,12 @@ async function requestRoute() {
             return;
         }
     }
-    loading.textContent = "routing…";
-    loading.style.display = "block";
+    showStage("Loading the map around your route…");
+    onTileProgress = (done, total) => {
+        // only once there are enough for the count to mean something
+        if (total > 4)
+            showStage("Loading the map around your route…", `${done} of ${total}`);
+    };
     await new Promise((resolve) => setTimeout(resolve, 0));
     try {
         const s = start.getLngLat();
@@ -554,7 +640,10 @@ async function requestRoute() {
         // load the tiles along the corridor, then route; a safe route can detour
         // well outside the straight A–B box, so widen the loaded area once if the
         // first attempt finds nothing.
-        const route = (r) => r.routeOptions(a, b, profileId, preferFlat, undefined, avoidTypes, walkMaxM);
+        const route = (r) => {
+            showStage("Finding the safest way…");
+            return r.routeOptions(a, b, profileId, preferFlat, undefined, avoidTypes, walkMaxM);
+        };
         // a narrow corridor first — it covers ordinary detours and keeps a long
         // trip from pulling a big slice of the map; the retry below widens it
         let r = await ensureRouter([a, b], 1200, 1);
@@ -582,6 +671,7 @@ async function requestRoute() {
         frameRoute(fallback);
     }
     catch (err) {
+        onTileProgress = undefined;
         options = [];
         selectedId = null;
         renderOptions();
@@ -4282,6 +4372,8 @@ if (interrupted !== null) {
     renderRides();
 }
 void checkAppUpdate();
+// after the map exists, so the marker has something to land on
+void locateIfAlreadyAllowed();
 // service worker: register only on the website (PWA offline). In the native
 // app Capacitor already bundles everything offline, and a persistent SW would
 // serve a STALE app shell across APK updates (its origin outlives installs) —

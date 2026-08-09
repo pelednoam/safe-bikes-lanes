@@ -434,3 +434,71 @@ test("the planner asks nothing of OpenStreetMap's donated tile servers", async (
   await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
   expect(tiles, "basemap tiles must not come from OSM's servers").toHaveLength(0);
 });
+
+test("the wait is narrated, and something moves while it waits", async ({ page }) => {
+  // The wait is mostly the map downloading — about 90 tiles for an ordinary trip
+  // — and it used to show one motionless "routing…" through all of it, which
+  // reads as a frozen app rather than a busy one.
+  const seen: string[] = [];
+  await page.goto("/#s=-71.122258,42.396748&e=-71.086705,42.362552&m=young_kids");
+  await page.waitForFunction(() => window._map !== undefined, null, { timeout: 60_000 });
+  const poll = setInterval(() => {
+    void page
+      .locator("#loading")
+      .innerText()
+      .then((t) => {
+        const line = t.replace(/\s+/g, " ").trim();
+        if (line !== "" && seen[seen.length - 1] !== line) seen.push(line);
+      })
+      .catch(() => undefined);
+  }, 90);
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 60_000 });
+  clearInterval(poll);
+
+  // it said what it was doing, and the count moved while it did it
+  expect(seen.some((l) => /Loading the map/i.test(l))).toBe(true);
+  expect(seen.some((l) => /\d+ of \d+/.test(l))).toBe(true);
+  expect(new Set(seen).size, "the line never changed — that's the frozen look").toBeGreaterThan(1);
+  // and it stopped claiming to be routing while it was really downloading
+  expect(seen.some((l) => /Finding the safest way/i.test(l))).toBe(true);
+});
+
+test("naming a pin on a mapped street costs no call to OSM's geocoder", async ({ page }) => {
+  // Nominatim is donated infrastructure with a usage policy that rules out a
+  // public product leaning on it, and the map already loaded knows the street.
+  // It is still the fallback for anywhere the local map can't name — a pin on a
+  // building is better described as "Google" than as the road beside it — so
+  // this checks the case the local answer is right for, not the total.
+  const geocodes: string[] = [];
+  page.on("request", (r) => {
+    if (r.url().includes("nominatim")) geocodes.push(r.url());
+  });
+  await boot(page, "#s=-71.122258,42.396748&e=-71.086705,42.362552&m=young_kids");
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
+  // count only calls for the point we are about to drop, so an unrelated pin
+  // being geocoded can't decide this test
+  const asked = (lon: number): number =>
+    geocodes.filter((u) => u.includes(`lon=${lon.toFixed(6)}`)).length;
+  // a pin dropped on a street the app has in its own map
+  const onAStreet = await at(page, -71.1049, 42.3893);
+  await page.mouse.click(onAStreet.x, onAStreet.y);
+  await expect(page.locator("#from-field, #to-field").first()).toBeVisible();
+  await page.waitForTimeout(2500);
+  expect(asked(-71.1049), "a pin on a mapped street went to Nominatim").toBe(0);
+});
+
+test("a rider who already allowed location gets their start without asking", async ({
+  page,
+  context,
+}) => {
+  // The From field promises "Your location". Until this, nothing was located
+  // until a route was asked for, so it was a promise the app hadn't kept.
+  await context.grantPermissions(["geolocation"]);
+  await context.setGeolocation({ latitude: 42.3875, longitude: -71.0995 });
+  await page.goto("/");
+  await page.waitForFunction(() => window._map !== undefined, null, { timeout: 60_000 });
+  // the start marker appears on its own, with no interaction at all
+  await expect
+    .poll(() => page.locator(".maplibregl-marker").count(), { timeout: 20_000 })
+    .toBeGreaterThan(0);
+});

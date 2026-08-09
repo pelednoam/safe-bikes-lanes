@@ -1019,6 +1019,23 @@ export class Router {
     return e ? this.g.classes[e[3]] ?? null : null;
   }
 
+  /** The name of the nearest street, from the map we already hold.
+   *
+   * Naming a dropped pin used to mean a Nominatim request each time. That is
+   * donated infrastructure with a usage policy that rules out a public product
+   * leaning on it, and it doesn't work offline — while the answer for anywhere
+   * inside the mapped area is sitting in the tiles the router just loaded.
+   * Returns null outside it, and the caller can still ask the internet then.
+   */
+  streetNameAt(lon: number, lat: number, maxM = 40): string | null {
+    const ei = this.nearestEdge(lon, lat, maxM);
+    if (ei === null) return null;
+    const e = this.g.edges[ei];
+    if (!e) return null;
+    const name = this.g.names[e[4]] ?? "";
+    return name === "" ? null : name;
+  }
+
   /** Penalize edges at the start point that head backward relative to the
    * rider's travel direction — used by "go with my street choice" rerouting
    * so guidance continues forward instead of demanding a U-turn. */

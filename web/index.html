@@ -246,7 +246,23 @@
   .footer { margin-top:12px; display:flex; gap:7px; flex-wrap:wrap; }
   .footer button { font-size:12.5px; }
   #error { color:var(--caution); display:none; margin-top:8px; font-weight:500; }
-  #loading { display:none; color:var(--muted); margin-top:8px; }
+  /* The wait here is mostly the map downloading — about 90 tiles for an
+     ordinary trip — and a motionless line of text through all of it read as a
+     frozen app. Something has to be moving. */
+  #loading { display:none; align-items:center; gap:8px; color:var(--muted); margin-top:8px; }
+  #loading small { margin-left:auto; font-variant-numeric:tabular-nums; opacity:.8; }
+  .spinner {
+    width:14px; height:14px; flex:none; border-radius:50%;
+    border:2px solid rgba(0,0,0,.13); border-top-color:var(--accent, #1a9850);
+    animation:spin .7s linear infinite;
+  }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) {
+    /* still alive, but not spinning: a pulse carries the same "working" signal */
+    .spinner { animation:pulse 1.4s ease-in-out infinite; border-top-color:rgba(0,0,0,.13);
+               background:var(--accent, #1a9850); border-color:transparent; }
+    @keyframes pulse { 0%,100% { opacity:.25 } 50% { opacity:1 } }
+  }
 
   /* progressive disclosure: essentials on top, the rest folded away */
   .section { margin-top:10px; border-top:1px solid var(--line); padding-top:8px; }

@@ -151,10 +151,31 @@ export class TileStore {
   /** Fetch the tiles along the corridor through `points`, rather than the
    * whole bounding box of them — a cross-metro trip would otherwise pull most
    * of the map. Returns true when at least one new tile arrived. */
-  async ensureCorridor(points: [number, number][], margin = 1): Promise<boolean> {
+  /** Load every tile along a corridor.
+   *
+   * onProgress reports (done, total) as each lands. The wait here is almost all
+   * of what a rider experiences as "the app is thinking": a typical trip pulls
+   * about 90 tiles, which is a couple of seconds on a laptop and a good deal
+   * longer on a phone in the street. Reporting it is the difference between a
+   * progress bar and an app that looks broken.
+   */
+  async ensureCorridor(
+    points: [number, number][],
+    margin = 1,
+    onProgress?: (done: number, total: number) => void,
+  ): Promise<boolean> {
     const keys = this.keysForCorridor(points, margin);
     const before = this.loaded.size;
-    await Promise.all(keys.map((k) => this.fetchTile(k)));
+    let done = 0;
+    onProgress?.(0, keys.length);
+    await Promise.all(
+      keys.map((k) =>
+        this.fetchTile(k).finally(() => {
+          done++;
+          onProgress?.(done, keys.length);
+        }),
+      ),
+    );
     return this.loaded.size > before;
   }
 
