@@ -177,7 +177,9 @@ test("tapping the map asks in-page without freezing guidance", async ({ page }) 
   // the ride keeps running while the question is on screen — window.confirm
   // used to block the page entirely
   const before = await page.locator("#nav-remaining").textContent();
-  await ride(page, path, { speedKmh: 12, timeScale: 30, untilM: 260 });
+  // far enough to move the figure in either unit: miles show in tenths, so
+  // 260 m of progress (0.16 mi) can leave the same digits on screen
+  await ride(page, path, { speedKmh: 12, timeScale: 30, untilM: 600 });
   expect(await page.locator("#nav-remaining").textContent()).not.toBe(before);
   // declining leaves the ride alone
   await page.locator("#nav-ask-no").click();

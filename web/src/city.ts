@@ -73,6 +73,18 @@ const ISLAND_COLORS = [
   "#9aa5ab", // 8: the long tail of small pockets
 ];
 
+/** Kilometres from the data, miles for the reader.
+ *
+ * The generator stores kilometres because that is what the pipeline computes
+ * in; these pages are read by people in Massachusetts, who do not think in
+ * them. Feet below 1000, the same switch the app uses. */
+function mi(km: number): string {
+  const ft = km * 3280.839895;
+  return ft < 1000
+    ? `${Math.round(ft).toLocaleString("en-US")} ft`
+    : `${(km / 1.609344).toFixed(1)} mi`;
+}
+
 const N = (n: number): string => n.toLocaleString();
 
 let mapillaryToken = "";
@@ -112,9 +124,9 @@ function shapeOfTheProblem(s: CityStats, afterClaim: boolean): string {
   // "That means…" only follows something. Without the population sentence in
   // front of it the paragraph opened on a pronoun with no antecedent.
   const budget = afterClaim
-    ? `That means no route within a ${s.budget_km} km ride that avoids traffic` +
+    ? `That means no route within a ${mi(s.budget_km)} ride that avoids traffic` +
       " a child shouldn't be in."
-    : `Measured as a ${s.budget_km} km ride that avoids traffic a child` +
+    : `Measured as a ${mi(s.budget_km)} ride that avoids traffic a child` +
       " shouldn't be in.";
   if (s.safe_km <= 0) {
     // No kid-safe street at all is not "mostly joins up" — the old share
@@ -129,13 +141,13 @@ function shapeOfTheProblem(s: CityStats, afterClaim: boolean): string {
   const strandedShare = s.pocket_km / s.safe_km;
   if (strandedShare >= 0.3) {
     return (
-      `${budget} The streets they can use don't join up: ${s.pocket_km} km of` +
+      `${budget} The streets they can use don't join up: ${mi(s.pocket_km)} of` +
       ` them sit in ${s.pockets} pockets with no safe way out.`
     );
   }
   return (
-    `${budget} Most of the safe network here does join up — ${s.connected_km} km` +
-    ` of it — so the gaps are specific: ${s.pocket_km} km stranded in` +
+    `${budget} Most of the safe network here does join up — ${mi(s.connected_km)}` +
+    ` of it — so the gaps are specific: ${mi(s.pocket_km)} stranded in` +
     ` ${s.pockets} pockets, and the crossings between them.`
   );
 }
@@ -198,7 +210,7 @@ function summarise(city: CityData): void {
 
   const figures: [string, string, string][] = [
     [
-      `${s.connected_km} km`,
+      `${mi(s.connected_km)}`,
       s.connected_leaves_city
         ? "kid-safe streets on one network that carries on out of town"
         : "the largest connected piece — it doesn't leave the city",
@@ -207,7 +219,7 @@ function summarise(city: CityData): void {
     // "cut off from the main network", not "you can't leave safely": a pocket
     // can run into the next town and still not reach the main network, and the
     // stronger phrasing asserts something this measures nothing about.
-    [`${s.pocket_km} km`, `cut off from that network, in ${s.pockets} pockets`, "bad"],
+    [`${mi(s.pocket_km)}`, `cut off from that network, in ${s.pockets} pockets`, "bad"],
     [String(s.pockets), "separate pockets of safe street", ""],
     [
       String(s.projects),
@@ -662,11 +674,11 @@ async function start(): Promise<void> {
       const belongs =
         isle === 0
           ? city.stats.connected_leaves_city
-            ? `<br><small><b>The main network:</b> ${km} km in ${city.name}, part of` +
-              ` ${N(city.stats.connected_region_km)} km that carries on past the town line.</small>`
-            : `<br><small><b>The main network:</b> ${km} km — the largest connected` +
+            ? `<br><small><b>The main network:</b> ${mi(Number(km))} in ${city.name}, part of` +
+              ` ${mi(city.stats.connected_region_km)} that carries on past the town line.</small>`
+            : `<br><small><b>The main network:</b> ${mi(Number(km))} — the largest connected` +
               ` piece in ${city.name}, but it doesn't leave the city.</small>`
-          : `<br><small><b>A pocket:</b> ${km} km of it in ${city.name}, cut off from` +
+          : `<br><small><b>A pocket:</b> ${mi(Number(km))} of it in ${city.name}, cut off from` +
             " the main network — you can't leave it without riding something" +
             " hostile.</small>";
       return body + belongs;

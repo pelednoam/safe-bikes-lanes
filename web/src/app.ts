@@ -79,6 +79,19 @@ import {
 } from "./rides.js";
 import { dataUrl, initDataSource, loadJson, usingRemoteData } from "./data.js";
 import { buildCues, PROFILES, Router, toGPX } from "./router.js";
+import {
+  distVoice,
+  fmtDist,
+  fmtClimb,
+  fmtDistTight,
+  fmtSpeed,
+  fromMeters,
+  getUnits,
+  navRound,
+  setUnits,
+  toMeters,
+  unitName,
+} from "./units.js";
 import { NetworkTiles, TileStore } from "./tiles.js";
 import { drawRideCard, drawTotalsCard, rideShareText, totalsShareText } from "./sharecard.js";
 import type {
@@ -139,37 +152,16 @@ function el<T extends HTMLElement>(id: string): T {
  * voice rounded to 50, so riders heard "in three hundred metres" against a
  * banner reading 280 m and reported it as a bug. Both read this now, so the
  * buckets have to be coarse enough to say out loud. */
-function navDistM(m: number): number {
-  if (m < 15) return 0; // "now"
-  if (m < 100) return Math.round(m / 10) * 10;
-  if (m < 500) return Math.round(m / 50) * 50;
-  return Math.round(m / 100) * 100;
-}
-
-/** Kilometres without a pointless decimal: "1 km", not "1.0 km". */
-function navKm(metres: number): string {
-  const km = metres / 1000;
-  return Number.isInteger(km) ? String(km) : km.toFixed(1);
-}
+// Distances live in metres everywhere inside the app; units.ts is the last step
+// before one is shown or spoken, so a rider in Massachusetts reads miles.
+const navDistM = navRound;
 
 function navDistText(m: number): string {
-  const r = navDistM(m);
-  if (r === 0) return "now";
-  return r < 1000 ? `${r} m` : `${navKm(r)} km`;
+  const r = navRound(m);
+  return r === 0 ? "now" : fmtDistTight(r);
 }
 
-/** The same number, spoken. */
-function navDistVoice(m: number): string {
-  const r = navDistM(m);
-  if (r === 0) return "now";
-  if (r < 1000) return `${r} meters`;
-  const km = navKm(r);
-  return `${km} kilometer${km === "1" ? "" : "s"}`;
-}
-
-function fmtDist(m: number): string {
-  return m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(1)} km`;
-}
+const navDistVoice = distVoice;
 
 function emptyFC(): GeoJSON.FeatureCollection {
   return { type: "FeatureCollection", features: [] };
@@ -812,7 +804,14 @@ async function requestLoop(): Promise<void> {
     }
   }
   await poisReady;
-  const km = Number(el<HTMLSelectElement>("loop-dist").value);
+  const typed = Number(el<HTMLInputElement>("loop-dist").value);
+  if (!Number.isFinite(typed) || typed <= 0) {
+    errBox.textContent = `How far would you like to ride? Enter a distance in ${unitName()}.`;
+    errBox.style.display = "block";
+    return;
+  }
+  const targetM = toMeters(typed);
+  const km = targetM / 1000;
   const kind = el<HTMLSelectElement>("loop-stop").value;
   // null is "no stop wanted" — the router picks a turnaround geometrically,
   // because sometimes the point is just to be out. An empty list is different:
@@ -828,20 +827,23 @@ async function requestLoop(): Promise<void> {
   try {
     const s = start.getLngLat();
     // a loop can range out to roughly half its length from the start
-    const r = await ensureRouter([[s.lng, s.lat]], km * 500, 2);
+    const r = await ensureRouter([[s.lng, s.lat]], targetM / 2, 2);
     if (!r) throw new Error("this area isn't mapped for routing yet");
     onTileProgress = undefined;
-    showStage(`Finding a ${km} km loop…`);
-    const { option, poi } = r.loopRoute(
+    showStage(`Finding a ${fmtDistTight(targetM)} loop…`);
+    const { option, poi, more } = r.loopRoute(
       [s.lng, s.lat],
-      km * 1000,
+      targetM,
       candidates,
       profileId,
       preferFlat,
     );
     end?.remove();
     end = null;
-    options = [option];
+    // a choice of loops, not a verdict: the runner-ups go in the same option
+    // cards the point-to-point router uses, so picking between them is the
+    // gesture the rider already knows
+    options = [option, ...more.map((m) => m.option)];
     loopParams = { km, kind };
     selectOption("loop");
     poiMarker?.remove();
@@ -1010,7 +1012,7 @@ function renderOptions(): void {
       o.id === selectedId
         ? `${fmtDist(s.meters)} · ${s.minutes} min · ${s.pct_protected}% protected`
         : `${fmtDist(s.meters)} · ${s.minutes} min · ${s.pct_protected}% protected` +
-          ` · ↗ ${s.climb_m ?? 0} m`;
+          ` · ↗ ${fmtClimb(s.climb_m ?? 0)}`;
     body.append(name, stats);
     card.appendChild(body);
     card.addEventListener("click", () => {
@@ -1075,8 +1077,8 @@ function renderRibbon(option: RouteOption): void {
     rects.join("") +
     crossings.join("") +
     `<polyline points="${linePts.join(" ")}" fill="none" stroke="#666" stroke-width="1.4"/>` +
-    `<text x="0" y="40" font-size="8" fill="#999">${Math.round(eMax)} m</text>` +
-    `<text x="0" y="68" font-size="8" fill="#999">${Math.round(eMin)} m</text>` +
+    `<text x="0" y="40" font-size="8" fill="#999">${fmtClimb(eMax)}</text>` +
+    `<text x="0" y="68" font-size="8" fill="#999">${fmtClimb(eMin)}</text>` +
     `</svg>`;
 }
 
@@ -1231,7 +1233,7 @@ el<HTMLButtonElement>("print-cues").addEventListener("click", () => {
   const cues = buildCues(sel.payload);
   const s = sel.payload.summary;
   const rows = cues
-    .map((c) => `<tr><td>${c.km.toFixed(1)} km</td><td>${c.text}</td></tr>`)
+    .map((c) => `<tr><td>${fmtDist(c.km * 1000)}</td><td>${esc(c.text)}</td></tr>`)
     .join("");
   const cautionRows = s.cautions
     .map((c) => `<li>⚠ ${c.name}: ${fmtDist(c.meters)} of ${CLASS_LABELS[c.cls] ?? c.cls}</li>`)
@@ -1245,7 +1247,7 @@ el<HTMLButtonElement>("print-cues").addEventListener("click", () => {
       td:first-child{white-space:nowrap;font-variant-numeric:tabular-nums}
     </style></head><body>
     <h2>Family bike route — ${sel.label}</h2>
-    <p>${fmtDist(s.meters)} · ~${s.minutes} min · ${s.pct_protected}% protected · climb ${s.climb_m ?? 0} m</p>
+    <p>${fmtDist(s.meters)} · ~${s.minutes} min · ${s.pct_protected}% protected · climb ${fmtClimb(s.climb_m ?? 0)}</p>
     ${cautionRows ? `<ul>${cautionRows}</ul>` : ""}
     <table>${rows}</table>
     </body></html>`,
@@ -1328,7 +1330,9 @@ function parseHash(): void {
     const [kmRaw, kind] = l.split(",");
     const km = Number(kmRaw);
     if (km > 0 && kind) {
-      el<HTMLSelectElement>("loop-dist").value = String(km);
+      el<HTMLInputElement>("loop-dist").value = String(
+        Math.round(fromMeters(km * 1000) * 10) / 10,
+      );
       el<HTMLSelectElement>("loop-stop").value = kind;
       start = makeMarker(s, "#2b83ba", "start");
       void requestLoop();
@@ -1437,7 +1441,7 @@ function recentRow(route: RecentRoute): HTMLDivElement {
   const row = document.createElement("div");
   row.className = "search-row";
   const label = document.createElement("span");
-  label.textContent = `🕘 ${route.label} · ${route.km} km`;
+  label.textContent = `🕘 ${route.label} · ${fmtDist(route.km * 1000)}`;
   label.title = "plan this route again";
   label.style.cursor = "pointer";
   label.addEventListener("click", () => {
@@ -1546,15 +1550,15 @@ async function computeShed(): Promise<void> {
   if (!shedCenter) return;
   await manifestReady;
   const budgetKm = Number(el<HTMLInputElement>("shed-budget").value);
-  el<HTMLSpanElement>("shed-budget-label").textContent = `${budgetKm} km`;
+  el<HTMLSpanElement>("shed-budget-label").textContent = fmtDistTight(budgetKm * 1000);
   // the flood can reach out to the full budget radius from the center
   const r = await ensureRouter([shedCenter], budgetKm * 1000, 2);
   if (!r) return;
   const res = r.safeShed(shedCenter, budgetKm * 1000, profileId, preferFlat);
   getSource("shed").setData(res.geojson as GeoJSON.GeoJSON);
   el<HTMLDivElement>("shed-info").textContent =
-    `${res.reachableKm} km of streets reachable (${res.pctReachable}% of the network) ` +
-    `within a perceived ${budgetKm} km`;
+    `${fmtDist(res.reachableKm * 1000)} of streets reachable ` +
+    `(${res.pctReachable}% of the network) within a perceived ${fmtDistTight(budgetKm * 1000)}`;
   if (shedMarker) shedMarker.setLngLat(shedCenter);
   else {
     shedMarker = new maplibregl.Marker({ color: "#7c3aed" }).setLngLat(shedCenter).addTo(map);
@@ -2334,8 +2338,8 @@ map.on("load", () => {
     hoverPopup = new maplibregl.Popup({ closeButton: true, closeOnClick: true })
       .setLngLat(e.lngLat)
       .setHTML(
-        `🚴 ${props.fac_m} m of bike facilities in this block` +
-          `<br><small>${props.prot_m ?? 0} m protected (path/separated)</small>`,
+        `🚴 ${fmtDist(Number(props.fac_m) || 0)} of bike facilities in this block` +
+          `<br><small>${fmtDist(Number(props.prot_m) || 0)} protected (path/separated)</small>`,
       )
       .addTo(map);
   });
@@ -2351,7 +2355,7 @@ map.on("load", () => {
     hoverPopup?.remove();
     hoverPopup = new maplibregl.Popup({ closeButton: true, closeOnClick: true })
       .setLngLat(e.lngLat)
-      .setHTML(`elevation ~${props.elev} m`)
+      .setHTML(`elevation ~${fmtClimb(Number(props.elev) || 0)}`)
       .addTo(map);
   });
   map.on("mouseleave", "elevmap", () => {
@@ -3138,15 +3142,16 @@ function renderRides(): void {
   el<HTMLDivElement>("ride-totals").innerHTML =
     rides.length === 0
       ? "No rides yet — rides are saved automatically when you Navigate, or use ● Record."
-      : `<b>${totals.count}</b> rides · <b>${totals.km} km</b> total · ` +
-        `<b>${totals.movingHours} h</b> moving · longest <b>${totals.longestKm} km</b> · ` +
-        `this month <b>${totals.thisMonthKm} km</b> · avg <b>${totals.avgProtectedPct}%</b> protected`;
+      : `<b>${totals.count}</b> rides · <b>${fmtDist(totals.km * 1000)}</b> total · ` +
+        `<b>${totals.movingHours} h</b> moving · longest <b>${fmtDist(totals.longestKm * 1000)}</b> · ` +
+        `this month <b>${fmtDist(totals.thisMonthKm * 1000)}</b> · avg <b>${totals.avgProtectedPct}%</b> protected`;
   el<HTMLButtonElement>("rides-share").style.display = rides.length === 0 ? "none" : "inline-block";
   const table = el<HTMLTableElement>("ride-list");
   table.innerHTML =
     rides.length === 0
       ? ""
-      : "<tr><th>date</th><th>km</th><th>moving</th><th>avg</th><th>protected</th><th></th></tr>";
+      : `<tr><th>date</th><th>${unitName() === "miles" ? "mi" : "km"}</th><th>moving</th>` +
+        `<th>avg</th><th>protected</th><th></th></tr>`;
   for (const ride of rides) {
     const tr = table.insertRow();
     const d = new Date(ride.startedAt);
@@ -3154,7 +3159,7 @@ function renderRides(): void {
     tr.insertCell().textContent = (ride.meters / 1000).toFixed(1);
     tr.insertCell().textContent = `${Math.round(ride.movingS / 60)} min`;
     tr.insertCell().textContent =
-      ride.movingS > 0 ? `${((ride.meters / ride.movingS) * 3.6).toFixed(1)} km/h` : "–";
+      ride.movingS > 0 ? fmtSpeed(ride.meters / ride.movingS) : "–";
     tr.insertCell().textContent = `${ride.pctProtected}% + ${ride.pctQuiet}% quiet`;
     const actions = tr.insertCell();
     const show = document.createElement("button");
@@ -4222,6 +4227,32 @@ el<HTMLButtonElement>("nav-hazard").addEventListener("click", () => {
   window.setTimeout(hideRideAlert, 4000);
 });
 
+// Units. Everything is metres underneath; this only changes what is shown and
+// spoken, so switching re-renders rather than recomputing anything.
+{
+  const pref = el<HTMLSelectElement>("units-pref");
+  pref.value = getUnits();
+  const syncUnitLabels = (): void => {
+    el<HTMLSpanElement>("loop-unit").textContent = unitName() === "miles" ? "mi" : "km";
+  };
+  syncUnitLabels();
+  pref.addEventListener("change", () => {
+    const wasM = toMeters(Number(el<HTMLInputElement>("loop-dist").value) || 0);
+    setUnits(pref.value === "metric" ? "metric" : "imperial");
+    syncUnitLabels();
+    // the number in the box meant a distance, not a digit: keep the distance
+    if (wasM > 0) {
+      el<HTMLInputElement>("loop-dist").value = String(Math.round(fromMeters(wasM) * 10) / 10);
+    }
+    renderOptions();
+    renderOptionChips();
+    const sel = options.find((o) => o.id === selectedId);
+    if (sel) showSummary(sel);
+    renderPlacesAndRecent();
+    renderRides();
+  });
+}
+
 el<HTMLButtonElement>("nav-btn").addEventListener("click", () => {
   void startNav();
 });
@@ -4927,7 +4958,7 @@ function renderBuildList(): void {
     }
     head.appendChild(
       document.createTextNode(
-        `${Math.round(p.length_m)} m of ${p.name}${p.towns ? ` — ${p.towns}` : ""}`,
+        `${fmtDist(p.length_m)} of ${p.name}${p.towns ? ` — ${p.towns}` : ""}`,
       ),
     );
     row.appendChild(head);
@@ -5150,10 +5181,10 @@ function printProject(pid: string): void {
   const headcount = meta?.population?.is_headcount === true;
   const rows: [string, string][] = [
     ["Where", `${esc(p.name)}${p.towns ? ` — ${esc(p.towns)}` : ""}`],
-    ["Length", `${Math.round(p.length_m)} m`],
+    ["Length", fmtDist(p.length_m)],
     ["Today", esc(p.cls.replace(/_/g, " "))],
     ["Kind", p.kind === "spot_fix" ? "spot fix (one location)" : "corridor"],
-    ["Kid-safe network it joins", `${(p.join_m / 1000).toFixed(1)} km`],
+    ["Kid-safe network it joins", fmtDist(p.join_m)],
   ];
   if (p.dest_unlocked !== null) {
     rows.push(["Schools, playgrounds, libraries on it", String(p.dest_unlocked)]);

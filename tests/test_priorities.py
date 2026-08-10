@@ -234,7 +234,7 @@ def test_spot_fixes_are_costed_as_a_location_not_a_length() -> None:
     # geometry distinguishes crossing a road from briefly riding along one
     text = priorities.summary_sentence(crossing)
     assert "a spot fix on Main St" in text
-    assert "14 m of it" in text
+    assert "46 ft of it" in text
     assert "crossing" not in text
 
 
@@ -275,20 +275,20 @@ def test_summary_only_claims_what_the_numbers_say() -> None:
         length_m=180.0, crashes=0,
     )
     plain = priorities.summary_sentence(cand)
-    assert "180 m of Beacon St" in plain
+    assert "591 ft of Beacon St" in plain
     # what it is today, so two candidates on one street aren't indistinguishable
     assert "no bike facility on a busy road" in plain
     assert "joins" not in plain  # no island gain computed, so no claim
     assert "crash" not in plain
 
     cand.join_m = 18_000.0
-    cand.join_names = ["24.0 km", "18.0 km"]
-    cand.gain_km = "18.0 km"
+    cand.join_names = ["14.9 mi", "11.2 mi"]
+    cand.gain_km = "11.2 mi"
     cand.crashes = 1
     cand.towns = ["Somerville"]
     rich = priorities.summary_sentence(cand)
     assert "Somerville" in rich
-    assert "connects 18.0 km of kid-safe streets to a 24.0 km network" in rich
+    assert "connects 11.2 mi of kid-safe streets to a 14.9 mi network" in rich
     assert "1 bike crash since 2021" in rich  # singular
 
     # When the big side is the whole region's network, its mileage is not worth
@@ -296,10 +296,10 @@ def test_summary_only_claims_what_the_numbers_say() -> None:
     # towns, which says nothing and, on a city page reporting 262 km, reads like
     # a typo. Name the side that gains instead.
     cand.joins_region = True
-    cand.gain_km = "18.0 km"
+    cand.gain_km = "11.2 mi"
     regional = priorities.summary_sentence(cand)
-    assert "connects 18.0 km of kid-safe streets to the region-wide network" in regional
-    assert "24.0 km" not in regional
+    assert "connects 11.2 mi of kid-safe streets to the region-wide network" in regional
+    assert "14.9 mi" not in regional
 
 
 def test_cost_proxy_scales_with_length_for_corridors() -> None:
@@ -1009,7 +1009,7 @@ def test_only_the_region_wide_network_is_named_as_such() -> None:
     both = priorities.summary_sentence(gap2)
     # the gaining side first, then what it joins — so which number is the point
     # doesn't have to be worked out
-    assert "connects 0.4 km of kid-safe streets to a 0.8 km network" in both
+    assert "connects 0.2 mi of kid-safe streets to a 0.5 mi network" in both
     assert "region-wide" not in both
 
 
@@ -1025,10 +1025,10 @@ def test_a_half_filled_candidate_never_renders_a_gap_in_a_sentence() -> None:
     cand.joins_region = True
     # join_names populated but gain_km not: without this the old code skipped
     # the region branch too, and the test passed against the bug it names.
-    cand.join_names = ["24.0 km", "18.0 km"]
+    cand.join_names = ["14.9 mi", "11.2 mi"]
     out = priorities.summary_sentence(cand)
     assert "connects  of" not in out
     assert "region-wide" not in out
     # it falls back to what it can support
-    assert "unlocks 5.0 km of kid-safe streets" in out
-    assert "24.0 km" not in out
+    assert "unlocks 3.1 mi of kid-safe streets" in out
+    assert "14.9 mi" not in out

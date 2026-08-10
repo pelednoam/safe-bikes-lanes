@@ -1,20 +1,21 @@
 // Shareable ride cards: text summaries and rendered PNG stat cards for the
 // native share sheet (chats, social, email).
+import { fmtDist, fmtSpeed } from "./units.js";
 export function rideShareText(ride) {
-    const km = (ride.meters / 1000).toFixed(1);
+    const dist = fmtDist(ride.meters);
     const mins = Math.round(ride.movingS / 60);
-    const avg = ride.movingS > 0 ? ((ride.meters / ride.movingS) * 3.6).toFixed(1) : "0";
+    const avg = ride.movingS > 0 ? fmtSpeed(ride.meters / ride.movingS) : "0";
     const date = new Date(ride.startedAt).toLocaleDateString([], {
         month: "long",
         day: "numeric",
     });
-    return (`🚲 Family bike ride, ${date}: ${km} km in ${mins} min (${avg} km/h), ` +
+    return (`🚲 Family bike ride, ${date}: ${dist} in ${mins} min (${avg}), ` +
         `${ride.pctProtected}% on protected paths + ${ride.pctQuiet}% quiet streets. ` +
         `Planned with the Family Bike Router: https://pelednoam.github.io/safe-bikes-lanes/`);
 }
 export function totalsShareText(totals) {
-    return (`🚲 Our family biking so far: ${totals.count} rides, ${totals.km} km total ` +
-        `(${totals.thisMonthKm} km this month), longest ${totals.longestKm} km, ` +
+    return (`🚲 Our family biking so far: ${totals.count} rides, ${fmtDist(totals.km * 1000)} total ` +
+        `(${fmtDist(totals.thisMonthKm * 1000)} this month), longest ${fmtDist(totals.longestKm * 1000)}, ` +
         `${totals.avgProtectedPct}% on protected infrastructure. ` +
         `Family Bike Router: https://pelednoam.github.io/safe-bikes-lanes/`);
 }
@@ -74,11 +75,11 @@ export async function drawRideCard(ride) {
     ctx.font = "400 18px system-ui, sans-serif";
     ctx.fillText(date, 32, 78);
     const mins = Math.round(ride.movingS / 60);
-    const avg = ride.movingS > 0 ? ((ride.meters / ride.movingS) * 3.6).toFixed(1) : "0";
+    const avg = ride.movingS > 0 ? fmtSpeed(ride.meters / ride.movingS) : "0";
     statRow(ctx, [
-        [`${(ride.meters / 1000).toFixed(1)} km`, "distance"],
+        [fmtDist(ride.meters), "distance"],
         [`${mins} min`, "moving"],
-        [`${avg} km/h`, "avg speed"],
+        [avg, "avg speed"],
         [`${ride.pctProtected}%`, "protected"],
     ], 150);
     // route trace, normalized into the lower half

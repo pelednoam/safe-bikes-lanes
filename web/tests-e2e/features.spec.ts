@@ -187,10 +187,11 @@ test("loop planner builds a round trip from a start point", async ({ page }) => 
   await boot(page, "#s=-71.122258,42.396748");
   await openSection(page, "Other trip types");
   await page.locator("#loop-btn").click();
-  await expect(page.locator(".option-card", { hasText: "Loop via" })).toBeVisible({
+  // several loops are offered now, so take the one that leads
+  await expect(page.locator(".option-card", { hasText: "Loop via" }).first()).toBeVisible({
     timeout: 30_000,
   });
-  await expect(page.locator("#s-dist")).toContainText("km");
+  await expect(page.locator("#s-dist")).toContainText("mi");
 });
 
 test("reach map floods from a clicked point", async ({ page }) => {
@@ -332,7 +333,7 @@ test("a route can be planned by typing both ends, not just tapping the map", asy
   await page.locator("#search-results .search-row button", { hasText: "go" }).first().click();
 
   await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
-  await expect(page.locator("#s-dist")).toContainText("km");
+  await expect(page.locator("#s-dist")).toContainText("mi");
 
   // the pin button hands the origin back to the current location
   await page.locator("#from-locate").click();

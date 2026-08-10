@@ -294,8 +294,8 @@ def score_severance(
             # named explicitly rather than by position: the sentence depends on
             # which side gains, and reading that off real[0]/real[1] silently
             # inverts the claim the day the sort order changes
-            cand.join_names = [f"{big[1] / 1000:.1f} km", f"{small[1] / 1000:.1f} km"]
-            cand.gain_km = f"{small[1] / 1000:.1f} km"
+            cand.join_names = [miles(big[1]), miles(small[1])]
+            cand.gain_km = miles(small[1])
             cand.joins_region = big[0] == biggest
         else:
             cand.join_m = 0.0
@@ -502,11 +502,29 @@ CLASS_WORDS: dict[str, str] = {
 }
 
 
+MI_PER_M = 1 / 1609.344
+
+
+def miles(m: float) -> str:
+    """A distance as an American reader expects it.
+
+    These sentences are read by residents and city staff in Massachusetts and
+    end up on a printed one-pager, so they are written in miles and feet. The
+    app's own numbers follow a preference the rider sets; this prose can't,
+    because it is generated once and shipped as data — a trade made knowingly,
+    since the audience is the same either way.
+    """
+    ft = m * 3.280839895
+    # feet up to 1000, then miles: a 180 m block is "590 ft" to a reader and
+    # "0.1 mi" to nobody
+    return f"{round(ft):,.0f} ft" if ft < 1000 else f"{m * MI_PER_M:.1f} mi"
+
+
 def summary_sentence(cand: Candidate) -> str:
     """The project in words. Everything here traces to an exported field —
     nothing is rounded up into a claim the numbers don't support."""
     bits: list[str] = []
-    where = f"{cand.length_m:.0f} m of {cand.name}"
+    where = f"{miles(cand.length_m)} of {cand.name}"
     if cand.towns:
         where += f" ({', '.join(cand.towns)})"
     today = CLASS_WORDS.get(cand.cls, cand.cls.replace("_", " "))
@@ -515,7 +533,7 @@ def summary_sentence(cand: Candidate) -> str:
         spot = f"a spot fix on {cand.name}"
         if cand.towns:
             spot += f" ({', '.join(cand.towns)})"
-        bits.append(f"{spot} — {cand.length_m:.0f} m of it, today {today}")
+        bits.append(f"{spot} — {miles(cand.length_m)} of it, today {today}")
     else:
         bits.append(f"{where} — today {today}")
     if cand.join_m > 0:
@@ -541,7 +559,7 @@ def summary_sentence(cand: Candidate) -> str:
                 f" to a {cand.join_names[0]} network"
             )
         else:
-            bits.append(f"unlocks {cand.join_m / 1000:.1f} km of kid-safe streets")
+            bits.append(f"unlocks {miles(cand.join_m)} of kid-safe streets")
     if cand.access_computed and (cand.dest_unlocked or cand.pop_gaining > 0):
         reach: list[str] = []
         if cand.dest_unlocked:
@@ -656,7 +674,7 @@ def build(limit: int | None = None) -> list[Candidate]:
     substantial = sum(1 for m in island_m.values() if m >= 200)
     print(
         f"kid-safe islands: {len(island_m)} ({substantial} of 200 m or more) "
-        f"(largest: {', '.join(f'{m / 1000:.1f} km' for m in big)})"
+        f"(largest: {', '.join(miles(m) for m in big)})"
     )
 
     candidates = find_candidates(graph)
@@ -695,7 +713,7 @@ def build(limit: int | None = None) -> list[Candidate]:
     stranded_pct = 100 * stranded / max(float(pop.sum()), 1.0)
     print(
         f"  today {stranded:,.0f} of {pop.sum():,.0f} ({stranded_pct:.0f}%) have no "
-        f"school, playground or library within {config.ACCESS_BUDGET_M:,.0f} m of "
+        f"school, playground or library within {miles(config.ACCESS_BUDGET_M)} of "
         "perceived distance (unsafe streets are priced in, not banned)"
     )
 

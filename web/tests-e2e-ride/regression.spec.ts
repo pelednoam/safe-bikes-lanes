@@ -492,10 +492,29 @@ test("the voice and the banner say the same distance", async ({ page }) => {
     },
   });
   const spoken = await page.evaluate(() => window.__rider.spoken);
-  const said = spoken.flatMap((p) => [...p.matchAll(/in (\d+) meters/g)].map((m) => m[1] ?? ""));
-  expect(said.length).toBeGreaterThan(0);
+  // Unit-aware: the app speaks and shows miles and feet by default now, and the
+  // point of this test is that the two agree — not which system they agree in.
+  const said = spoken.flatMap((p) =>
+    [...p.matchAll(/in ([\d.]+) (feet|meters|miles?|kilometers?)/g)].map((m) => ({
+      n: m[1] ?? "",
+      unit: m[2] ?? "",
+    })),
+  );
+  expect(said.length, `nothing spoken with a distance in it: ${spoken.join(" | ")}`).toBeGreaterThan(
+    0,
+  );
+  const abbrev: Record<string, string> = {
+    feet: "ft",
+    meters: "m",
+    mile: "mi",
+    miles: "mi",
+    kilometer: "km",
+    kilometers: "km",
+  };
   // riders heard "in three hundred metres" against a banner reading 280 m
-  for (const n of said) expect([...shown]).toContain(`${n} m`);
+  for (const { n, unit } of said) {
+    expect([...shown]).toContain(`${n} ${abbrev[unit] ?? unit}`);
+  }
 });
 
 test("a phone that can't speak says so instead of just going quiet", async ({ page }) => {

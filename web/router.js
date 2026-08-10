@@ -3,6 +3,7 @@
 // All weighting happens here, from raw per-edge components — so rider
 // profiles, flat preference, and personal "sketchy" marks apply instantly.
 import { bearingDeg } from "./nav.js";
+import { fmtDist } from "./units.js";
 export const PROFILES = {
     young_kids: {
         id: "young_kids",
@@ -91,9 +92,9 @@ const WALK_FACTOR = 2.4;
 const DISMOUNT_COST_M = 90.0;
 const MOUNT_COST_M = 40.0;
 const WALK_PACE_KMH = 4.0;
-function fmt(m) {
-    return m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(1)} km`;
-}
+// the router explains itself in prose ("A 4.8 mi loop with a stop at…"), so it
+// formats through the same place everything else does
+const fmt = fmtDist;
 // ---------------------------------------------------------------------------
 // binary min-heap of (priority, value)
 // ---------------------------------------------------------------------------
@@ -656,6 +657,21 @@ export class Router {
     }
     /** Objective safety grade on the young-kids stress scale. */
     gradeRoute(edgePath, walkFlags) {
+        const { avg, pctProt } = this.routeStress(edgePath, walkFlags);
+        const stress = this.stressMeters(edgePath, walkFlags);
+        const grade = avg <= 1.6 ? "A" : avg <= 2.4 ? "B" : avg <= 4 ? "C" : avg <= 8 ? "D" : "F";
+        const reason = `avg kid-stress ${avg.toFixed(1)}× per meter — ${pctProt}% protected, ` +
+            (stress < 30 ? "no busy/moderate streets" : `${fmt(stress)} on busy/moderate streets`);
+        return { grade, reason };
+    }
+    /** Average kid-stress per metre, and the protected share.
+     *
+     * Shared with the loop ranking on purpose: ranking loops on a hand-rolled
+     * approximation of this put a 2.6× ride ahead of a 2.3× one while the card
+     * displayed both numbers, so the app visibly disagreed with itself about
+     * which was safer.
+     */
+    routeStress(edgePath, walkFlags) {
         const yk = PROFILES.young_kids;
         let len = 0;
         let cost = 0;
@@ -677,13 +693,10 @@ export class Router {
             if (PROTECTED.has(cls) || cls === "buffered")
                 protectedM += e[2];
         }
-        const avg = len > 0 ? cost / len : 1;
-        const stress = this.stressMeters(edgePath, walkFlags);
-        const grade = avg <= 1.6 ? "A" : avg <= 2.4 ? "B" : avg <= 4 ? "C" : avg <= 8 ? "D" : "F";
-        const pctProt = len > 0 ? Math.round((100 * protectedM) / len) : 0;
-        const reason = `avg kid-stress ${avg.toFixed(1)}× per meter — ${pctProt}% protected, ` +
-            (stress < 30 ? "no busy/moderate streets" : `${fmt(stress)} on busy/moderate streets`);
-        return { grade, reason };
+        return {
+            avg: len > 0 ? cost / len : 1,
+            pctProt: len > 0 ? Math.round((100 * protectedM) / len) : 0,
+        };
     }
     explain(path, directPath, payload, direct, profile, isDirect, preferFlat) {
         const s = payload.summary;
@@ -999,6 +1012,7 @@ export class Router {
         if (candidates.length === 0) {
             throw new Error("no suitable stop found for that loop length — try another distance");
         }
+        const tried = [];
         let best = null;
         for (const c of candidates) {
             const [lon, lat] = c.at;
@@ -1029,44 +1043,85 @@ export class Router {
                 continue;
             const path = [...out, ...back];
             const total = path.reduce((acc, ei) => acc + (this.g.edges[ei]?.[2] ?? 0), 0);
-            if (best === null || Math.abs(total - targetM) < Math.abs(best.total - targetM)) {
-                best = { path, poi: c.p, total };
-            }
+            const made = { path, poi: c.p, total, at: c.at };
+            tried.push(made);
         }
+        // Which loop leads.
+        //
+        // Closest-to-the-asked-distance alone picked a 27%-protected ride over a
+        // 69%-protected one of exactly the same length, which is the wrong answer
+        // from an app whose entire premise is that safety outranks everything else.
+        // Among loops near enough to the distance asked for, the safest wins; only
+        // if none is near enough does distance decide.
+        const near = tried.filter((t) => Math.abs(t.total - targetM) <= targetM * 0.2);
+        const stress = (t) => this.routeStress(t.path).avg;
+        best =
+            (near.length > 0
+                ? [...near].sort((x, y) => stress(x) - stress(y))[0]
+                : [...tried].sort((x, y) => Math.abs(x.total - targetM) - Math.abs(y.total - targetM))[0]) ?? null;
         if (best === null)
             throw new Error("could not build a loop — try another distance");
-        const payload = this.payload(best.path, profile);
-        const { grade, reason } = this.gradeRoute(best.path);
-        const runs = this.protectedRuns(best.path).filter((r) => r.meters >= 300);
-        const poiName = best.poi === null
-            ? null
-            : best.poi.properties.name || best.poi.properties.kind.replace("_", " ");
-        const explanation = [
-            poiName === null
-                ? `A ${fmt(best.total)} loop from where you started and back, returning a ` +
-                    `different way than it goes out.`
-                : `A ${fmt(best.total)} loop with a stop at ${poiName} roughly halfway, ` +
-                    `returning a different way than it goes out.`,
-        ];
-        if (runs.length > 0) {
-            explanation.push(`Backbone: ${runs
-                .slice(0, 3)
-                .map((r) => `${r.name} (${fmt(r.meters)})`)
-                .join(", ")}.`);
-        }
-        for (const c of payload.summary.cautions) {
-            explanation.push(`Caution: ${fmt(c.meters)} of ${c.cls.replace("_", " ")} along ${c.name}.`);
-        }
-        payload.summary.explanation = explanation;
+        // keep the runners-up too, so the rider gets a choice rather than a verdict:
+        // one 4 mi loop is a decision made for them, three is a decision offered.
+        // Alternatives are still answers to the question asked: sorting purely by
+        // safety offered 7.9 mi loops to someone who asked for 4. Same distance
+        // band as the winner, safest first; only if nothing else is in the band do
+        // the near-misses get offered, closest first.
+        const inBand = near.filter((t) => t !== best);
+        const alternatives = (inBand.length > 0
+            ? [...inBand].sort((x, y) => stress(x) - stress(y))
+            : tried
+                .filter((t) => t !== best)
+                .sort((x, y) => Math.abs(x.total - targetM) - Math.abs(y.total - targetM)))
+            .filter((t) => {
+            // only genuinely different rides: same length AND same direction is the
+            // same suggestion twice
+            const bearing = (p) => Math.round((Math.atan2(p.at[0] - start[0], p.at[1] - start[1]) * 180) / Math.PI / 45);
+            return bearing(t) !== bearing(best);
+        });
+        const build = (made, id) => {
+            const payload = this.payload(made.path, profile);
+            const { grade, reason } = this.gradeRoute(made.path);
+            const runs = this.protectedRuns(made.path).filter((r) => r.meters >= 300);
+            const name = made.poi === null
+                ? null
+                : made.poi.properties.name || made.poi.properties.kind.replace("_", " ");
+            const explanation = [
+                name === null
+                    ? `A ${fmt(made.total)} loop from where you started and back, returning a ` +
+                        `different way than it goes out.`
+                    : `A ${fmt(made.total)} loop with a stop at ${name} roughly halfway, ` +
+                        `returning a different way than it goes out.`,
+            ];
+            if (runs.length > 0) {
+                explanation.push(`Backbone: ${runs
+                    .slice(0, 3)
+                    .map((r) => `${r.name} (${fmt(r.meters)})`)
+                    .join(", ")}.`);
+            }
+            for (const c of payload.summary.cautions) {
+                explanation.push(`Caution: ${fmt(c.meters)} of ${c.cls.replace("_", " ")} along ${c.name}.`);
+            }
+            payload.summary.explanation = explanation;
+            return {
+                // "Loop via null" is what this said for a ride with no stop, because the
+                // label was written when every loop had one
+                option: {
+                    id,
+                    label: name === null ? `${fmt(made.total)} loop` : `Loop via ${name}`,
+                    grade,
+                    gradeReason: reason,
+                    payload,
+                },
+                poi: made.poi,
+            };
+        };
+        const first = build(best, "loop");
         return {
-            option: {
-                id: "loop",
-                label: `Loop via ${poiName}`,
-                grade,
-                gradeReason: reason,
-                payload,
-            },
-            poi: best.poi,
+            ...first,
+            more: alternatives
+                .slice(0, 2)
+                .map((a, i) => build(a, i === 0 ? "loop2" : "loop3")),
         };
     }
 }

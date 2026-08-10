@@ -255,6 +255,7 @@
      alternative to "where to", not the headline action of the panel */
   #loop-row button { margin:0; width:auto; flex:0 0 auto; }
   #loop-row select { padding:3px 4px; }
+  #loop-row input[type=number] { width:4.6em; padding:3px 4px; }
   #loading { display:none; align-items:center; gap:8px; color:var(--muted); margin-top:8px; }
   #loading small { margin-left:auto; font-variant-numeric:tabular-nums; opacity:.8; }
   .spinner {
@@ -570,10 +571,12 @@
          having it. -->
     <div id="loop-row">
       <span class="or">or a round trip:</span>
-      <select id="loop-dist" aria-label="Round trip length" title="how far you want to ride">
-        <option value="3">3 km</option><option value="5" selected>5 km</option>
-        <option value="8">8 km</option><option value="12">12 km</option>
-      </select>
+      <!-- a number, not a menu of four: "about an hour" is 8 miles for one
+           family and 3 for another, and the old list couldn't say either -->
+      <input id="loop-dist" type="number" min="0.5" max="60" step="0.5" value="3"
+             inputmode="decimal" aria-label="Round trip length"
+             title="how far you want to ride, there and back">
+      <span id="loop-unit" class="or">mi</span>
       <select id="loop-stop" aria-label="Stop halfway" title="what to stop at halfway round">
         <option value="none">no stop</option>
         <option value="playground" selected>🛝 playground</option>
@@ -629,6 +632,13 @@
 
   <details class="section">
     <summary>⚙ Preferences</summary>
+    <label class="pref" title="Miles and feet, or kilometres and metres — everything shown and spoken follows this">
+      distance in
+      <select id="units-pref">
+        <option value="imperial" selected>miles</option>
+        <option value="metric">kilometres</option>
+      </select>
+    </label>
     <label class="pref" title="Adds a cost for every meter of climb (extra on >4% grades)">
       <input type="checkbox" id="prefer-flat"> prefer flat</label>
     <label class="pref" title="Bridge safe segments with short bike-walking stretches (sidewalk pace) instead of long ride-arounds — capped by this total budget; shown dashed white, announced in navigation">

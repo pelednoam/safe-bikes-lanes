@@ -71,9 +71,14 @@ async function streetPointsOnScreen(page: Page): Promise<{ x: number; y: number 
 }
 
 async function routeMeters(page: Page): Promise<number> {
+  // the app shows miles by default now, and feet under 1000 — read whichever
+  // unit is on screen rather than assuming, or "5.3 mi" parses as 5.3 metres
   const txt = (await page.locator("#s-dist").textContent()) ?? "";
-  const n = parseFloat(txt);
-  return txt.includes("km") ? n * 1000 : n;
+  const n = parseFloat(txt.replace(/,/g, ""));
+  if (txt.includes("mi")) return n * 1609.344;
+  if (txt.includes("ft")) return n / 3.280839895;
+  if (txt.includes("km")) return n * 1000;
+  return n;
 }
 
 test("plan a ride entirely with the mouse: pick a start, then a destination", async ({ page }) => {
@@ -91,7 +96,7 @@ test("plan a ride entirely with the mouse: pick a start, then a destination", as
   await page.mouse.click(kendall.x, kendall.y);
 
   await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
-  await expect(page.locator("#s-dist")).toContainText("km");
+  await expect(page.locator("#s-dist")).toContainText("mi");
   await expect(page.locator("#s-prot")).toContainText("%");
   // the fingerprint and the reasoning are the point of this app
   await expect(page.locator("#fingerprint")).toBeVisible();
@@ -172,7 +177,7 @@ test("swap the ends and get the reverse trip", async ({ page }) => {
     .poll(() => page.url(), { timeout: 30_000 })
     .toMatch(/s=-71\.0867|s=-71\.086705/);
   await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
-  await expect(page.locator("#s-dist")).toContainText("km");
+  await expect(page.locator("#s-dist")).toContainText("mi");
 });
 
 test("hover a street to judge it before committing to the route", async ({ page }) => {
@@ -517,7 +522,9 @@ test("a round trip can be planned without hunting for it", async ({ page, contex
   await expect(loop, "the round-trip button must be visible without opening anything").toBeVisible();
   // the action comes after the choices: length, then stop, then go
   const order = await page.evaluate(() =>
-    [...document.querySelectorAll("#loop-row select, #loop-row button")].map((e) => e.id),
+    [...document.querySelectorAll("#loop-row input, #loop-row select, #loop-row button")].map(
+      (e) => e.id,
+    ),
   );
   expect(order).toEqual(["loop-dist", "loop-stop", "loop-btn"]);
   // and it must not be inside something collapsed
@@ -589,4 +596,49 @@ test("the free-ride recorder is gone, but rides are still saved while navigating
   // the recorder itself stays: a navigated ride still lands in the history,
   // which is the case that was actually worth keeping
   await expect(page.locator("#nav-btn")).toBeAttached();
+});
+
+
+test("a round trip is asked for in miles, typed freely, and answered with a choice", async ({
+  page,
+  context,
+}) => {
+  await context.grantPermissions(["geolocation"]);
+  await context.setGeolocation({ latitude: 42.3875, longitude: -71.0995 });
+  await page.goto("/");
+  await page.waitForFunction(() => window._map !== undefined, null, { timeout: 60_000 });
+
+  // miles, because this is eastern Massachusetts
+  await expect(page.locator("#loop-unit")).toHaveText("mi");
+  // and any distance, not four fixed ones: "about an hour" is 8 miles for one
+  // family and 3 for another
+  const box = page.locator("#loop-dist");
+  await expect(box).toHaveAttribute("type", "number");
+  await box.fill("4");
+  await page.locator("#loop-stop").selectOption("none");
+  await page.locator("#loop-btn").click();
+  await page.waitForFunction(
+    () => {
+      const s = window._map?.getSource("route") as { _data?: { features?: unknown[] } } | undefined;
+      return (s?._data?.features ?? []).length > 0;
+    },
+    null,
+    { timeout: 60_000 },
+  );
+  await expect.poll(() => page.locator(".option-card").count(), { timeout: 20_000 }).toBeGreaterThan(1);
+
+  const cards = await page.locator(".option-card").allInnerTexts();
+  const miles = cards.map((c) => Number(/([\d.]+)\s*mi/.exec(c)?.[1] ?? NaN));
+  const prot = cards.map((c) => Number(/(\d+)%\s*protected/.exec(c)?.[1] ?? NaN));
+  // every option answers the question that was asked...
+  for (const mi of miles) {
+    expect(mi, `offered a ${mi} mi loop for a 4 mi request`).toBeGreaterThan(2.8);
+    expect(mi).toBeLessThan(5.4);
+  }
+  // ...and the safest of them leads, which distance-only ranking got backwards:
+  // it put a 27%-protected loop ahead of a 69%-protected one the same length
+  expect(prot[0]).toBe(Math.max(...prot));
+  // distances read in miles throughout, not kilometres
+  await expect(page.locator("#summary")).toContainText(/mi\b/);
+  await expect(page.locator("#summary")).not.toContainText(/\bkm\b/);
 });

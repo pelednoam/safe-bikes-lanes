@@ -119,7 +119,7 @@ test("routes plan on native (data resolver feeds the router)", async ({ page }) 
     timeout: 60_000,
   });
   await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
-  await expect(page.locator("#s-dist")).toContainText("km");
+  await expect(page.locator("#s-dist")).toContainText("mi");
 });
 
 test("update banner appears when the site has a newer release", async ({ page }) => {

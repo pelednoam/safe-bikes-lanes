@@ -101,7 +101,9 @@ export interface RouteResponse {
 export type SafetyGrade = "A" | "B" | "C" | "D" | "F";
 
 export interface RouteOption {
-  id: "safest" | "balanced" | "direct" | "loop";
+  // loop2/loop3 are the runner-up round trips: a rider gets a choice of loops
+  // the same way they get a choice of routes
+  id: "safest" | "balanced" | "direct" | "loop" | "loop2" | "loop3";
   label: string;
   grade: SafetyGrade;
   /** One-line justification of the grade. */

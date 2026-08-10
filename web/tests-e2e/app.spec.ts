@@ -101,6 +101,6 @@ test("route planning end to end on the real graph", async ({ page }) => {
   const cards = await page.locator(".option-card").count();
   expect(cards).toBeGreaterThanOrEqual(2);
   await expect(page.locator(".opt-chip").first()).toBeVisible();
-  await expect(page.locator("#s-dist")).toContainText("km");
+  await expect(page.locator("#s-dist")).toContainText("mi");
   await expect(page.locator("#why-list li").first()).toBeVisible();
 });

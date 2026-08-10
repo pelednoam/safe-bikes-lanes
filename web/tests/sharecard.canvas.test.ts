@@ -3,6 +3,7 @@
 // looks good, but it can tell us the numbers a rider is about to post publicly
 // are the ones from their ride, and that a missing canvas fails cleanly.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { setUnits } from "../src/units.js";
 
 import type { RideSummary } from "../src/rides.js";
 import { rideTotals } from "../src/rides.js";
@@ -101,6 +102,13 @@ const ride: RideSummary = {
     [-71.08, 42.39],
   ],
 };
+
+// Pinned to metric on purpose: these test what the card draws, not which unit, and the app's default is
+// imperial — without this, every distance in these expectations would
+// depend on a setting none of them are about.
+beforeEach(() => {
+  setUnits("metric");
+});
 
 describe("the ride card", () => {
   beforeEach(() => {

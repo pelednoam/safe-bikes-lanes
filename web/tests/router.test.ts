@@ -1,5 +1,6 @@
 // Behavior tests for the in-browser router on small synthetic graphs.
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { setUnits } from "../src/units.js";
 
 import { buildCues, PROFILES, Router, toGPX } from "../src/router.js";
 import type { PoiFeature } from "../src/types.js";
@@ -53,6 +54,13 @@ function toyRouter(busyLen = 110): Router {
 const A: [number, number] = [-71.1, 42.38];
 const B: [number, number] = [-71.099, 42.38];
 const C: [number, number] = [-71.0995, 42.3805];
+
+// Pinned to metric on purpose: these test routing, not formatting, and the app's default is
+// imperial — without this, every distance in these expectations would
+// depend on a setting none of them are about.
+beforeEach(() => {
+  setUnits("metric");
+});
 
 describe("Router options", () => {
   it("young-kids profile detours around the busy street", () => {
@@ -482,5 +490,34 @@ describe("costing a street as if it were built", () => {
     const after = r.safeShed(A, 400, "young_kids", false);
     // with no trip planned, this is the demonstration: more map in reach
     expect(after.reachableKm).toBeGreaterThan(before.reachableKm);
+  });
+});
+
+describe("loop choices", () => {
+  it("offers alternatives, and leads with the safest of the ones asked for", () => {
+    // Ranking on distance alone put a 27%-protected loop ahead of a
+    // 69%-protected one of exactly the same length, which is the wrong answer
+    // from an app whose premise is that safety outranks everything else. And
+    // ranking on safety alone offered 7.9 mi loops to someone who asked for 4.
+    const r = toyRouter();
+    const { option, more } = r.loopRoute(A, 400, null, "young_kids", false);
+    expect(option.id).toBe("loop");
+    // distinct rides, distinct ids — the option cards key off them
+    expect(new Set([option.id, ...more.map((m) => m.option.id)]).size).toBe(1 + more.length);
+    // nothing offered is safer than what we led with
+    for (const alt of more) {
+      expect(alt.option.payload.summary.pct_protected).toBeLessThanOrEqual(
+        option.payload.summary.pct_protected,
+      );
+    }
+    // (the toy network is too small to fill the distance band, so the band
+    // itself is checked against the real map in tests-e2e/plan.spec.ts)
+  });
+
+  it("labels a stopless loop by its length, not by a stop it doesn't have", () => {
+    // it read "Loop via null" — the label was written when every loop had one
+    const { option } = toyRouter().loopRoute(A, 400, null, "young_kids", false);
+    expect(option.label).not.toContain("null");
+    expect(option.label).toMatch(/loop$/i);
   });
 });

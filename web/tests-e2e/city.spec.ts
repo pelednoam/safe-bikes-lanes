@@ -12,6 +12,16 @@ declare global {
 
 type Page = import("@playwright/test").Page;
 
+
+/** The page renders kilometres from the data as miles for its readers, so the
+ * cross-check has to speak both. */
+const asMiles = (km: number): string => {
+  const ft = km * 3280.839895;
+  return ft < 1000
+    ? `${Math.round(ft).toLocaleString("en-US")} ft`
+    : `${(km / 1.609344).toFixed(1)} mi`;
+};
+
 async function openCity(page: Page, slug = "somerville"): Promise<void> {
   await page.goto(`/${slug}/`);
   await page.waitForFunction(() => window._map !== undefined && window._map.loaded(), null, {
@@ -27,7 +37,8 @@ test("leads with how many people can't reach a school or park", async ({ page })
   await expect(lede).toContainText(/\d+%/);
   await expect(lede).toContainText(/school, playground or library/);
   // and never without the distance it assumes
-  await expect(lede).toContainText(/2\.5 km/);
+  // the ride length every access number assumes, in the reader's own units
+  await expect(lede).toContainText(/1\.6 mi/);
   // The shape of the problem follows this city's numbers rather than the thesis
   // the module was written around. Assert the RULE against the data, not the
   // sentence Somerville happens to produce today: pinning the sentence fails
@@ -49,7 +60,7 @@ test("the figures split the network into connected and stranded", async ({ page 
   const figures = page.locator(".figure");
   expect(await figures.count()).toBeGreaterThanOrEqual(4);
   const text = (await page.locator("#figures").textContent()) ?? "";
-  expect(text).toMatch(/km/);
+  expect(text).toMatch(/[0-9.]+ mi/);
   expect(text).toMatch(/carries on out of town|doesn't leave the city/);
   expect(text).toMatch(/cut off from that network, in \d+ pockets/);
 });
@@ -71,7 +82,7 @@ test("every number the page states in public is the one in its data", async ({ p
   expect(lede).toContain(`${String(s["stranded_pct"])}%`);
   // the ride length the whole claim assumes, from the data rather than typed
   // into the page next to a pipeline constant that could drift from it
-  expect(lede).toContain(`${String(s["budget_km"])} km ride`);
+  expect(lede).toContain(`${asMiles(s["budget_km"] as number)} ride`);
   // the specific regression: the count must not be the percentage multiplied out
   const recovered = Math.round(
     ((s["residents"] as number) * (s["stranded_pct"] as number)) / 100,
@@ -81,8 +92,8 @@ test("every number the page states in public is the one in its data", async ({ p
   }
 
   const figures = (await page.locator("#figures").textContent()) ?? "";
-  expect(figures).toContain(`${String(s["connected_km"])} km`);
-  expect(figures).toContain(`${String(s["pocket_km"])} km`);
+  expect(figures).toContain(asMiles(s["connected_km"] as number));
+  expect(figures).toContain(asMiles(s["pocket_km"] as number));
   expect(figures).toContain(`${String(s["pockets"])} pockets`);
   // how many the city has, not how many were drawn
   expect(figures).toContain(String(s["projects"]));
@@ -473,7 +484,7 @@ test("every published city gets a page describing that city", async ({ page }) =
     expect(lede).toContain(`of ${city.name}'s ${N(s["residents"] as number)} residents`);
     expect(lede).toContain(`About ${N(s["stranded"] as number)} of`);
     const figures = (await page.locator("#figures").textContent()) ?? "";
-    expect(figures).toContain(`${String(s["connected_km"])} km`);
+    expect(figures).toContain(asMiles(s["connected_km"] as number));
     expect(figures).toContain(`${String(s["pockets"])} pockets`);
 
     // and a map of that city, not of the region

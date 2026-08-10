@@ -33,7 +33,7 @@ test("the ranking loads, and says how much of it you're looking at", async ({ pa
 
   // each row says where, and why, in words
   const first = rows.first();
-  await expect(first).toContainText(/\d+ m of /);
+  await expect(first).toContainText(/[\d.]+ (ft|mi|m|km) of /);
   await expect(first).toContainText(/kid-safe|crash|residents|network/);
 });
 
@@ -73,7 +73,7 @@ test("the weight sliders re-sort without changing the numbers", async ({ page })
     .poll(async () => page.locator(".build-row").first().textContent())
     .not.toBe(firstBefore);
   // the project's own measured sentence is unchanged — only its rank moved
-  await expect(page.locator(".build-row").first()).toContainText(/\d+ m of /);
+  await expect(page.locator(".build-row").first()).toContainText(/[\d.]+ (ft|mi|m|km) of /);
 
   await page.locator("#wt-reset").click();
   await expect

@@ -1,5 +1,6 @@
 // Tests for share text builders (canvas rendering is browser-only).
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { setUnits } from "../src/units.js";
 
 import type { RideSummary } from "../src/rides.js";
 import { rideTotals } from "../src/rides.js";
@@ -17,6 +18,13 @@ const ride: RideSummary = {
   profile: "young_kids",
   polyline: [],
 };
+
+// Pinned to metric on purpose: these test what the card says, not which unit, and the app's default is
+// imperial — without this, every distance in these expectations would
+// depend on a setting none of them are about.
+beforeEach(() => {
+  setUnits("metric");
+});
 
 describe("share text", () => {
   it("summarizes a ride with distance, pace, and safety", () => {
