@@ -159,7 +159,7 @@ test("a project can be picked from the list and is shown on the map", async ({ p
   const rows = page.locator(".project");
   await expect(rows.first()).toBeVisible({ timeout: 20_000 });
   expect(await rows.count()).toBeGreaterThan(3);
-  await expect(rows.first()).toContainText(/\d+ m of /);
+  await expect(rows.first()).toContainText(/[\d.,]+ (ft|mi) of /);
 
   const zoomBefore = await page.evaluate(() => window._map?.getZoom() ?? 0);
   await rows.first().click();
@@ -567,4 +567,15 @@ test("the page runs no third-party script and violates no policy of its own", as
   const csp = await page.locator('meta[http-equiv="Content-Security-Policy"]').getAttribute("content");
   expect(csp).toContain("script-src 'self'");
   expect(csp).not.toContain("unsafe-eval");
+});
+
+test("nothing on the page is left speaking kilometres", async ({ page }) => {
+  // the figures were converted first and the project list wasn't, so one row
+  // sat there in metres under a panel of miles
+  await openCity(page);
+  const panel = (await page.locator("#panel").innerText()).replace(/\s+/g, " ");
+  expect(panel).toMatch(/[\d.,]+ (mi|ft)\b/);
+  // a bare "km"/" m" figure anywhere in the panel means something was missed
+  expect(panel, `metric leaked into: ${panel.slice(0, 300)}`).not.toMatch(/[\d.,]+ km\b/);
+  expect(panel).not.toMatch(/[\d.,]+ m of /);
 });

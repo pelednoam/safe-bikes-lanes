@@ -275,7 +275,10 @@ function renderProjects(city: CityData, map: MLMap): void {
     rank.textContent = `${i + 1}`;
     const body = document.createElement("div");
     const head = document.createElement("div");
-    head.textContent = `${Math.round(Number(p["length_m"] ?? 0))} m of ${String(p["name"] ?? "")}`;
+    // metres in the data, miles and feet for the reader — the same conversion
+    // the figures above use, or this row is the one thing on the page still
+    // speaking a unit nobody here does
+    head.textContent = `${mi(Number(p["length_m"] ?? 0) / 1000)} of ${String(p["name"] ?? "")}`;
     if (p["kind"] === "spot_fix") {
       const badge = document.createElement("span");
       badge.className = "badge";
