@@ -1522,6 +1522,7 @@ function regradeVisible(): void {
   // — a stall in guidance while someone is riding, to refresh a search list
   // that isn't even on screen.
   if (navActive) return;
+  window.__regradesStarted = (window.__regradesStarted ?? 0) + 1;
   for (const row of gradedRows) {
     if (!row.badge.isConnected) return; // the list is gone; nothing to redo
     row.badge.textContent = "·";
@@ -4824,6 +4825,15 @@ declare global {
   interface Window {
     /** Test hook: how many hazard warnings have been displayed. */
     __navAlertsSeen?: number;
+    /** Test hook: how many times search-grading has actually started routing.
+     *
+     * Here for the same reason as the counter above. Grading is up to five
+     * routing runs on the main thread, and it must never start mid-ride — but it
+     * works on rows the panel has already replaced, so nothing about it is
+     * visible in the DOM by then. The only other instrument was timing, and a
+     * loaded machine blocks the main thread for longer than a routing run does,
+     * so that test failed on the runner rather than on the app. */
+    __regradesStarted?: number;
     _map?: MLMap;
   }
 }

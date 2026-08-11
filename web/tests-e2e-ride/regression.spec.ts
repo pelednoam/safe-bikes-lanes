@@ -9,10 +9,17 @@ import type { Map as MLMap } from "maplibre-gl";
 
 import { installRider, ride } from "./rider.js";
 
+interface OffFollowRecord {
+  wentOffFollow: boolean;
+  labelWhenOff: string;
+  dockWhenOff: number[];
+}
+
 declare global {
   interface Window {
     _map?: MLMap;
     __navAlertsSeen?: number;
+    __regradesStarted?: number;
     __rider: {
       spoken: string[];
       fixCount: number;
@@ -54,6 +61,81 @@ async function startNav(page: Page, hash = DAVIS_KENDALL): Promise<[number, numb
   await page.locator("#nav-btn").click();
   await expect(page.locator("#nav-banner")).toBeVisible();
   return path;
+}
+
+/** What the camera letting go looked like, captured as it happened.
+ *
+ * Taking the camera off follow produces a deliberately transient state: the app
+ * re-follows after REFOLLOW_MS (10 s) so one bump on the handlebars doesn't
+ * leave the ride permanently off-centre. Driving a drag from the runner costs a
+ * CDP round trip per mouse event, and on a loaded machine eleven of them took
+ * longer than that window — so the assertion arrived after the app had correctly
+ * re-followed and read the revert as a failure. Three tests flaked on it.
+ *
+ * So watch for the transition rather than sampling the state after it, and record
+ * everything those tests need at the instant it happens. Race-free at any speed,
+ * and it asserts more than a later sample could: that the change actually
+ * occurred, not merely that the state differs now.
+ */
+interface OffFollow {
+  wentOffFollow: boolean;
+  labelWhenOff: string;
+  dockWhenOff: number[];
+  dockNow: number[];
+}
+
+async function takeCameraOffFollow(page: Page): Promise<OffFollow> {
+  await page.evaluate(() => {
+    const w = window as unknown as { __offFollow?: OffFollowRecord };
+    const btn = document.getElementById("nav-recenter");
+    if (!btn) throw new Error("no #nav-recenter");
+    const dock = (): number[] =>
+      [...document.querySelectorAll("#ride-dock .dock-btn")].map((b) =>
+        Math.round(b.getBoundingClientRect().left),
+      );
+    const record: OffFollowRecord = {
+      wentOffFollow: false,
+      labelWhenOff: "",
+      dockWhenOff: [],
+    };
+    w.__offFollow = record;
+    const obs = new MutationObserver(() => {
+      if (record.wentOffFollow || btn.classList.contains("idle")) return;
+      record.wentOffFollow = true;
+      record.labelWhenOff = btn.getAttribute("aria-label") ?? "";
+      record.dockWhenOff = dock();
+    });
+    obs.observe(btn, { attributes: true, attributeFilter: ["class"] });
+  });
+
+  // Fewer events than a stepped drag: MapLibre needs a press, a move past its
+  // threshold, and a release. Eleven round trips were most of the 10 s window.
+  await page.mouse.move(200, 300);
+  await page.mouse.down();
+  await page.mouse.move(200, 430);
+  await page.mouse.up();
+
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __offFollow?: { wentOffFollow: boolean } }).__offFollow
+              ?.wentOffFollow ?? false,
+        ),
+      { timeout: 10_000 },
+    )
+    .toBe(true);
+
+  return page.evaluate(() => {
+    const w = window as unknown as { __offFollow: OffFollowRecord };
+    return {
+      ...w.__offFollow,
+      dockNow: [...document.querySelectorAll("#ride-dock .dock-btn")].map((b) =>
+        Math.round(b.getBoundingClientRect().left),
+      ),
+    };
+  });
 }
 
 // ── controls: sizes, labels, spacing ──────────────────────────────────────
@@ -628,21 +710,19 @@ test("nothing in the dock moves when the camera stops following", async ({ page 
   // recentre used to be hidden while the camera was following, which re-spaced
   // the other four — so the target a rider was reaching for moved under them
   await startNav(page);
-  const positions = async (): Promise<number[]> =>
-    await page.evaluate(() =>
-      [...document.querySelectorAll("#ride-dock .dock-btn")].map((b) =>
-        Math.round(b.getBoundingClientRect().left),
-      ),
-    );
-  const before = await positions();
-  await page.mouse.move(200, 300);
-  await page.mouse.down();
-  await page.mouse.move(200, 420, { steps: 8 });
-  await page.mouse.up();
-  // the drag must actually have taken the camera off follow, or "nothing moved"
-  // is a statement about a state change that never happened
-  await expect(page.locator("#nav-recenter")).not.toHaveClass(/idle/, { timeout: 5_000 });
-  expect(await positions(), "the dock re-spaced when the camera let go").toEqual(before);
+  const before = await page.evaluate(() =>
+    [...document.querySelectorAll("#ride-dock .dock-btn")].map((b) =>
+      Math.round(b.getBoundingClientRect().left),
+    ),
+  );
+  // The drag must actually have taken the camera off follow, or "nothing moved"
+  // is a statement about a state change that never happened — and the positions
+  // are read at the instant it happened, not after the app has re-followed.
+  const off = await takeCameraOffFollow(page);
+  expect(off.wentOffFollow).toBe(true);
+  expect(off.dockWhenOff, "the dock re-spaced when the camera let go").toEqual(before);
+  // and it is still where it was once the camera takes itself back
+  expect(off.dockNow, "the dock re-spaced when the camera resumed").toEqual(before);
 });
 
 test("the map attribution stays legible under the dock", async ({ page }) => {
@@ -706,21 +786,36 @@ test("recentre says whether it would do anything, without moving", async ({ page
   // following: dimmed, and it says so to a screen reader
   await expect(btn).toHaveClass(/idle/);
   await expect(btn).toHaveAttribute("aria-label", /already following/i);
-  await page.mouse.move(200, 300);
-  await page.mouse.down();
-  await page.mouse.move(200, 430, { steps: 8 });
-  await page.mouse.up();
-  await expect(btn).not.toHaveClass(/idle/);
-  await expect(btn).toHaveAttribute("aria-label", /recentre/i);
+
+  // Read at the moment the camera let go. Sampling afterwards raced the app's
+  // own 10-second re-follow, which is a feature, not a state to catch in time.
+  const off = await takeCameraOffFollow(page);
+  expect(off.wentOffFollow, "the drag never took the camera off follow").toBe(true);
+  expect(off.labelWhenOff, "the label still said it was following").toMatch(/recentre/i);
+
+  // Tapping it hands the camera back, and that state is not transient.
   await btn.click();
   await expect(btn).toHaveClass(/idle/);
+  await expect(btn).toHaveAttribute("aria-label", /already following/i);
 });
 
 test("marking a street to avoid doesn't require filing a photo report first", async ({ page }) => {
   // It was a button in the drawer. Moved beside the hazard categories, it
   // became reachable only in the 20 s after a photo report — a control that
   // changes where every future route goes, hidden behind an unrelated action.
-  await startNav(page);
+  const path = await startNav(page);
+  // A fix first: with no position the button correctly refuses and says so, which
+  // is a different branch from the one under test. startNav doesn't ride, so
+  // whether a position existed came down to timing — the test was passing on
+  // luck, and failing on a loaded machine for the wrong reason.
+  await page.evaluate(
+    (p) => {
+      window.__rider.setFix({ lon: p[0], lat: p[1], accuracy: 8, speed: 4, heading: 90 });
+    },
+    path[Math.min(3, path.length - 1)] as [number, number],
+  );
+  await expect.poll(() => page.evaluate(() => window.__rider.fixCount)).toBeGreaterThan(0);
+
   const avoid = page.locator("#nav-hazard");
   await expect(avoid, "avoid-this-street must be reachable while simply riding").toBeVisible();
   await expect(avoid).toHaveAttribute("aria-label", /avoid this street/i);
@@ -729,9 +824,16 @@ test("marking a street to avoid doesn't require filing a photo report first", as
   const inCategories = await avoid.evaluate((b) => b.closest("#nav-classify") !== null);
   expect(inCategories).toBe(false);
 
+  const seenBefore = await page.evaluate(() => window.__navAlertsSeen ?? 0);
   await avoid.click();
-  // the rider is told it landed — the map change is off-screen behind the dot
-  await expect(page.locator("#nav-alert")).toBeVisible({ timeout: 5_000 });
+  // The rider is told it landed — the map change is off-screen behind the dot.
+  // Counted rather than caught on screen: the alert clears itself after a few
+  // seconds, and the counter only advances for the "marked" alert, so this also
+  // distinguishes it from the "no position yet" refusal a visibility check
+  // couldn't tell apart.
+  await expect
+    .poll(() => page.evaluate(() => window.__navAlertsSeen ?? 0), { timeout: 10_000 })
+    .toBeGreaterThan(seenBefore);
 });
 
 test("the stops menu doesn't cover the attribution either", async ({ page }) => {
@@ -779,29 +881,85 @@ test("the dock fits the narrowest phone, not just the one I measured", async ({ 
 
 test("marking a street mid-ride doesn't stall guidance to refresh a hidden list", async ({
   page,
+  context,
 }) => {
-  // The avoid chip writes through saveSketchy, which now invalidates the search
+  // The avoid chip writes through saveSketchy, which invalidates the search
   // grades — up to five routing runs on the main thread, to refresh a list that
-  // isn't even on screen while riding.
-  await startNav(page);
-  const blocked = await page.evaluate(async () => {
-    let worst = 0;
-    let last = performance.now();
-    const tick = (): void => {
-      const now = performance.now();
-      worst = Math.max(worst, now - last);
-      last = now;
-      requestAnimationFrame(tick);
-    };
-    requestAnimationFrame(tick);
-    await new Promise((r) => setTimeout(r, 400));
-    document.getElementById("nav-hazard")?.click();
-    await new Promise((r) => setTimeout(r, 2500));
-    return worst;
+  // isn't even on screen while riding. regradeVisible() returns early when
+  // navActive, and this is that guard.
+  //
+  // Measured as work, not as time. The first version timed the worst frame gap
+  // and asserted it stayed under 400 ms, which measured the machine: a loaded
+  // runner blocks for over a second in any 2.5 s window on its own, so the test
+  // failed on the runner rather than on the app. Grading announces itself in the
+  // rows it is about to replace, so the work is directly observable.
+  await context.grantPermissions(["geolocation"]);
+  await context.setGeolocation({ latitude: 42.3875, longitude: -71.0995 });
+  await installRider(page);
+  await page.goto(`/${DAVIS_KENDALL}`);
+  await page.waitForFunction(() => window._map !== undefined && window._map.loaded(), null, {
+    timeout: 60_000,
   });
-  // a frame budget is 16 ms; a routing run is hundreds. Generous, because a
-  // loaded runner has its own stalls — this is looking for the big one.
-  expect(blocked, `the main thread froze for ${Math.round(blocked)} ms mid-ride`).toBeLessThan(400);
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 40_000 });
+
+  // Graded search rows have to exist, or the first guard in regradeVisible
+  // ("nothing to redo") makes the navActive guard unreachable and the test
+  // proves nothing.
+  await page.locator("#search").fill("danehy");
+  await expect(page.locator(".search-row").first()).toBeVisible({ timeout: 30_000 });
+  const badge = page.locator(".search-row").first().locator(".search-grade");
+  await expect
+    .poll(async () => (await badge.innerText()).trim(), { timeout: 60_000 })
+    .toMatch(/^[ABCDF]$/);
+
+  await page.locator("#nav-btn").click();
+  await expect(page.locator("#nav-banner")).toBeVisible();
+  await page.evaluate(
+    (p) => {
+      window.__rider.setFix({ lon: p[0], lat: p[1], accuracy: 8, speed: 4, heading: 90 });
+    },
+    [-71.1223, 42.3968],
+  );
+
+  // Counted, because by the time you are riding the grading works on rows the
+  // panel has already replaced: nothing about it appears in the DOM, and the only
+  // other instrument was timing, which measured the runner.
+  const started = async (): Promise<number> =>
+    page.evaluate(() => window.__regradesStarted ?? 0);
+  const before = await started();
+
+  await page.locator("#nav-hazard").click();
+  // generous: without the guard this fires in the same tick as the tap
+  await page.waitForTimeout(2_000);
+  expect(
+    await started(),
+    "tapping avoid mid-ride started search grading — up to five routing runs on " +
+      "the main thread, to refresh a list that is not on screen",
+  ).toBe(before);
+
+  // and the mark itself landed, so the tap was not simply ignored
+  expect(await page.evaluate(() => window.__navAlertsSeen ?? 0)).toBeGreaterThan(0);
+
+  // The counter is live: the same write, off the bike, does start grading. Without
+  // this the assertion above would pass just as happily against a counter that
+  // never moves.
+  await page.locator("#nav-exit").click();
+  await page.locator("#nav-ask-yes").click().catch(() => undefined);
+  await expect(page.locator("#nav-banner")).toBeHidden({ timeout: 15_000 });
+  await page.locator("#search").fill("danehy park");
+  await expect(page.locator(".search-row").first()).toBeVisible({ timeout: 30_000 });
+  await expect
+    .poll(async () => (await page.locator(".search-grade").first().innerText()).trim(), {
+      timeout: 60_000,
+    })
+    .toMatch(/^[ABCDF]$/);
+  const offBike = await started();
+  // the checkbox lives in the collapsed Preferences section
+  await page.locator('summary:has-text("Preferences")').first().click();
+  await page.locator("#prefer-flat").check();
+  await expect
+    .poll(started, { timeout: 15_000 })
+    .toBeGreaterThan(offBike);
 });
 
 test("the ride surface is three things and nothing else", async ({ page }) => {

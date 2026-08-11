@@ -1384,6 +1384,7 @@ function regradeVisible() {
     // that isn't even on screen.
     if (navActive)
         return;
+    window.__regradesStarted = (window.__regradesStarted ?? 0) + 1;
     for (const row of gradedRows) {
         if (!row.badge.isConnected)
             return; // the list is gone; nothing to redo

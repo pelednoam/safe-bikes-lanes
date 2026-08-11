@@ -194,6 +194,26 @@ def overlay_match(
 # load overlays
 # ---------------------------------------------------------------------------
 
+def edge_schema(graph: nx.MultiDiGraph) -> list[str]:
+    """The attributes present on *every* edge, asked of the graph itself.
+
+    Stamped onto the graph so a consumer can tell a graph it can use from one
+    built before the attribute it needs existed — priorities.py spent weeks
+    reporting "recorded bike crashes nearby" instead of counts because it read a
+    graph built before crash_count existed, and nothing said so.
+
+    Derived rather than declared. The first version listed what the weight
+    write-back adds, which omitted everything osmnx puts on an edge at creation:
+    it declared `length` missing and failed the weekly refresh outright. A list
+    maintained by hand is a list that disagrees with the graph.
+    """
+    common: set[str] | None = None
+    for _u, _v, data in graph.edges(data=True):
+        keys = set(data)
+        common = keys if common is None else common & keys
+    return sorted(common or ())
+
+
 def load_geojson(name: str) -> gpd.GeoDataFrame | None:
     path = config.RAW_DIR / name
     if not path.exists():
@@ -514,15 +534,6 @@ def build() -> None:
         nd["elev"] = round(e_m, 1)
 
     mem("after elevation sampling")
-    # The edge attributes the write-back below puts on every edge. Stamped onto
-    # the graph so a consumer can tell a graph it can use from one built before
-    # the attribute it needs existed. Add to this when you add a write-back.
-    EDGE_ATTRS_WRITTEN = frozenset(
-        {
-            "climb", "xpen", "road_busy", "crash_count", "cls", "stress_mult",
-            "crash_factor", "weight", "weight_solo",
-        }
-    )
     # final weights (kids + solo), written back into the graph
     for (u, v, k), row in edges.iterrows():
         pen = 0.0
@@ -568,7 +579,7 @@ def build() -> None:
     # a fallback path. priorities.py has spent weeks reporting "recorded bike
     # crashes nearby" instead of counts because it read a graph built before
     # crash_count existed, and nothing said so.
-    G.graph["edge_schema"] = sorted(EDGE_ATTRS_WRITTEN)
+    G.graph["edge_schema"] = edge_schema(G)
     G.graph["crashes_joined"] = int(edges["crash_count"].sum())
     G.graph["built_at"] = datetime.now(UTC).isoformat(timespec="seconds")
     G.graph["data_format"] = config.DATA_FORMAT

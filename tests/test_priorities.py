@@ -14,6 +14,7 @@ import tempfile
 from pathlib import Path
 from typing import NamedTuple
 
+import build_graph
 import config
 import networkx as nx
 import numpy as np
@@ -941,6 +942,50 @@ def test_meta_publishes_the_weighting_the_score_was_computed_with(tmp_path: Path
     # the page's opening order would silently differ from the exported score
     for key, value in weights.items():
         assert abs(value * 100 - round(value * 100)) < 1e-9, f"{key} is not a whole percent"
+
+
+def test_the_stale_graph_guard_reads_a_stamp_the_builder_actually_writes() -> None:
+    """The guard has two paths and only one of them was tested.
+
+    An unstamped graph is checked by sampling its edges; a stamped one is checked
+    against the stamp. The first version of the stamp listed what the weight
+    write-back adds, which omitted everything osmnx puts on an edge at creation —
+    so against a real graph it declared `length` missing and failed the weekly
+    refresh. The sampling path hid it, because test fixtures carry no stamp.
+    """
+    b = GraphBuilder()
+    for i, x in ((0, 0), (1, 200)):
+        b.node(i, x)
+    b.edge(0, 1, 200, "quiet_street", "A St")
+    graph = b.g
+
+    # What build_graph would stamp on this graph is what the analysis needs.
+    stamp = build_graph.edge_schema(graph)
+    assert stamp, "an empty stamp would make every graph look stale"
+    missing = priorities.NEEDED_EDGE_ATTRS - set(stamp)
+    assert not missing, (
+        f"a freshly built graph would be refused for missing {sorted(missing)} —"
+        " the stamp and the requirement disagree"
+    )
+    graph.graph["edge_schema"] = stamp
+    priorities.require_usable_graph(graph)  # must not raise
+
+    # And a stamp that really is missing something is still refused, so the
+    # agreement above isn't just a guard that never fires.
+    graph.graph["edge_schema"] = [k for k in stamp if k != "crash_count"]
+    with pytest.raises(SystemExit, match="crash_count"):
+        priorities.require_usable_graph(graph)
+
+    # The stamp describes every edge, not the union of some: an attribute on one
+    # edge only would let a partial rebuild pass as complete.
+    b2 = GraphBuilder()
+    for i, x in ((0, 0), (1, 200), (2, 400)):
+        b2.node(i, x)
+    b2.edge(0, 1, 200, "quiet_street", "A St")
+    b2.edge(1, 2, 200, "quiet_street", "B St")
+    one_edge = next(iter(b2.g.edges(keys=True)))
+    b2.g.edges[one_edge]["experimental"] = 1
+    assert "experimental" not in build_graph.edge_schema(b2.g)
 
 
 def test_joins_region_is_exported_as_a_bool_for_every_candidate() -> None:
