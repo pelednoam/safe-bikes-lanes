@@ -456,8 +456,14 @@ def build() -> None:
         if gdf is not None:
             crash_frames.append(gdf[["geometry"]])
     edges["crash_count"] = 0
+    crashes_joined = 0
     if crash_frames:
         crashes = pd.concat(crash_frames, ignore_index=True)
+        # The number of crash RECORDS, not the sum of per-edge counts: a crash
+        # within the join radius of six edge-directions contributes six to that
+        # sum, so it read 35,331 for 4,050 crashes — a number that would be
+        # quoted as if it were crashes.
+        crashes_joined = len(crashes)
         print(f"joining {len(crashes)} bike crashes (2021-2026) ...")
         # query returns (input=crash indices, tree=edge positions)
         _crash_idx, edge_pos = edges.sindex.query(
@@ -580,7 +586,10 @@ def build() -> None:
     # crashes nearby" instead of counts because it read a graph built before
     # crash_count existed, and nothing said so.
     G.graph["edge_schema"] = edge_schema(G)
-    G.graph["crashes_joined"] = int(edges["crash_count"].sum())
+    # Records joined, and separately how many edge-directions they landed on —
+    # the second is only useful for spotting a join that silently matched nothing.
+    G.graph["crashes_joined"] = crashes_joined
+    G.graph["crash_edge_hits"] = int(edges["crash_count"].sum())
     G.graph["built_at"] = datetime.now(UTC).isoformat(timespec="seconds")
     G.graph["data_format"] = config.DATA_FORMAT
 

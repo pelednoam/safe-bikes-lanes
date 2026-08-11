@@ -988,6 +988,47 @@ def test_the_stale_graph_guard_reads_a_stamp_the_builder_actually_writes() -> No
     assert "experimental" not in build_graph.edge_schema(b2.g)
 
 
+def test_the_published_crash_tally_is_records_not_edge_hits(tmp_path: Path) -> None:
+    """A number in published meta gets quoted, so it has to mean what it says.
+
+    The first version stamped the sum of crash_count over every edge. A crash
+    within the join radius of six edge-directions contributes six to that sum, so
+    it reported 35,331 for the 4,050 crashes actually joined — under a field
+    called crashes_joined. The two counts are both stamped now, and this is what
+    stops them being swapped back.
+    """
+    cands = [
+        priorities.Candidate(
+            pid="c1", name="A", kind="corridor", cls="busy_street", length_m=100.0
+        )
+    ]
+    priorities.write_meta(
+        tmp_path, cands, shown_count=1, islands={0: 5000.0},
+        destinations=1, pop=np.array([1.0]), pop_is_real=True,
+        stranded=0.0, stranded_pct=0.0,
+        graph_meta={
+            "crashes_joined": 4050,
+            "crash_edge_hits": 35331,
+            "edge_schema": ["crash_count", "length"],
+            "built_at": "2026-08-11T20:00:00+00:00",
+        },
+    )
+    meta = json.loads((tmp_path / "priorities_meta.json").read_text())
+    assert meta["model"]["crashes_joined"] == 4050, "the edge-hit sum is being published"
+    assert meta["provenance"]["crashes_joined"] == 4050
+    assert meta["provenance"]["graph_built_at"] == "2026-08-11T20:00:00+00:00"
+    # a build with no crash data at all says 0 rather than omitting the field,
+    # because the publish gate and the live check both read it
+    priorities.write_meta(
+        tmp_path, cands, shown_count=1, islands={0: 5000.0},
+        destinations=1, pop=np.array([1.0]), pop_is_real=True,
+        stranded=0.0, stranded_pct=0.0,
+        graph_meta={"crashes_joined": 0, "edge_schema": ["crash_count"]},
+    )
+    meta_zero = json.loads((tmp_path / "priorities_meta.json").read_text())
+    assert meta_zero["provenance"]["crashes_joined"] == 0
+
+
 def test_joins_region_is_exported_as_a_bool_for_every_candidate() -> None:
     """The what-if sentence on /build is only as specific as this field.
 
