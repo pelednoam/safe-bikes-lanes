@@ -45,3 +45,49 @@ contrast in sunlight, and glove-on tap accuracy were rider judgements and are
 not automatable here; the sizes and gaps they led to (56 px minimum control,
 ≥10 px between adjacent controls, 21 px street name) are asserted, the
 judgement behind them is not.
+
+## Why four of these tests look unusual
+
+Four tests failed under load and passed in isolation, for about a week, and were
+dismissed as "flaky runner". They weren't: each was sampling a state the app makes
+transient on purpose.
+
+- **The three drag tests** (`nothing in the dock moves`, `recentre says whether it
+  would do anything`, and the dock-position sweep) take the camera off follow and
+  check the recentre button is no longer dimmed. The app re-follows after
+  `REFOLLOW_MS` (10 s) so one bump on the handlebars doesn't leave the ride
+  permanently off-centre. A drag driven from the test runner costs a CDP round
+  trip per mouse event, and on a loaded machine eleven of them took longer than
+  that window — so the assertion arrived after the app had correctly re-followed.
+  `takeCameraOffFollow()` installs a `MutationObserver` first and records the
+  aria-label and the dock geometry at the instant the class changes. Watching a
+  transition is not only race-free, it asserts more than a later sample can: that
+  the change happened at all, rather than that the state differs now.
+
+- **`marking a street to avoid`** was passing on luck. `startNav` plans and starts
+  guidance but does not ride, so whether a GPS fix existed came down to timing —
+  and with no position the button correctly refuses and says so, which is a
+  different branch from the one under test. It sets a fix explicitly now, and
+  counts the alert instead of catching it on screen: `__navAlertsSeen` only
+  advances for the "marked" alert, so the count also distinguishes it from the
+  refusal that a visibility check could not tell apart.
+
+- **`marking a street mid-ride`** measured the machine. It timed the worst frame
+  gap and required it stay under 400 ms, but a loaded runner blocks the main
+  thread for over a second in any 2.5 s window on its own. Normalising against a
+  baseline window was not enough — the noise is larger than the signal. And the
+  DOM cannot see this behaviour at all: grading works on the rows the panel has
+  already replaced, so removing all three guards in `regradeVisible()` still
+  passed. It counts regrades through `window.__regradesStarted`, the way
+  `__navAlertsSeen` was already used, and then asserts the counter *does* advance
+  off the bike — without that half, the test would pass just as happily against a
+  counter that never moves.
+
+The general lesson, since it cost three rounds to learn: **a test that reads a
+state after an action races anything that changes that state back.** Where the
+app deliberately reverts — a re-follow, a self-clearing alert, a re-render — watch
+for the transition or count the work. And a timing threshold on a shared machine
+is a measurement of the machine.
+
+Verified against the conditions that produced the failures: the full suite, two
+workers, sustained load average above 30. Fifty-one tests, green.
