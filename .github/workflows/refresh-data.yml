@@ -43,7 +43,14 @@ jobs:
       - name: Build the per-city pages
         working-directory: pipeline
         # reads the ranking, writes web/data/cities/*.json and web/<slug>/
-        run: python city_pages.py Somerville
+        #
+        # No argument: CITIES in city_pages.py is the list, and passing one here
+        # made this build Somerville alone. index.json then listed one city while
+        # the repo shipped committed pages for Cambridge and Lexington whose data
+        # files were absent from the snapshot — so every weekly refresh was one
+        # deploy away from two broken city pages. The module prints a note about
+        # exactly this, into a log nobody reads.
+        run: python city_pages.py
       - name: Cache aerial + terrain tiles
         uses: actions/cache@v4
         with:

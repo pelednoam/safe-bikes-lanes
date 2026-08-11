@@ -633,3 +633,44 @@ def test_a_network_crossing_the_line_is_not_reported_as_internal(
     assert city["stats"]["connected_leaves_city"] is True, (
         "a network whose only way out straddles the line was called internal"
     )
+
+
+def test_every_city_in_the_list_is_built_by_the_scheduled_refresh() -> None:
+    """The weekly refresh must build every city the repo publishes.
+
+    It passed one city name on the command line, so it built Somerville alone.
+    index.json then listed one city while the repo shipped committed pages for
+    Cambridge and Lexington whose data files were missing from the snapshot —
+    every refresh was one deploy away from two broken pages. city_pages.py prints
+    a note when that happens, into a log nobody reads, and the browser suite
+    caught it only because it drives the index rather than a list typed by hand.
+    """
+    root = Path(__file__).resolve().parents[1]
+    workflow = (root / ".github" / "workflows" / "refresh-data.yml").read_text(encoding="utf-8")
+    calls = [
+        line.strip()
+        for line in workflow.splitlines()
+        if "city_pages.py" in line and "run:" in line
+    ]
+    call = calls[0] if calls else None
+    assert call is not None, "the refresh no longer builds the city pages at all"
+    args = call.split("city_pages.py", 1)[1].strip()
+    assert args == "", (
+        f"the refresh builds only {args!r}; CITIES in city_pages.py is the list, and"
+        " naming a subset here drops the others off the site"
+    )
+
+    # And the pages the repo ships are exactly the cities the module builds, so a
+    # page cannot outlive the data behind it.
+    published = {
+        d.name
+        for d in (root / "web").iterdir()
+        if d.is_dir() and (d / "index.html").exists() and (d / "index.html").read_text(
+            encoding="utf-8"
+        ).find('name="city-slug"') != -1
+    }
+    assert published, "no city pages found to check"
+    assert published == {city_pages.slugify(c) for c in city_pages.CITIES}, (
+        f"committed city pages {sorted(published)} do not match CITIES "
+        f"{sorted(city_pages.slugify(c) for c in city_pages.CITIES)}"
+    )

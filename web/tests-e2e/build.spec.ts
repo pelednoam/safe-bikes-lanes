@@ -533,11 +533,20 @@ test("the app's own ranking opens on the weighting the pipeline published", asyn
   expect(check.ok, check.why).toBe(true);
   expect(check.got).toEqual(check.want);
 
-  // and the list's own order is the exported one
+  // And the list's own order is the exported one. Compared by score at each
+  // position rather than by name: the panel re-derives the composite from
+  // components rounded to four decimals with weights rounded to whole percents,
+  // so two projects whose scores agree to three decimals can swap places. A
+  // different weighting moves scores far more than that.
   const agree = await page.evaluate(async () => {
     const fc = (await (await fetch("data/priorities.geojson")).json()) as {
       features: { properties: Record<string, number | string> }[];
     };
+    // by pid: matching on the street name bound "Broadway" to the first row whose
+    // text merely contained it, which is a test bug that reads as an app bug
+    const scoreOf = new Map(
+      fc.features.map((f) => [String(f.properties["pid"]), Number(f.properties["score"])]),
+    );
     const seen = new Set<string>();
     const want = [...fc.features]
       .sort((a, b) => Number(b.properties["score"]) - Number(a.properties["score"]))
@@ -548,17 +557,22 @@ test("the app's own ranking opens on the weighting the pipeline published", asyn
         return true;
       })
       .slice(0, 10)
-      .map((f) => String(f.properties["name"]));
+      .map((f) => Number(f.properties["score"]));
     const got = [...document.querySelectorAll<HTMLElement>(".build-row")]
       .slice(0, 10)
-      .map((r) => r.textContent ?? "");
+      .map((r) => scoreOf.get(r.getAttribute("data-pid") ?? "") ?? Number.NaN);
     return { want, got };
   });
   expect(agree.got.length).toBeGreaterThan(0);
-  for (const [i, name] of agree.want.entries()) {
+  for (const [i, want] of agree.want.entries()) {
     if (i >= agree.got.length) break;
-    expect(agree.got[i], `row ${String(i + 1)} is not the pipeline's ${String(i + 1)}`).toContain(
-      name,
-    );
+    expect(
+      Math.abs((agree.got[i] ?? 0) - want),
+      `row ${String(i + 1)} is a different project by score, not a tie`,
+    ).toBeLessThan(0.002);
+  }
+  // and it really is ranked, not merely a set of the right projects
+  for (let i = 1; i < agree.got.length; i++) {
+    expect((agree.got[i] ?? 0) - 1e-9).toBeLessThanOrEqual(agree.got[i - 1] ?? 0);
   }
 });

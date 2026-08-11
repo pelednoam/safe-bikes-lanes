@@ -101,6 +101,12 @@ test("the weights re-sort the list without changing a measured number", async ({
   await open(page);
 
   await page.locator(".row").first().click();
+  // Captured now: re-weighting can push this project below the panel's DOM cap,
+  // and then there is no `.row.on` to read its id from — the detail panel still
+  // shows its rank, which is the point of the cap being a DOM bound rather than
+  // a bound on the ranking.
+  const pickedPid = await page.locator(".row.on").getAttribute("data-pid");
+  expect(pickedPid).not.toBeNull();
   const before = await components(page);
   // Without this, every comparison below is ""==="" if the table never rendered.
   // The crash row names itself differently when the build has no counts, and the
@@ -154,7 +160,7 @@ test("the weights re-sort the list without changing a measured number", async ({
   // From the unrounded components in the data file: the table shows both the
   // components and the score to two decimals, so recomputing from what is on
   // screen lands on the rounding boundary rather than on the arithmetic.
-  const pid = await page.locator(".row.on").getAttribute("data-pid");
+  const pid = pickedPid;
   const exact = await page.evaluate(async (want) => {
     const fc = (await (await fetch("../data/priorities.geojson")).json()) as {
       features: { properties: Record<string, number | string> }[];
@@ -1180,14 +1186,43 @@ test("the first ranking a reader sees is the one the pipeline published", async 
     const onScreen = [...document.querySelectorAll<HTMLElement>(".row")]
       .slice(0, 20)
       .map((r) => r.dataset["pid"] ?? "");
-    return { ok: true, worst, pipelineTop, onScreen };
+    const scoreOf = new Map(
+      fc.features.map((f) => [String(f.properties["pid"]), Number(f.properties["score"])]),
+    );
+    return {
+      ok: true,
+      worst,
+      pipelineTop,
+      onScreen,
+      scores: {
+        onScreen: onScreen.map((pid) => scoreOf.get(pid) ?? Number.NaN),
+        pipeline: pipelineTop.map((pid) => scoreOf.get(pid) ?? Number.NaN),
+      },
+    };
   });
 
   expect(agreement.ok, agreement.why).toBe(true);
   // the exported score is reproducible from the published weights
   expect(agreement.worst).toBeLessThan(0.002);
-  // and the page's opening order is that ranking, project for project
-  expect(agreement.onScreen).toEqual(agreement.pipelineTop);
+
+  // And the page opens on that ranking. Compared by score at each position
+  // rather than by identity: the page re-derives the composite from components
+  // rounded to four decimals, with weights rounded to whole slider percents, so
+  // two projects whose scores agree to three decimals can swap places. A real
+  // disagreement — a different weighting — moves scores far more than that,
+  // which is what this catches.
+  const scores = agreement.scores as { onScreen: number[]; pipeline: number[] };
+  expect(scores.onScreen.length).toBe(scores.pipeline.length);
+  for (const [i, want] of scores.pipeline.entries()) {
+    expect(
+      Math.abs((scores.onScreen[i] ?? 0) - want),
+      `position ${String(i + 1)} is a different project by score, not a tie`,
+    ).toBeLessThan(0.002);
+  }
+  // strictly ranked, too: a shuffled list would still pass a set comparison
+  for (let i = 1; i < scores.onScreen.length; i++) {
+    expect((scores.onScreen[i] ?? 0) - 1e-9).toBeLessThanOrEqual(scores.onScreen[i - 1] ?? 0);
+  }
 
   // Reset returns to it after the reader has explored.
   await page.locator("#w-crash").fill("100");
@@ -1198,7 +1233,7 @@ test("the first ranking a reader sees is the one the pipeline published", async 
   const afterReset = await page.locator(".row").evaluateAll((rs) =>
     rs.slice(0, 20).map((r) => (r as HTMLElement).dataset["pid"] ?? ""),
   );
-  expect(afterReset).toEqual(agreement.pipelineTop);
+  expect(afterReset).toEqual(agreement.onScreen);
 });
 
 test("the what-if is only as specific as the data supports", async ({ page }) => {
@@ -1209,16 +1244,21 @@ test("the what-if is only as specific as the data supports", async ({ page }) =>
   // exactly when the sentence starts making a stronger claim.
   const withFlag = async (value: boolean | undefined): Promise<string> => {
     await page.unroute("**/priorities.geojson").catch(() => undefined);
-    if (value !== undefined) {
-      await page.route("**/priorities.geojson", async (route) => {
-        const res = await route.fetch();
-        const fc = (await res.json()) as {
-          features: { properties: Record<string, unknown> }[];
-        };
-        for (const f of fc.features) f.properties["joins_region"] = value;
-        await route.fulfill({ response: res, json: fc });
-      });
-    }
+    // Every state is served deliberately, including absent. The field shipped in
+    // the 2026-08-11 data, so "absent" stopped being what the real file looks
+    // like — and a test that relied on that would have quietly started asserting
+    // the same state twice.
+    await page.route("**/priorities.geojson", async (route) => {
+      const res = await route.fetch();
+      const fc = (await res.json()) as {
+        features: { properties: Record<string, unknown> }[];
+      };
+      for (const f of fc.features) {
+        if (value === undefined) delete f.properties["joins_region"];
+        else f.properties["joins_region"] = value;
+      }
+      await route.fulfill({ response: res, json: fc });
+    });
     await page.goto("/build/");
     await expect(page.locator(".row").first()).toBeVisible({ timeout: 30_000 });
     await page.locator(".row").first().click();
