@@ -12,6 +12,10 @@ cp manifest.json icon-192.png icon-512.png dist/
 cp -r data dist/data
 # routing is tiled now (data/tiles/*.json); the monolithic graph is unused
 rm -f dist/data/graph.json
+# the where-to-build workspace: its own page, but the app links to it from the
+# planner layers, so it has to be in the bundle or that link dead-ends offline
+cp build.css dist/
+cp -r build dist/build
 cp -r fonts dist/fonts
 cp node_modules/maplibre-gl/dist/maplibre-gl.js dist/
 cp node_modules/maplibre-gl/dist/maplibre-gl.css dist/

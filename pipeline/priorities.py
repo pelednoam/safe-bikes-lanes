@@ -615,6 +615,12 @@ def to_geojson(candidates: list[Candidate]) -> dict[str, Any]:
                     ),
                     "crash_pressure": cand.crash_pressure,
                     "join_m": cand.join_m,
+                    # Which network the far side is. Without it the web page can
+                    # say only "the network on the other side of this gap": it
+                    # cannot tell a link into the region-wide network from one
+                    # between two local pockets, and guessing from join_m would
+                    # credit local joins with a region-wide claim.
+                    "joins_region": cand.joins_region,
                     "dest_unlocked": cand.dest_unlocked if cand.access_computed else None,
                     "pop_gaining": (
                         round(cand.pop_gaining, 1) if cand.access_computed else None
@@ -1211,6 +1217,10 @@ def write_meta(
                 " lane (3.0) is deliberately excluded: it is not a route for an"
                 " eight-year-old"
             ),
+            # The years the crash counts cover. The web page used to print
+            # "since 2021" from a literal of its own, which would have misdated
+            # the figure the first year this list changed.
+            "crash_years": list(config.IMPACT_CRASH_YEARS),
             "upgrade_class": config.UPGRADE_CLASS,
             "upgrade_note": (
                 "a candidate is costed as if rebuilt to this class, dropping its"

@@ -109,6 +109,75 @@ test("construction layer is on by default with real permits", async ({ page }) =
   );
 });
 
+test("a permit feed cannot script the map popups", async ({ page }) => {
+  test.slow();
+  // The construction layers come from Cambridge's street-permit feed and
+  // MassDOT's work-zone API. Neither is ours, and a project named
+  // `<img onerror=…>` reached setHTML unescaped in the click popup while the
+  // hover popup beside it escaped the same fields.
+  await page.route(/construction\.geojson/, async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        type: "FeatureCollection",
+        features: [
+          {
+            type: "Feature",
+            geometry: { type: "Point", coordinates: [-71.1, 42.38] },
+            properties: {
+              src: "cambridge",
+              name: "<img src=x onerror=\"window.__xss=1\">Water main",
+              address: "<script>window.__xss2=1<\/script>10 Elm St",
+              detail: "<b>bold</b> lane closed",
+              start: "2026-01-01",
+              end: "2026-02-01",
+            },
+          },
+        ],
+      }),
+    });
+  });
+  await boot(page);
+  await page.evaluate(() => {
+    window._map?.jumpTo({ center: [-71.1, 42.38], zoom: 16 });
+  });
+  await page.waitForFunction(
+    () =>
+      (window._map?.queryRenderedFeatures(undefined, { layers: ["construction-pts"] }).length ??
+        0) > 0,
+    null,
+    { timeout: 25_000 },
+  );
+
+  // click it, wherever it landed on screen
+  const at = await page.evaluate(() => {
+    const f = window._map?.queryRenderedFeatures(undefined, { layers: ["construction-pts"] })[0];
+    const c = (f?.geometry as GeoJSON.Point | undefined)?.coordinates as [number, number];
+    const p = window._map?.project(c);
+    return p ? { x: Math.round(p.x), y: Math.round(p.y) } : null;
+  });
+  expect(at).not.toBeNull();
+  await page.mouse.click((at as { x: number; y: number }).x, (at as { x: number; y: number }).y);
+  await expect(page.locator(".maplibregl-popup").first()).toBeVisible({ timeout: 10_000 });
+
+  const state = await page.evaluate(() => ({
+    xss: (window as unknown as Record<string, unknown>)["__xss"] ?? null,
+    xss2: (window as unknown as Record<string, unknown>)["__xss2"] ?? null,
+    imgs: document.querySelectorAll(".maplibregl-popup img").length,
+    bolds: document.querySelectorAll(".maplibregl-popup b").length,
+    text: document.querySelector(".maplibregl-popup")?.textContent ?? "",
+  }));
+  expect(state.xss, "an onerror handler from the feed ran").toBeNull();
+  expect(state.xss2).toBeNull();
+  expect(state.imgs, "the feed injected an element").toBe(0);
+  // the popup's own <b> for the title is there; the feed's is not
+  expect(state.bolds).toBe(1);
+  // and the name is still readable, as text
+  expect(state.text).toContain("Water main");
+  expect(state.text).toContain("<img");
+  expect(state.text).toContain("<b>bold</b>");
+});
+
 test("save a place via right-click and use it as start", async ({ page }) => {
   await boot(page);
   page.once("dialog", (d) => void d.accept("Test Home"));
@@ -513,9 +582,12 @@ test("the planner layers point at the workspace they belong to", async ({ page }
   await boot(page);
   const box = page.locator("details.section", { has: page.locator("#show-net") });
   await box.locator("summary").click();
-  await page.locator("#layers-build-link").click();
-  // the where-to-build section opens rather than the link going nowhere
-  await expect
-    .poll(() => page.locator("#build-box").evaluate((d) => (d as HTMLDetailsElement).open))
-    .toBe(true);
+  // The workspace is its own page now — a planner should land there, not have a
+  // section expand inside a rider's app.
+  const link = page.locator("#layers-build-link");
+  await expect(link).toHaveAttribute("href", "build/");
+  await link.click();
+  await page.waitForURL(/\/build\/$/);
+  await expect(page.locator("#rank-panel h1")).toBeVisible();
+  await expect(page.locator(".row").first()).toBeVisible({ timeout: 30_000 });
 });

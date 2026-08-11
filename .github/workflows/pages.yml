@@ -62,17 +62,26 @@ jobs:
           cp web/manifest.json web/icon-192.png web/icon-512.png _site/
           cp -r web/fonts _site/fonts
           cp -r web/install _site/install
+          cp -r web/build _site/build
           cp -r web/data _site/data
           # One directory per city, so the URL is /somerville rather than a
           # query string. Driven by the generator's own index, so adding a city
           # to the pipeline is the only step needed to publish its page.
           if [ -f web/data/cities/index.json ]; then
-            for slug in $(python3 -c "import json,sys; print(' '.join(c['slug'] for c in json.load(open('web/data/cities/index.json'))))"); do
+            # Newline-delimited and shape-checked. slugify() only ever emits
+            # [a-z0-9-], but these strings become paths in a `cp -r`, and the
+            # build should not depend on a data file honouring that forever.
+            python3 -c "import json; print('\n'.join(c['slug'] for c in json.load(open('web/data/cities/index.json'))))" \
+              > /tmp/city-slugs.txt
+            while IFS= read -r slug; do
+              case "$slug" in
+                "" | *[!a-z0-9-]* ) echo "  skipping unusable city slug: '$slug'"; continue ;;
+              esac
               if [ -d "web/$slug" ]; then
                 cp -r "web/$slug" "_site/$slug"
                 echo "  city page: /$slug"
               fi
-            done
+            done < /tmp/city-slugs.txt
           fi
       - name: Publish the app version manifest
         run: |
@@ -85,9 +94,14 @@ jobs:
           # The releases/latest API lags the download redirect under GitHub's
           # eventual consistency, so retry rather than silently skip
           # version.json (a miss breaks the in-app updater).
+          # `|| true` inside the substitution: this step runs under GitHub's
+          # default `bash -e -o pipefail`, where a failing command substitution in
+          # an assignment exits the step — so one transient API error took the
+          # whole Pages deploy down instead of being retried by the loop below.
           TAG=""
           for i in 1 2 3 4 5; do
-            TAG=$(curl -s https://api.github.com/repos/${{ github.repository }}/releases/latest | jq -r .tag_name)
+            TAG=$(curl -s https://api.github.com/repos/${{ github.repository }}/releases/latest \
+                    | jq -r .tag_name || true)
             [ "$TAG" != "null" ] && [ -n "$TAG" ] && break
             echo "release tag not resolved yet (attempt $i) — retrying in 15s"
             sleep 15

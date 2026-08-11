@@ -89,6 +89,19 @@ export function segmentHtml(props, opts = { photo: false }) {
         : "unnamed";
     return `${badge}<b>${esc(name)}</b><br>${label}${meaning}${stress}${crashes}${unconfirmed}${photoSlot}`;
 }
+/** The caution list a printed cue sheet carries.
+ *
+ * Here rather than inline in the print handler because the street names are
+ * OpenStreetMap's and the sheet is built with document.write: the version that
+ * lived in the handler interpolated them raw, while the cue rows two lines above
+ * escaped theirs. A named function with a test is harder to get wrong twice.
+ */
+export function cautionsHtml(cautions, fmt) {
+    return cautions
+        .map((c) => `<li>⚠ ${esc(c.name)}: ${esc(fmt(c.meters))} of ` +
+        `${esc(CLASS_LABELS[c.cls] ?? c.cls)}</li>`)
+        .join("");
+}
 const photoCache = new Map();
 let photoGen = 0;
 /** How far a street-level photo may be and still be *this* street. Beyond this

@@ -1,0 +1,157 @@
+/* The where-to-build workspace. A planner's page, not a rider's: it shares the
+   type and the safety hues with the rest of the site, but the layout is a
+   working tool — the ranking on the left, the project you picked on the right,
+   the map behind both. It used to be a collapsed section inside a family bike
+   planner, which is the wrong door for a city engineer. */
+@font-face {
+  font-family: "Barlow"; font-style: normal; font-weight: 400; font-display: swap;
+  src: url("fonts/Barlow-400.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Barlow"; font-style: normal; font-weight: 600; font-display: swap;
+  src: url("fonts/Barlow-600.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Barlow"; font-style: normal; font-weight: 700; font-display: swap;
+  src: url("fonts/Barlow-700.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Barlow Semi Condensed"; font-style: normal; font-weight: 700; font-display: swap;
+  src: url("fonts/BarlowSemiCondensed-700.woff2") format("woff2");
+}
+
+:root {
+  --ink: #111619;
+  --muted: #5c6a72;
+  --line: rgba(17, 22, 25, 0.12);
+  --surface: rgba(255, 255, 255, 0.96);
+  --field: rgba(17, 22, 25, 0.045);
+  --accent: #12833f;
+  --warn: #d73027;
+  --r-sm: 9px;
+  --r-md: 13px;
+  --shadow: 0 8px 30px rgba(17, 22, 25, 0.14);
+  --font: "Barlow", system-ui, -apple-system, sans-serif;
+  --font-cond: "Barlow Semi Condensed", var(--font);
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { font-family: var(--font); color: var(--ink); background: #eef1f3; overflow: hidden; }
+#map { position: absolute; inset: 0; }
+
+/* Two panels, both over the map: what to build, and the one you picked. */
+#rank-panel, #detail-panel {
+  position: absolute; top: 12px; z-index: 5; width: 380px;
+  max-height: calc(100% - 24px); overflow-y: auto; overscroll-behavior: contain;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md);
+  box-shadow: var(--shadow); padding: 15px;
+  -webkit-backdrop-filter: blur(20px) saturate(1.5); backdrop-filter: blur(20px) saturate(1.5);
+}
+#rank-panel { left: 12px; }
+#detail-panel { right: 12px; display: none; }
+#detail-panel.on { display: block; }
+
+.kicker { font-size: 11.5px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+          color: var(--accent); margin: 0 0 5px; }
+h1 { font-family: var(--font-cond); font-size: 27px; line-height: 1.03; margin: 0 0 4px;
+     letter-spacing: -0.02em; }
+.lede { font-size: 13.5px; color: var(--muted); margin: 0 0 13px; line-height: 1.4; }
+
+.controls { display: flex; gap: 7px; align-items: center; margin-bottom: 13px; flex-wrap: wrap; }
+.controls select { flex: 1; min-width: 130px; padding: 5px 6px; font: inherit; font-size: 13px;
+                   border: 1px solid var(--line); border-radius: var(--r-sm); background: #fff; }
+button {
+  font: inherit; font-size: 13px; padding: 6px 11px; border: 1px solid var(--line);
+  border-radius: var(--r-sm); background: #fff; color: var(--ink); cursor: pointer;
+}
+button:hover { border-color: var(--accent); color: var(--accent); }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button.primary { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
+button.primary:hover { background: #0e6c33; color: #fff; }
+
+h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted);
+     margin: 15px 0 6px; }
+
+/* The weights. These re-sort what the pipeline measured; they never change a
+   number, and the note says so — a slider that looked like it recomputed the
+   evidence would be the most misleading control on the page. */
+.weight { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 4px 8px;
+          margin-bottom: 7px; font-size: 13px; }
+.weight input { grid-column: 1 / -1; width: 100%; accent-color: var(--accent); margin: 0; }
+.weight .val { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12px; }
+.note { font-size: 11.5px; color: var(--muted); line-height: 1.4; margin: 8px 0 0; }
+.note a { color: var(--accent); }
+
+#list { display: flex; flex-direction: column; gap: 5px; }
+.row {
+  display: grid; grid-template-columns: 22px 1fr; gap: 8px; align-items: baseline;
+  padding: 8px 9px; border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: var(--field); cursor: pointer; text-align: left; font-size: 13px; line-height: 1.35;
+  width: 100%;
+}
+.row:hover { border-color: var(--accent); }
+.row.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.row .rank { font-family: var(--font-cond); font-weight: 700; font-size: 15px; color: var(--accent); }
+.row .what { font-weight: 600; }
+.row .why { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.row .badge { display: inline-block; margin-left: 5px; padding: 0 5px; border-radius: 999px;
+              background: #e8f3ec; color: var(--accent); font-size: 10px; font-weight: 700; }
+
+/* The picked project. */
+#detail-panel .rank-line { font-size: 12px; color: var(--muted); margin: 0 0 2px; }
+#detail-panel h3 { font-family: var(--font-cond); font-size: 22px; margin: 0 0 2px; }
+#detail-panel .where { font-size: 13px; color: var(--muted); margin: 0 0 12px; }
+.figures { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-bottom: 12px; }
+.figure { background: var(--field); border-radius: var(--r-sm); padding: 8px 9px; }
+.figure .n { font-family: var(--font-cond); font-size: 20px; font-weight: 700; line-height: 1;
+             font-variant-numeric: tabular-nums; }
+.figure .l { font-size: 11px; color: var(--muted); line-height: 1.25; margin-top: 3px; }
+.figure.warn .n { color: var(--warn); }
+.rows { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.rows td { padding: 4px 0; border-top: 1px solid var(--line); vertical-align: top; }
+.rows td:last-child { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums;
+                      white-space: nowrap; padding-left: 8px; }
+/* The what-if, stated from measured fields. Set apart because it is the claim a
+   planner will quote, not because it is a different kind of number. */
+.whatif { margin: 12px 0 0; padding: 9px 10px; border-radius: var(--r-sm);
+          background: #e8f3ec; color: #0e5c2e; font-size: 12.5px; line-height: 1.45; }
+.whatif:empty { display: none; }
+
+.actions { display: flex; gap: 7px; margin-top: 12px; flex-wrap: wrap; }
+
+details.limits { margin-top: 13px; border-top: 1px solid var(--line); padding-top: 10px; }
+details.limits summary { cursor: pointer; font-weight: 600; font-size: 12px; color: var(--muted); }
+details.limits ul { margin: 7px 0 0; padding-left: 17px; font-size: 11.5px; color: var(--muted);
+                    line-height: 1.45; }
+details.limits li { margin-bottom: 5px; }
+
+#empty { font-size: 13px; color: var(--muted); }
+
+/* A phone gets one panel at a time: the ranking, and the project it opened. */
+@media (max-width: 900px) {
+  #rank-panel, #detail-panel {
+    left: 0; right: 0; width: 100%; top: auto; bottom: 0; max-height: 62%;
+    border-radius: var(--r-md) var(--r-md) 0 0; padding: 14px 14px 20px;
+  }
+  #detail-panel.on { z-index: 6; }
+  body.picked #rank-panel { display: none; }
+}
+#back-to-list { display: none; }
+@media (max-width: 900px) { #back-to-list { display: inline-block; } }
+
+.method { font-size: 11.5px; color: var(--muted); line-height: 1.45; margin: 8px 0 0; }
+
+@media print {
+  /* The one-pager: the picked project and its evidence, nothing else — but the
+     caveats travel with it. They live in a <details> on screen to keep the panel
+     short; printed closed, the sheet carried the heading "What this ranking does
+     not do" over an empty space, which is worse than not raising the question. */
+  #map, #rank-panel, .actions { display: none !important; }
+  details.limits > summary { list-style: none; font-size: 13px; color: var(--ink); }
+  body { overflow: visible; background: #fff; }
+  #detail-panel {
+    position: static; width: auto; max-height: none; box-shadow: none; border: none;
+    backdrop-filter: none; -webkit-backdrop-filter: none; padding: 0;
+  }
+}

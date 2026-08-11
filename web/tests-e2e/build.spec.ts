@@ -448,9 +448,14 @@ test("the one-pager stands alone: numbers, provenance, and caveats", async ({ pa
   await sheet.waitForLoadState("domcontentloaded");
   const text = (await sheet.locator("body").textContent()) ?? "";
 
-  // what it is and what it would do
-  expect(text).toMatch(/Kid-safe network it joins/);
-  expect(text).toMatch(/\d+ m/);
+  // What it is and what it would do. join_m is the smaller of the two sides — the
+  // streets connected in, not the network they connect to — and this sheet and
+  // the /build workspace have to say that the same way: two surfaces wording one
+  // field differently is how a city ends up with two answers to one question.
+  expect(text).toMatch(/Kid-safe streets it would connect in/);
+  expect(text).not.toMatch(/network it (joins|would join)/);
+  expect(text).toMatch(/libraries on the network it opens/);
+  expect(text).toMatch(/\d+(\.\d+)? (mi|ft|m)\b/);
   // where the numbers came from
   expect(text).toMatch(/How this was measured/);
   expect(text).toMatch(/Census|street length/);
@@ -493,4 +498,67 @@ test("hovering a project in the app previews it without losing the selection", a
 
   await page.locator("#build-intro").hover();
   await expect.poll(hovered).toBe("");
+});
+
+test("the app's own ranking opens on the weighting the pipeline published", async ({ page }) => {
+  test.slow();
+  // Two surfaces rank the same candidates: this list and /build. Both must start
+  // from meta.model.weights — the weighting the exported `score` was computed
+  // with — or a city gets two answers to "which project first?". They used to
+  // agree only because four literals happened to match the config.
+  await openBuild(page);
+  await expect(page.locator(".build-row").first()).toBeVisible({ timeout: 30_000 });
+
+  const check = await page.evaluate(async () => {
+    const meta = (await (await fetch("data/priorities_meta.json")).json()) as {
+      model?: { weights?: Record<string, number> };
+    };
+    const w = meta.model?.weights;
+    if (!w) return { ok: false as const, why: "no weights in meta" };
+    const total = w["severance"]! + w["access"]! + w["crash"]! + w["coverage"]!;
+    const want = Object.fromEntries(
+      ["severance", "access", "crash", "coverage"].map((k) => [
+        k,
+        String(Math.round((w[k]! / total) * 100)),
+      ]),
+    );
+    const got = Object.fromEntries(
+      ["severance", "access", "crash", "coverage"].map((k) => [
+        k,
+        (document.getElementById(`wt-${k}`) as HTMLInputElement).value,
+      ]),
+    );
+    return { ok: true as const, want, got };
+  });
+  expect(check.ok, check.why).toBe(true);
+  expect(check.got).toEqual(check.want);
+
+  // and the list's own order is the exported one
+  const agree = await page.evaluate(async () => {
+    const fc = (await (await fetch("data/priorities.geojson")).json()) as {
+      features: { properties: Record<string, number | string> }[];
+    };
+    const seen = new Set<string>();
+    const want = [...fc.features]
+      .sort((a, b) => Number(b.properties["score"]) - Number(a.properties["score"]))
+      .filter((f) => {
+        const g = String(f.properties["group"]);
+        if (seen.has(g)) return false;
+        seen.add(g);
+        return true;
+      })
+      .slice(0, 10)
+      .map((f) => String(f.properties["name"]));
+    const got = [...document.querySelectorAll<HTMLElement>(".build-row")]
+      .slice(0, 10)
+      .map((r) => r.textContent ?? "");
+    return { want, got };
+  });
+  expect(agree.got.length).toBeGreaterThan(0);
+  for (const [i, name] of agree.want.entries()) {
+    if (i >= agree.got.length) break;
+    expect(agree.got[i], `row ${String(i + 1)} is not the pipeline's ${String(i + 1)}`).toContain(
+      name,
+    );
+  }
 });

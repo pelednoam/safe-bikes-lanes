@@ -907,6 +907,75 @@ def test_meta_records_provenance_and_refuses_to_call_a_proxy_a_headcount(
     assert meta["model"]["kid_safe_max_multiplier"] == config.SAFE_MULT_MAX
 
 
+def test_meta_publishes_the_weighting_the_score_was_computed_with(tmp_path: Path) -> None:
+    """The web pages read this to set their sliders.
+
+    Both the /build workspace and the app's own list start their weight sliders
+    from meta.model.weights, so the first ranking a reader sees is the one the
+    exported `score` field ranks by. Before that, each surface repeated the four
+    numbers itself and they agreed only as long as nobody edited the config —
+    which would have given a city two different answers to "which first?".
+    """
+    cands = [
+        priorities.Candidate(
+            pid="c1", name="A", kind="corridor", cls="busy_street", length_m=100.0
+        )
+    ]
+    priorities.write_meta(
+        tmp_path, cands, shown_count=1, islands={0: 5000.0},
+        destinations=1, pop=np.array([1.0]), pop_is_real=True,
+        stranded=0.0, stranded_pct=0.0,
+    )
+    weights = json.loads((tmp_path / "priorities_meta.json").read_text())["model"]["weights"]
+    assert weights == config.PRIORITY_WEIGHTS
+    # every component the pages weight has a weight, and they are shares
+    assert set(weights) == {"severance", "access", "crash", "coverage"}
+    assert abs(sum(weights.values()) - 1.0) < 1e-9
+    # whole percents, or the sliders cannot express the published weighting and
+    # the page's opening order would silently differ from the exported score
+    for key, value in weights.items():
+        assert abs(value * 100 - round(value * 100)) < 1e-9, f"{key} is not a whole percent"
+
+
+def test_joins_region_is_exported_as_a_bool_for_every_candidate() -> None:
+    """The what-if sentence on /build is only as specific as this field.
+
+    join_m is the smaller of the two sides a build would link, which says nothing
+    about whether the larger side is the region's main network or another local
+    pocket. The page claimed the region for every join until this shipped; with
+    the field absent it says "the network on the other side of this gap" and no
+    more, so the field has to arrive as a real boolean or the page silently falls
+    back to the vaguer wording.
+    """
+    b = GraphBuilder()
+    for i, x in ((0, 0), (1, 400), (2, 420), (3, 1200), (4, 1260), (5, 5260)):
+        b.node(i, x)
+    b.edge(0, 1, 400, "quiet_street", "A St")
+    b.edge(1, 2, 20, "busy_street", "The Gap")     # joins two local pockets
+    b.edge(2, 3, 780, "quiet_street", "B St")
+    b.edge(3, 4, 60, "busy_street", "The Bridge")  # joins one to the region's
+    b.edge(4, 5, 4000, "quiet_street", "The Big One")
+
+    island_of, island_m = priorities.safe_islands(b.g)
+    cands = priorities.find_candidates(b.g)
+    priorities.score_severance(cands, island_of, island_m)
+    priorities.score_all(cands)
+    fc = priorities.to_geojson(cands)
+
+    assert fc["features"], "no candidates exported"
+    for feature in fc["features"]:
+        flag = feature["properties"]["joins_region"]
+        assert isinstance(flag, bool), f"joins_region is {type(flag).__name__}, not a bool"
+    # and it never disagrees with the sentence written from the same candidate
+    for feature in fc["features"]:
+        props = feature["properties"]
+        if "region-wide network" in props["summary"]:
+            assert props["joins_region"] is True
+    # both values occur here, so neither is exported by accident
+    flags = {f["properties"]["joins_region"] for f in fc["features"]}
+    assert flags == {True, False}, f"expected both, got {flags}"
+
+
 def test_build_runs_end_to_end_on_a_small_network(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

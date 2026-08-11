@@ -247,3 +247,19 @@ test("fresh-data download shows the progress banner then clears", async ({ page 
   // once all layers are in, the banner hides again
   await expect(page.locator("#data-update")).toBeHidden({ timeout: 45_000 });
 });
+
+test("the where-to-build link works inside the app, offline", async ({ page }) => {
+  // The planner layers link to build/. In the APK that resolves inside the
+  // bundle, so the page and the data it needs have to be there — a link that
+  // dead-ends is worse than no link, and nobody would see it on the website.
+  await nativeShim(page);
+  await page.goto("/");
+  const box = page.locator("details.section", { has: page.locator("#show-net") });
+  await box.locator("summary").click();
+  await page.locator("#layers-build-link").click();
+  await page.waitForURL(/\/build\/$/);
+  await expect(page.locator("#rank-panel h1")).toBeVisible();
+  // the ranking is drawn from the bundled data, with no network
+  await expect(page.locator(".row").first()).toBeVisible({ timeout: 45_000 });
+  await expect(page.locator("#built")).not.toHaveText("—");
+});

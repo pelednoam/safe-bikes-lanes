@@ -1,5 +1,5 @@
 import { isNativeApp, isNewerAppVersion, lastNativeSpeechError, nativeSpeak, startDownload, startBackgroundWatcher, stopBackgroundWatcher, webVoiceCount, } from "./native.js";
-import { CLASS_LABELS, clearPhotoCache, esc, FACILITY_CLASSES, nearestMapillary, fillSegmentPhoto as fillPhotoSlot, GRADE_COLORS, segmentHtml, } from "./segment.js";
+import { CLASS_LABELS, cautionsHtml, clearPhotoCache, esc, FACILITY_CLASSES, nearestMapillary, fillSegmentPhoto as fillPhotoSlot, GRADE_COLORS, segmentHtml, } from "./segment.js";
 import { bearingDeg, buildAlerts, buildManeuvers, buildTrack, distM, snapToTrack, sunsetTime, trackBearingAhead, trackSlice, } from "./nav.js";
 import { addHazard, buildReportText, downscalePhoto, getHazardPhoto, HAZARD_LABELS, listHazards, removeHazard, setHazardCategory, } from "./hazards.js";
 import { clearRecent, deletePlace, emojiFor, exportBackup, importBackup, listPlaces, listRecent, pushRecent, savePlace, } from "./places.js";
@@ -1108,9 +1108,7 @@ el("print-cues").addEventListener("click", () => {
     const rows = cues
         .map((c) => `<tr><td>${fmtDist(c.km * 1000)}</td><td>${esc(c.text)}</td></tr>`)
         .join("");
-    const cautionRows = s.cautions
-        .map((c) => `<li>⚠ ${c.name}: ${fmtDist(c.meters)} of ${CLASS_LABELS[c.cls] ?? c.cls}</li>`)
-        .join("");
+    const cautionRows = cautionsHtml(s.cautions, fmtDist);
     const win = window.open("", "_blank");
     if (!win)
         return;
@@ -1981,11 +1979,24 @@ map.on("load", () => {
                 return;
             const props = f.properties;
             const source = props.src === "massdot_wzdx" ? "MassDOT work zone" : "Cambridge street permit";
+            // Escaped, like the hover popup beside it: every field here comes from a
+            // city permit feed or MassDOT's work-zone API, so a project named
+            // `<img onerror=…>` would have run in the reader's page. The hover popup
+            // escaped these and this one did not, which is the kind of gap that
+            // survives precisely because the two look alike.
+            // MapLibre hands back whatever the feed had, including null, and a permit
+            // whose address is three spaces should read as absent rather than as a
+            // blank line. An empty string was already absent, as the `||` chain here
+            // used to treat it.
+            const text = (t) => typeof t === "string" && t.trim() !== "" ? esc(t.trim()) : "";
+            const title = text(props.name) || text(props.kind) || "construction";
+            const address = text(props.address);
+            const detail = text(props.detail);
             new maplibregl.Popup()
                 .setLngLat(e.lngLat)
-                .setHTML(`🚧 <b>${props.name || props.kind || "construction"}</b><br>` +
-                `${props.address ?? ""}${props.detail ? `<br>${props.detail}` : ""}` +
-                `<br><small>${source} · ${props.start ?? "?"} → ${props.end ?? "?"}</small>`)
+                .setHTML(`🚧 <b>${title}</b><br>${address}` +
+                (detail === "" ? "" : `<br>${detail}`) +
+                `<br><small>${source} · ${text(props.start) || "?"} → ${text(props.end) || "?"}</small>`)
                 .addTo(map);
         });
     }
@@ -4241,15 +4252,8 @@ el("layers-reset").addEventListener("click", () => {
         box.dispatchEvent(new Event("change", { bubbles: true }));
     }
 });
-// the planner layers name the workspace they belong to, so the link goes there
-el("layers-build-link").addEventListener("click", (e) => {
-    e.preventDefault();
-    const build = document.getElementById("build-box");
-    if (build) {
-        build.open = true;
-        build.scrollIntoView({ behavior: "smooth", block: "nearest" });
-    }
-});
+// The planner layers belong to a workspace of its own now, so the link leaves
+// the rider's app rather than expanding a section inside it.
 // The stops menu. The three detours were three of nine buttons in a drawer;
 // they are one dock button and a menu that opens upward, out from under the
 // thumb that just tapped it.
@@ -4633,6 +4637,31 @@ if ("serviceWorker" in navigator) {
     }
 }
 const WEIGHT_KEYS = ["severance", "access", "crash", "coverage"];
+/** The slider positions matching the weighting the pipeline actually ranked with.
+ *
+ * Read from the data rather than repeated here. These used to be four literals
+ * with a comment saying they were the pipeline's weighting — which was true only
+ * as long as nobody changed PRIORITY_WEIGHTS, and if anyone had, this list and
+ * the /build workspace would have disagreed with the exported score, and with
+ * each other, about which project a city should do first.
+ */
+function publishedWeightPositions() {
+    const w = priorityMeta?.model?.weights;
+    if (w === undefined)
+        return null;
+    const vals = WEIGHT_KEYS.map((k) => w[k]);
+    if (!vals.every((v) => typeof v === "number" && Number.isFinite(v) && v >= 0)) {
+        return null;
+    }
+    const total = vals.reduce((a, b) => a + b, 0);
+    if (total <= 0)
+        return null;
+    const out = {};
+    WEIGHT_KEYS.forEach((k, i) => {
+        out[k] = String(Math.round((vals[i] / total) * 100));
+    });
+    return out;
+}
 let projects = [];
 /** The loaded layer, kept so re-weighting can repaint it. */
 let projectFC = null;
@@ -4931,17 +4960,21 @@ function describeMeta(meta) {
                 `library within ${Math.round((meta.access?.budget_m ?? 0) / 100) / 10} km of ` +
                 "perceived distance. These are the projects that would change that most.";
     const limits = meta.limits ?? [];
+    // A field the build did not record is not a zero. "Measured 0 candidates
+    // against 0 schools" reads as a finished analysis that found nothing, which is
+    // the opposite of what a missing count means.
+    const counted = (n) => (n === undefined ? "the" : String(n));
     el("build-method").textContent =
-        `Measured ${meta.candidates ?? 0} candidates against ${meta.destinations ?? 0} ` +
-            `schools, playgrounds and libraries (data built ${meta.built ?? "—"}). ` +
-            "Method and limits are in About.";
+        `Measured ${counted(meta.candidates)} candidates against ${counted(meta.destinations)} ` +
+            `schools, playgrounds and libraries it found (data built ` +
+            `${meta.built ?? "an unrecorded date"}). Method and limits are in About.`;
     // The same limits, in full, where someone checking a number will look. A
     // ranking a city might quote in public needs its caveats somewhere citable.
     el("about-build").style.display = limits.length > 0 ? "block" : "none";
     el("about-build-text").textContent =
         `Every street a kid can't use is cut into candidate projects, and each is ` +
             `measured against the network as it stands: what kid-safe network it would ` +
-            `join, how much closer it brings people to ${meta.destinations ?? 0} schools, ` +
+            `join, how much closer it brings people to ${counted(meta.destinations)} schools, ` +
             `playgrounds and libraries, its recorded bike crashes, and how many ` +
             `residents gain a safe route at all. Population is ${meta.population?.source ?? "unavailable"}. ${meta.access?.budget_note ?? ""}`;
     const list = el("about-build-limits");
@@ -4968,6 +5001,13 @@ function ensureBuildMeta() {
         .then(() => loadJson("priorities_meta.json"))
         .then((meta) => {
         priorityMeta = meta;
+        // the sliders start where the analysis did, so this list and /build open on
+        // the same ranking as the exported score
+        const published = publishedWeightPositions();
+        if (published) {
+            for (const key of WEIGHT_KEYS)
+                el(`wt-${key}`).value = published[key];
+        }
         el("build-box").style.display = "block";
         describeMeta(meta);
     })
@@ -5088,10 +5128,16 @@ function printProject(pid) {
         ["Length", fmtDist(p.length_m)],
         ["Today", esc(p.cls.replace(/_/g, " "))],
         ["Kind", p.kind === "spot_fix" ? "spot fix (one location)" : "corridor"],
-        ["Kid-safe network it joins", fmtDist(p.join_m)],
+        // join_m is the smaller of the two sides — the streets connected in, not the
+        // network they connect to. The /build workspace says it this way too; two
+        // surfaces describing one field differently is how a city gets two answers.
+        ["Kid-safe streets it would connect in", fmtDist(p.join_m)],
     ];
     if (p.dest_unlocked !== null) {
-        rows.push(["Schools, playgrounds, libraries on it", String(p.dest_unlocked)]);
+        rows.push([
+            "Schools, playgrounds, libraries on the network it opens",
+            String(p.dest_unlocked),
+        ]);
     }
     if (p.pop_gaining !== null && headcount) {
         rows.push(["Residents gaining a safe route", Math.round(p.pop_gaining).toLocaleString()]);
@@ -5121,8 +5167,9 @@ function printProject(pid) {
         .join("")}</table>
     <p class="method"><b>How this was measured.</b> Streets a child can't use are
     cut into candidate projects and each is scored on four things: the kid-safe
-    network it would join, how much closer it brings people to
-    ${meta?.destinations ?? 0} schools, playgrounds and libraries, its recorded
+    streets it would connect in, how much closer it brings people to
+    ${meta?.destinations === undefined ? "the" : String(meta.destinations)} schools,
+    playgrounds and libraries it counted, its recorded
     bike crashes, and how many residents gain a safe route at all. Population:
     ${esc(meta?.population?.source ?? "not available")}.
     ${esc(meta?.access?.budget_note ?? "")}
@@ -5158,7 +5205,7 @@ for (const key of WEIGHT_KEYS) {
 }
 el("wt-reset").addEventListener("click", () => {
     // back to the pipeline's own weighting, which the exported score used
-    const defaults = {
+    const defaults = publishedWeightPositions() ?? {
         severance: "40",
         access: "30",
         crash: "15",

@@ -77,15 +77,35 @@ test("every emoji control carries a word and a label (tooltips don't exist on to
   }
 });
 
-test("the warning triangle renders as an emoji, not a hairline glyph", async ({ page }) => {
+test("every pictograph on the ride surface renders in colour, not as a hairline", async ({
+  page,
+}) => {
   await startNav(page);
-  await page.locator("#nav-banner").click({ position: { x: 40, y: 60 } });
-  // U+FE0F forces the coloured presentation; without it the one control with a
-  // persistent side effect was the faintest thing in the row
-  const glyph = await page.evaluate(
-    () => document.querySelector("#nav-hazard span")?.textContent ?? "",
-  );
-  expect(glyph).toContain("️");
+  // A pictograph without emoji presentation draws as thin monochrome line art —
+  // which is how "avoid this street", the one control with a lasting side
+  // effect, became the faintest thing on screen. Controls only: the banner's
+  // turn arrow (⬆) is pictographic too, and it is line art on purpose — a
+  // coloured emoji arrow would read as decoration where direction is the point.
+  const bad = await page.evaluate(() => {
+    const out: string[] = [];
+    const sel = "#ride-dock button, #nav-controls button, #nav-stops-menu button";
+    for (const node of document.querySelectorAll<HTMLElement>(sel)) {
+      const text = node.textContent ?? "";
+      for (const ch of [...text]) {
+        if (!/\p{Extended_Pictographic}/u.test(ch)) continue;
+        // coloured either by default presentation or by an explicit U+FE0F
+        const isDefault = /\p{Emoji_Presentation}/u.test(ch);
+        const forced = text.includes(ch + "\ufe0f");
+        if (!isDefault && !forced) out.push(`${node.id || node.className}: ${ch}`);
+      }
+    }
+    return out;
+  });
+  expect(bad, "monochrome pictographs on the ride surface").toEqual([]);
+
+  // and the avoid control is still there, still carrying a pictograph
+  const avoidGlyph = await page.locator("#nav-hazard").textContent();
+  expect(avoidGlyph).toMatch(/\p{Extended_Pictographic}/u);
 });
 
 test("adjacent controls are far enough apart to not mis-tap", async ({ page }) => {
@@ -782,4 +802,30 @@ test("marking a street mid-ride doesn't stall guidance to refresh a hidden list"
   // a frame budget is 16 ms; a routing run is hundreds. Generous, because a
   // loaded runner has its own stalls — this is looking for the big one.
   expect(blocked, `the main thread froze for ${Math.round(blocked)} ms mid-ride`).toBeLessThan(400);
+});
+
+test("the ride surface is three things and nothing else", async ({ page }) => {
+  // This is the contract, not a snapshot. Riding is its own surface: the map,
+  // the guidance, the dock. Every feature added to the planner is a candidate
+  // for leaking onto it — the update banner and the data-download notice both
+  // had to be suppressed by hand — so the list is asserted exhaustively and a
+  // new arrival fails here rather than covering a turn instruction.
+  await startNav(page);
+  const onScreen = await page.evaluate(() =>
+    [...document.querySelectorAll("body > *")]
+      .filter((e) => {
+        const s = getComputedStyle(e);
+        const r = e.getBoundingClientRect();
+        return s.display !== "none" && s.visibility !== "hidden" && r.width > 0 && r.height > 0;
+      })
+      .map((e) => e.id || e.tagName.toLowerCase())
+      .sort(),
+  );
+  expect(onScreen).toEqual(["map", "nav-banner", "ride-dock"]);
+  // and the planning sheet is gone, not merely scrolled away
+  expect(
+    await page.evaluate(
+      () => getComputedStyle(document.getElementById("panel") as HTMLElement).display,
+    ),
+  ).toBe("none");
 });

@@ -27,6 +27,7 @@ import json
 import math
 import pickle
 import re
+import urllib.parse
 from pathlib import Path
 from typing import Any
 
@@ -472,7 +473,9 @@ PAGE_TEMPLATE = """<!doctype html>
       <ul id="limits-list"></ul>
     </details>
     <p>Data built <span id="built">—</span>. Part of the
-    <a href="../">family bike route planner</a>.</p>
+    <a href="../">family bike route planner</a>. The same candidates, ranked and
+    re-weightable for {name}, are in the
+    <a href="../build/?town={name_url}">where-to-build workspace</a>.</p>
   </div>
 </main>
 <script type="module" src="../city.js"></script>
@@ -495,8 +498,14 @@ def write_page(slug: str, name: str) -> Path:
     # from a MassGIS layer today, but nothing here should depend on that
     safe = html.escape(name, quote=True)
     description = DESCRIPTION.format(name=safe)
+    # The workspace filters on the town name as the priorities data spells it —
+    # "North Reading", not the slug — so the link carries the name, percent-
+    # encoded for the query string rather than HTML-escaped for text.
+    name_url = urllib.parse.quote(name)
     page.write_text(
-        PAGE_TEMPLATE.format(slug=slug, name=safe, description=description, csp=CSP)
+        PAGE_TEMPLATE.format(
+            slug=slug, name=safe, name_url=name_url, description=description, csp=CSP
+        )
     )
     return page
 

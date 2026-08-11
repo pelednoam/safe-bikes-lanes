@@ -5,6 +5,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  cautionsHtml,
   classGrade,
   clearPhotoCache,
   esc,
@@ -459,5 +460,46 @@ describe("escaping data the project does not control", () => {
     expect(esc(">")).toBe("&gt;");
     // ampersands first, or every other escape gets double-encoded
     expect(esc("Tom & Jerry's <b>")).toBe("Tom &amp; Jerry's &lt;b&gt;");
+  });
+});
+
+describe("cautionsHtml", () => {
+  const fmt = (m: number): string => `${String(Math.round(m))} m`;
+
+  it("escapes the street name, which comes from OpenStreetMap", () => {
+    // The printed cue sheet is built with document.write, so a name carrying
+    // markup used to run in that window. Anyone can edit an OSM name.
+    const html = cautionsHtml(
+      [{ name: '<img src=x onerror="alert(1)">Beacon St', meters: 120, cls: "busy_street" }],
+      fmt,
+    );
+    expect(html).not.toContain("<img");
+    expect(html).toContain("&lt;img");
+    expect(html).toContain("onerror=&quot;alert(1)&quot;");
+    // and the name is still legible
+    expect(html).toContain("Beacon St");
+    expect(html).toContain("120 m");
+  });
+
+  it("names the class in words, and passes an unknown class through escaped", () => {
+    expect(cautionsHtml([{ name: "Elm St", meters: 80, cls: "busy_street" }], fmt)).toContain(
+      "busy street",
+    );
+    const odd = cautionsHtml([{ name: "Elm St", meters: 80, cls: "<b>new_kind</b>" }], fmt);
+    expect(odd).not.toContain("<b>");
+    expect(odd).toContain("&lt;b&gt;new_kind&lt;/b&gt;");
+  });
+
+  it("is one <li> per caution, and empty for none", () => {
+    expect(cautionsHtml([], fmt)).toBe("");
+    const two = cautionsHtml(
+      [
+        { name: "A St", meters: 10, cls: "busy_street" },
+        { name: "B St", meters: 20, cls: "lane" },
+      ],
+      fmt,
+    );
+    expect(two.match(/<li>/g)?.length).toBe(2);
+    expect(two.indexOf("A St")).toBeLessThan(two.indexOf("B St"));
   });
 });

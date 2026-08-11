@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- No third-party script: MapLibre is served from this origin. Narrower than
+     the planner's policy because this page geocodes nothing, speaks nothing and
+     frames nothing — it reads two data files and draws lines.
+     style-src is 'self' with no inline allowance at all: MapLibre positions its
+     markers and controls through the CSSOM (element.style.left = …), which CSP
+     does not govern, so it needs neither 'unsafe-inline' nor style-src-attr.
+     Verified rather than assumed — the suite loads the map, drags the camera and
+     opens a marker under this policy, and refuses an injected <style>.
+     data:/blob: in img-src are MapLibre's own (canvas and marker images);
+     removing them breaks the map, which the suite checks. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob: https://basemaps.cartocdn.com; connect-src 'self' https://basemaps.cartocdn.com; worker-src 'self' blob:; frame-src 'none'; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Where to build — safe bike lanes</title>
+<meta name="description" content="Which new bike infrastructure would open up the most for families riding with children: candidate projects ranked on the kid-safe streets they would connect in, reach to schools and parks, crash history and residents' access.">
+<link rel="stylesheet" href="../maplibre-gl.css">
+<link rel="stylesheet" href="../build.css">
+<link rel="apple-touch-icon" href="../icon-192.png">
+<meta name="theme-color" content="#12833f">
+</head>
+<body>
+<div id="map"></div>
+
+<main id="rank-panel">
+  <p class="kicker">Where to build</p>
+  <h1>What new protection would open up the most</h1>
+  <p class="lede">Hostile streets that would join two pieces of the network a
+    child can already ride, ranked. <span id="counts"></span></p>
+
+  <div class="controls">
+    <select id="town" aria-label="Filter by town"><option value="">All towns</option></select>
+    <button id="csv" type="button"
+            title="The ranking as shown — this town, this weighting — with every measured component">⬇ CSV</button>
+  </div>
+
+  <h2>What counts most</h2>
+  <!-- Relative shares on a 0-100 scale, normalised to sum to 1, and started from
+       the weighting the pipeline itself used (meta.model.weights) — so the
+       ranking a reader first sees is the one the exported `score` field ranks by,
+       and the same one the app's own list shows. Equal weights here would have
+       made three surfaces disagree about which project is first. -->
+  <div class="weight"><label for="w-sev">Gap-closing</label><span class="val" id="v-sev">—</span>
+    <input id="w-sev" type="range" min="0" max="100" step="1" value="40"></div>
+  <div class="weight"><label for="w-acc">Reach to schools &amp; parks</label><span class="val" id="v-acc">—</span>
+    <input id="w-acc" type="range" min="0" max="100" step="1" value="30"></div>
+  <div class="weight"><label for="w-crash">Crash history</label><span class="val" id="v-crash">—</span>
+    <input id="w-crash" type="range" min="0" max="100" step="1" value="15"></div>
+  <div class="weight"><label for="w-cov">Residents gaining access</label><span class="val" id="v-cov">—</span>
+    <input id="w-cov" type="range" min="0" max="100" step="1" value="15"></div>
+  <p class="note">Re-sorts what has already been measured — no number changes, only
+    how much it counts. <button id="w-reset" type="button">reset</button></p>
+
+  <h2>Ranked</h2>
+  <div id="list"></div>
+  <p class="note" id="more" hidden></p>
+  <div id="empty" hidden>No candidates in that town in this build.</div>
+
+  <p class="note">Data built <span id="built">—</span>. Part of the
+    <a href="../">family bike route planner</a> — see also
+    <a href="../somerville/">Somerville</a>,
+    <a href="../cambridge/">Cambridge</a> and
+    <a href="../lexington/">Lexington</a>.</p>
+</main>
+
+<aside id="detail-panel" aria-live="polite">
+  <p class="rank-line" id="d-rank"></p>
+  <h3 id="d-name"></h3>
+  <p class="where" id="d-where"></p>
+  <div class="figures" id="d-figures"></div>
+  <table class="rows"><tbody id="d-rows"></tbody></table>
+  <p class="whatif" id="d-whatif"></p>
+  <p class="note" id="d-summary"></p>
+  <div class="actions">
+    <button id="print" type="button" class="primary">🖨 One-pager for this project</button>
+    <button id="back-to-list" type="button">← All projects</button>
+  </div>
+  <details class="limits">
+    <summary>What this ranking does not do</summary>
+    <ul id="limits"></ul>
+    <p class="method" id="method"></p>
+  </details>
+</aside>
+
+<script src="../maplibre-gl.js"></script>
+<script type="module" src="../build.js"></script>
+</body>
+</html>
