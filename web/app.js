@@ -1385,6 +1385,10 @@ function regradeVisible() {
             return; // the list is gone; nothing to redo
         row.badge.textContent = "·";
         row.badge.style.background = "";
+        // the old letter goes from the tooltip and the label too, not just the pixel
+        row.badge.removeAttribute("title");
+        row.badge.removeAttribute("aria-label");
+        showGrading(row);
         row.sub.textContent = "checking the safest way…";
     }
     void gradeSearchResults(gradedRows);
@@ -1401,6 +1405,16 @@ function clearGrading(row) {
     row.badge.style.visibility = "hidden";
     row.sub.style.visibility = "hidden";
     row.sub.textContent = "";
+    // the letter is withdrawn from assistive technology too, not just from view
+    row.badge.removeAttribute("title");
+    row.badge.removeAttribute("aria-label");
+}
+/** Put a row back in play. Without this, hiding was permanent: search with no
+ * start, then set one, and the rows stayed blank for ever because nothing ever
+ * undid the visibility. */
+function showGrading(row) {
+    row.badge.style.visibility = "";
+    row.sub.style.visibility = "";
 }
 /** Cancels grading when a new search lands: five routes take a moment, and the
  * answers to the last query must not appear against this one's rows. */
@@ -1447,12 +1461,21 @@ async function gradeSearchResults(rows) {
     for (const row of rows.slice(MAX_GRADED))
         clearGrading(row);
     for (const row of rows.slice(0, MAX_GRADED)) {
+        showGrading(row); // it may have been cleared by an earlier pass
         // hand the page back between routes: five Dijkstras in a row on the main
         // thread is a visible stall on a phone
         await new Promise((r) => setTimeout(r, 0));
         if (mine !== gradeGen)
             return; // a newer search owns the list now
-        const key = routeCacheKey({ from: a, to: row.lngLat, ...snap });
+        const key = routeCacheKey({
+            from: a,
+            to: row.lngLat,
+            profileId: snap.profileId,
+            preferFlat: snap.preferFlat,
+            avoid: snap.avoid,
+            walkMaxM: snap.walkMaxM,
+            avoidRevision: snap.avoidRevision,
+        });
         let hit = gradeCache.get(key);
         if (hit === undefined) {
             try {
@@ -2784,6 +2807,10 @@ for (const radio of document.querySelectorAll("input[name=profile]")) {
             profileId = v;
             void requestRoute();
             void computeShed();
+            // the letters were the safest route for a different rider; a cache key
+            // can stop a stale one being replayed but cannot take down one already
+            // on screen
+            regradeVisible();
         }
     });
 }

@@ -377,14 +377,6 @@
        route away — a miss between two buttons should do nothing, not that. */
     pointer-events:auto;
   }
-  /* One row, always. Wrapping put a second row under the lifted attribution and
-     the stops menu; shrinking to fit is predictable, and 54 px is still a
-     comfortable target. */
-  @media (max-width: 380px) {
-    .dock-btn { width:54px; height:54px; }
-    .dock-btn .dock-icon { font-size:21px; }
-    .dock-btn .dock-label { font-size:9px; max-width:52px; }
-  }
   body.navigating #ride-dock { display:flex; }
   .dock-btn {
     pointer-events:auto;
@@ -406,13 +398,25 @@
   /* "recentring would do nothing right now" — said with weight, not by
      disappearing and re-spacing the row under a moving thumb */
   .dock-btn.idle { opacity:.5; }
+  /* One row, always. Wrapping put a second row under the lifted attribution.
+     AFTER the base rules on purpose — a media query adds no specificity, so
+     declared before them these lost to the 64 px they were meant to override,
+     and the guard was dead CSS that measured as "fine" at 360 px because five
+     64 px circles happen to fit there. */
+  @media (max-width: 380px) {
+    .dock-btn { width:54px; height:54px; }
+    .dock-btn .dock-icon { font-size:21px; }
+    .dock-btn .dock-label { font-size:9px; max-width:52px; }
+  }
   /* opens upward from the dock, so the thumb doesn't cover it */
   #nav-stops-menu {
     /* Centred, not right-aligned: it used to sit directly over "end ride" with
        about 10 px of clearance, so a thumb reaching past "park" could end the
        ride instead. */
+    /* Above the attribution band, not across it: the attribution was lifted to
+       clear the dock, and the menu opened straight into the space it moved to. */
     position:absolute; z-index:8; left:50%; transform:translateX(-50%);
-    bottom:calc(96px + env(safe-area-inset-bottom));
+    bottom:calc(120px + env(safe-area-inset-bottom));
     display:flex; gap:8px; padding:9px; border-radius:var(--r-lg);
     background:var(--surface); border:1px solid var(--line); box-shadow:var(--shadow);
     -webkit-backdrop-filter:blur(20px) saturate(1.5); backdrop-filter:blur(20px) saturate(1.5);

@@ -868,3 +868,77 @@ test("picking a start doesn't get graded as if it were a destination", async ({ 
     );
   expect(shownSubs).toBe(0);
 });
+
+test("searching before setting a start still gets grades once there is one", async ({
+  page,
+}) => {
+  // Rows with nowhere to route from are hidden rather than removed, so the list
+  // doesn't re-flow under a finger. Nothing ever un-hid them, so this ordinary
+  // sequence — look for somewhere to go, then say where you are — left the
+  // whole list permanently blank.
+  await page.goto("/");
+  await page.waitForFunction(() => window._map !== undefined, null, { timeout: 60_000 });
+  await page.waitForTimeout(2000);
+
+  await page.locator("#search").fill("danehy");
+  await expect(page.locator(".search-row").first()).toBeVisible({ timeout: 30_000 });
+  await page.waitForTimeout(3000);
+  const badge = page.locator(".search-row").first().locator(".search-grade");
+  expect(await badge.evaluate((b) => getComputedStyle(b).visibility)).toBe("hidden");
+
+  // now set a start by picking it on the map — the flow "plan a ride entirely
+  // with the mouse" already exercises
+  await page.locator("#from-pick").click();
+  const spot = await at(page, -71.0995, 42.3875);
+  await page.mouse.click(spot.x, spot.y);
+  await expect
+    .poll(() => page.locator(".maplibregl-marker").count(), { timeout: 30_000 })
+    .toBeGreaterThan(0);
+
+  await expect.poll(async () => (await badge.innerText()).trim(), { timeout: 60_000 }).toMatch(
+    /^[ABCDF]$/,
+  );
+  expect(await badge.evaluate((b) => getComputedStyle(b).visibility)).toBe("visible");
+});
+
+test("changing rider takes down the letters computed for the last one", async ({
+  page,
+  context,
+}) => {
+  // A grade is the safest route for a particular rider. Switching from young
+  // kids to solo leaves letters describing a route the app would no longer
+  // suggest — and a cache key can prevent a stale one being replayed but cannot
+  // take down one already on screen.
+  await context.grantPermissions(["geolocation"]);
+  await context.setGeolocation({ latitude: 42.3875, longitude: -71.0995 });
+  await page.goto("/");
+  await page.waitForFunction(() => window._map !== undefined, null, { timeout: 60_000 });
+  await page.waitForTimeout(2500);
+  await page.locator("#search").fill("danehy");
+  await expect(page.locator(".search-row").first()).toBeVisible({ timeout: 30_000 });
+  const badge = page.locator(".search-row").first().locator(".search-grade");
+  await expect.poll(async () => (await badge.innerText()).trim(), { timeout: 60_000 }).toMatch(
+    /^[ABCDF]$/,
+  );
+
+  await page.evaluate(() => {
+    const el = document.querySelector(".search-row .search-grade");
+    if (!el) return;
+    (window as unknown as { __seen2: string[] }).__seen2 = [];
+    new MutationObserver(() => {
+      (window as unknown as { __seen2: string[] }).__seen2.push((el.textContent ?? "").trim());
+    }).observe(el, { childList: true, characterData: true, subtree: true });
+  });
+  // the radio itself is visually hidden behind a styled label
+  await page.locator("#modes label", { hasText: "solo" }).click();
+
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as { __seen2: string[] }).__seen2 ?? []), {
+      timeout: 60_000,
+    })
+    .toContain("·");
+  // the tooltip and the label must go with it — a stale letter left in either
+  // is the same claim, made to someone using a screen reader
+  const stale = await badge.evaluate((b) => b.getAttribute("aria-label") ?? "");
+  expect(stale === "" || /grades [ABCDF]$/.test(stale)).toBe(true);
+});

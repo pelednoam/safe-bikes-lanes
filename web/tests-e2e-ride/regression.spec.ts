@@ -713,3 +713,46 @@ test("marking a street to avoid doesn't require filing a photo report first", as
   // the rider is told it landed — the map change is off-screen behind the dot
   await expect(page.locator("#nav-alert")).toBeVisible({ timeout: 5_000 });
 });
+
+test("the stops menu doesn't cover the attribution either", async ({ page }) => {
+  // it is a licensing requirement, and the menu opened straight into the band
+  // the attribution had just been lifted into to clear the dock
+  await startNav(page);
+  await page.locator("#nav-stops").click();
+  await expect(page.locator("#nav-stops-menu")).toBeVisible();
+  const gap = await page.evaluate(() => {
+    const a = document.querySelector(".maplibregl-ctrl-attrib")?.getBoundingClientRect();
+    const m = document.querySelector("#nav-stops-menu")?.getBoundingClientRect();
+    if (!a || !m || a.width === 0) return null;
+    return a.top - m.bottom; // positive: the menu sits clear above it
+  });
+  expect(gap, "the attribution isn't rendered, so this proves nothing").not.toBeNull();
+  expect(gap ?? -1).toBeGreaterThanOrEqual(0);
+});
+
+test("the dock fits the narrowest phone, not just the one I measured", async ({ page }) => {
+  // The shrink rule was declared before the base rule at equal specificity, so
+  // it never applied — and measuring at 360 px looked fine because five 64 px
+  // circles happen to fit there. 320 px is where it shows.
+  await page.setViewportSize({ width: 320, height: 720 });
+  await startNav(page);
+  const dock = await page.evaluate(() => {
+    const b = [...document.querySelectorAll("#ride-dock .dock-btn")].map((x) =>
+      x.getBoundingClientRect(),
+    );
+    return {
+      widths: b.map((r) => Math.round(r.width)),
+      rows: new Set(b.map((r) => Math.round(r.top))).size,
+      rightmost: Math.max(...b.map((r) => r.right)),
+      viewport: window.innerWidth,
+    };
+  });
+  expect(dock.rows, "the dock wrapped onto two rows").toBe(1);
+  expect(dock.rightmost, "a control is off the side of the screen").toBeLessThanOrEqual(
+    dock.viewport,
+  );
+  // still a thumb target, just a smaller one
+  for (const w of dock.widths) expect(w).toBeGreaterThanOrEqual(48);
+  // and the rule genuinely applied rather than the base size happening to fit
+  expect(Math.max(...dock.widths)).toBeLessThan(64);
+});
