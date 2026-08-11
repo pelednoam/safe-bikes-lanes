@@ -14,6 +14,7 @@ import os
 import pickle
 from collections import Counter
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from typing import Any, Final
 
 import config
@@ -513,6 +514,15 @@ def build() -> None:
         nd["elev"] = round(e_m, 1)
 
     mem("after elevation sampling")
+    # The edge attributes the write-back below puts on every edge. Stamped onto
+    # the graph so a consumer can tell a graph it can use from one built before
+    # the attribute it needs existed. Add to this when you add a write-back.
+    EDGE_ATTRS_WRITTEN = frozenset(
+        {
+            "climb", "xpen", "road_busy", "crash_count", "cls", "stress_mult",
+            "crash_factor", "weight", "weight_solo",
+        }
+    )
     # final weights (kids + solo), written back into the graph
     for (u, v, k), row in edges.iterrows():
         pen = 0.0
@@ -551,6 +561,17 @@ def build() -> None:
         dist[d["cls"]] += d["length"]
     for cls, meters in sorted(dist.items(), key=lambda x: -x[1]):
         print(f"  {cls:16s} {meters/1000:8.1f} km")
+
+    # What this graph carries, recorded on the graph itself. Downstream analyses
+    # read edge attributes written above; a graph built by older code is missing
+    # some of them, and every consumer so far discovered that by silently taking
+    # a fallback path. priorities.py has spent weeks reporting "recorded bike
+    # crashes nearby" instead of counts because it read a graph built before
+    # crash_count existed, and nothing said so.
+    G.graph["edge_schema"] = sorted(EDGE_ATTRS_WRITTEN)
+    G.graph["crashes_joined"] = int(edges["crash_count"].sum())
+    G.graph["built_at"] = datetime.now(UTC).isoformat(timespec="seconds")
+    G.graph["data_format"] = config.DATA_FORMAT
 
     config.DATA_DIR.mkdir(exist_ok=True)
     with open(config.DATA_DIR / "graph.pkl", "wb") as f:

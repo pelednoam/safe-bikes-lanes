@@ -49,12 +49,18 @@ class GraphBuilder:
             "path": 1.0, "separated": 1.0, "buffered": 2.0, "quiet_street": 1.4,
             "lane": 3.0, "sharrow": 6.0, "moderate_street": 8.0, "busy_street": 25.0,
         }[cls]
+        # crash_factor the way build_graph derives it, because the analysis reads
+        # it and refuses a graph without it — a fixture that omits an attribute
+        # the real graph always carries is a fixture testing a graph that cannot
+        # exist.
+        per_100m = crashes / max(length, 20.0) * 100
+        factor = min(1 + config.CRASH_WEIGHT * per_100m, config.CRASH_FACTOR_CAP)
         for a, b in ((u, v), (v, u)):
             self.g.add_edge(
                 a, b, length=length, cls=cls, stress_mult=mult, name=name,
-                crash_count=crashes,
+                crash_count=crashes, crash_factor=factor,
                 # what build_graph writes: perceived cost the router travels on
-                weight=length * mult,
+                weight=length * mult * factor,
             )
 
 

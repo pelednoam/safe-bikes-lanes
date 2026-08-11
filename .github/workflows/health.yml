@@ -1,0 +1,50 @@
+name: Live data health
+
+# Every other check in this repo runs before or during a deploy, on data the same
+# job just built. This one reads the deployed site instead, because the failure
+# nobody was watching for is a green deploy whose data is later replaced, or
+# quietly ages, or arrives with a whole criterion empty — which is what happened
+# on 2026-08-10 and went unreported for a week.
+#
+# Daily, and on every push, so it keeps working even if GitHub disables the
+# schedule (it does that after 60 days of repository inactivity — a silent stop
+# by design, and the exact thing a freshness check exists to catch).
+on:
+  schedule:
+    - cron: "0 13 * * *"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check the deployed data
+        id: check
+        continue-on-error: true
+        run: python3 scripts/check-live-data.py 2>&1 | tee /tmp/health.txt
+
+      - name: Say so where it will be seen
+        # A failing scheduled run is an email nobody reads twice. An open issue
+        # stays until the data is fixed, and closes itself when it is.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OUTCOME: ${{ steps.check.outcome }}
+        run: bash scripts/report-live-health.sh
+
+      - name: Fail the run if the live data is wrong
+        if: steps.check.outcome == 'failure'
+        run: |
+          echo "live data check failed — see the issue and /tmp/health.txt above"
+          exit 1

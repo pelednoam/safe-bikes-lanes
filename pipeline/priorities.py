@@ -26,12 +26,14 @@ import csv
 import datetime
 import json
 import math
+import os
 import pickle
 import time
 from collections import defaultdict
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import config
 import networkx as nx
@@ -669,10 +671,51 @@ def write_csv(path: Any, candidates: list[Candidate]) -> None:
             )
 
 
+# Edge attributes this analysis reads. A graph without them is not a graph this
+# can measure — see require_usable_graph().
+NEEDED_EDGE_ATTRS: Final[frozenset[str]] = frozenset(
+    {"length", "cls", "stress_mult", "crash_factor", "crash_count"}
+)
+
+
+def require_usable_graph(graph: nx.MultiDiGraph) -> None:
+    """Refuse a graph built before the attributes this analysis reads existed.
+
+    This is the check that was missing. graph.pkl carried every attribute except
+    crash_count, because it was built before that write-back landed; the analysis
+    ran happily, took its honest "we don't know the counts" fallback on all 5,685
+    candidates, and published a ranking with one of its four criteria resting on a
+    derived proxy. A fallback for missing *data* is right. Silently using it for
+    missing *code* output is not, so this fails loudly instead.
+    """
+    stamped = graph.graph.get("edge_schema")
+    missing: set[str]
+    if stamped is not None:
+        missing = set(NEEDED_EDGE_ATTRS) - set(stamped)
+    else:
+        # An older graph carries no stamp, so ask the edges. Intersecting across a
+        # sample rather than checking one edge: an attribute absent everywhere is
+        # a stale graph, while one absent from a single odd edge is not.
+        missing = set(NEEDED_EDGE_ATTRS)
+        for _u, _v, data in list(graph.edges(data=True))[:200]:
+            missing &= set(NEEDED_EDGE_ATTRS) - set(data)
+            if not missing:
+                break
+    if missing:
+        raise SystemExit(
+            "graph.pkl is missing edge attributes this analysis reads: "
+            f"{', '.join(sorted(missing))}. It was built by an older "
+            "build_graph.py — re-run `python build_graph.py` before this. "
+            "(Refusing rather than falling back: the fallback is for data the "
+            "sources didn't have, not for a stale graph.)"
+        )
+
+
 def build(limit: int | None = None) -> list[Candidate]:
     """Run the analysis over the built graph and write the outputs."""
     with open(config.DATA_DIR / "graph.pkl", "rb") as fh:
         graph: nx.MultiDiGraph = pickle.load(fh)
+    require_usable_graph(graph)
     print(f"graph: {len(graph.nodes)} nodes, {len(graph.edges)} edges")
 
     island_of, island_m = safe_islands(graph)
@@ -744,7 +787,8 @@ def build(limit: int | None = None) -> list[Candidate]:
     export_spot_fixes(out_dir, shown)
     write_meta(out_dir, candidates, shown_count=len(shown), islands=island_m,
                destinations=len(destinations), pop=pop, pop_is_real=pop_is_real,
-               stranded=stranded, stranded_pct=stranded_pct)
+               stranded=stranded, stranded_pct=stranded_pct,
+               graph_meta=graph.graph)
     dropped = len(candidates) - len(shown)
     print(
         f"wrote priorities.csv ({len(candidates)} projects) and "
@@ -1170,6 +1214,7 @@ def write_meta(
     pop_is_real: bool,
     stranded: float,
     stranded_pct: float,
+    graph_meta: Mapping[str, Any] | None = None,
 ) -> None:
     """Where every number in this module came from, and what it doesn't mean.
 
@@ -1221,6 +1266,10 @@ def write_meta(
             # "since 2021" from a literal of its own, which would have misdated
             # the figure the first year this list changed.
             "crash_years": list(config.IMPACT_CRASH_YEARS),
+            # 0 means the crash join found nothing, which is not the same as "no
+            # street here had a crash": the pages have to be able to tell those
+            # apart, and so does the publish gate.
+            "crashes_joined": (graph_meta or {}).get("crashes_joined"),
             "upgrade_class": config.UPGRADE_CLASS,
             "upgrade_note": (
                 "a candidate is costed as if rebuilt to this class, dropping its"
@@ -1228,6 +1277,16 @@ def write_meta(
                 " addresses"
             ),
             "weights": dict(config.PRIORITY_WEIGHTS),
+        },
+        # What produced this file. The publish gate and the live-site health check
+        # read these: a snapshot with no edge_schema came from a pipeline older
+        # than the graph stamp, which is how a stale graph got published once.
+        "provenance": {
+            "graph_edge_schema": (graph_meta or {}).get("edge_schema"),
+            "graph_built_at": (graph_meta or {}).get("built_at"),
+            "graph_data_format": (graph_meta or {}).get("data_format"),
+            "crashes_joined": (graph_meta or {}).get("crashes_joined"),
+            "built_in_ci": bool(os.environ.get("GITHUB_ACTIONS")),
         },
         "limits": [
             "Scores are comparative within this run, not absolute: they answer"
