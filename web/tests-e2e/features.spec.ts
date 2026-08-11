@@ -459,6 +459,25 @@ test("Reset puts the layers back to what a rider starts with", async ({ page }) 
   await page.locator("#show-net").uncheck();
   await page.waitForTimeout(400);
 
+  // The layers really were on, or "they went away" is a statement about
+  // nothing. Only lanemap is checked: heatmap, elevation and lane coverage are
+  // mutually exclusive area overlays — ticking one unticks the others — so
+  // asserting two of them at once tests a state the app will never be in.
+  // Polled because they are built lazily on first use.
+  const visible = async (id: string): Promise<boolean> =>
+    await page.evaluate(
+      (l) =>
+        window._map?.getLayer(l) !== undefined &&
+        (window._map?.getLayoutProperty(l, "visibility") ?? "visible") === "visible",
+      id,
+    );
+  await expect.poll(() => visible("lanemap"), { timeout: 20_000 }).toBe(true);
+
+  // dark mode is the deliberate exception: it follows the rider's system
+  // setting and a reset on a night ride must not white out the screen
+  await page.locator("#dark-mode").check();
+  await page.waitForTimeout(300);
+
   await page.locator("#layers-reset").click();
   await page.waitForTimeout(600);
   // the two a rider wants on, and nothing else
@@ -472,13 +491,13 @@ test("Reset puts the layers back to what a rider starts with", async ({ page }) 
   // Checked without a `?? "none"` fallback: that turned a missing map, a
   // renamed layer and a never-set property into the same pass as a layer that
   // was genuinely hidden.
-  const heat = await page.evaluate(() => {
+  const lanes = await page.evaluate(() => {
     const m = window._map;
     if (!m) return "NO MAP";
-    if (m.getLayer("heatmap") === undefined) return "NO LAYER";
-    return String(m.getLayoutProperty("heatmap", "visibility") ?? "visible");
+    if (m.getLayer("lanemap") === undefined) return "NO LAYER";
+    return String(m.getLayoutProperty("lanemap", "visibility") ?? "visible");
   });
-  expect(heat).toBe("none");
+  expect(lanes).toBe("none");
   // and one layer is not the test: every planner layer must have gone too
   const planners = await page.evaluate(() =>
     ["lanemap", "access", "build"]
@@ -487,6 +506,7 @@ test("Reset puts the layers back to what a rider starts with", async ({ page }) 
   );
   expect(planners.length, "none of the planner layers existed to check").toBeGreaterThan(0);
   for (const p of planners) expect(p).toMatch(/=none$/);
+  await expect(page.locator("#dark-mode"), "Reset turned dark mode off").toBeChecked();
 });
 
 test("the planner layers point at the workspace they belong to", async ({ page }) => {

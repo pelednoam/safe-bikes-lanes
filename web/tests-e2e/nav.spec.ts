@@ -271,10 +271,13 @@ test("the rider's own zoom is kept (no snapping back), recenter restores follow"
   // Guard the premise before asserting the conclusion: if the wheel gesture
   // never actually moved the camera, "it came back to cruise" is true of a
   // camera that never left, and the test proves nothing.
+  // Comfortably outside the assertion's own tolerance (toBeCloseTo(x, 0) is
+  // ±0.5): a guard of 0.4 would have let a camera that barely moved satisfy
+  // both the premise and the conclusion.
   expect(
     Math.abs(zoomed - CRUISE),
     "the zoom gesture didn't move the camera, so there is nothing to come back from",
-  ).toBeGreaterThan(0.4);
+  ).toBeGreaterThan(1);
   await expect
     .poll(() => page.evaluate(() => window._map?.getZoom() ?? 0), { timeout: 25_000 })
     .toBeCloseTo(CRUISE, 0);

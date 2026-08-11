@@ -573,10 +573,12 @@ test("everything a moving rider taps is visible without opening anything", async
   await expect(dock).toHaveCount(5);
   for (const id of ["nav-recenter", "nav-mute", "nav-report", "nav-stops", "nav-exit"]) {
     await expect(page.locator(`#${id}`), `${id} must be visible while riding`).toBeVisible();
-    const inFold = await page
+    // reachable without any gesture: no ancestor is collapsed, and it is inside
+    // the dock rather than some other container that happens to be showing
+    const inDock = await page
       .locator(`#${id}`)
-      .evaluate((b) => b.closest('[style*="display:none"],[style*="display: none"]') !== null);
-    expect(inFold, `${id} is inside something hidden`).toBe(false);
+      .evaluate((b) => b.closest("#ride-dock") !== null);
+    expect(inDock, `${id} is not in the dock`).toBe(true);
   }
   // and there is no chevron left to hunt for
   expect(await page.locator("#nav-toggle").count()).toBe(0);
@@ -692,4 +694,22 @@ test("recentre says whether it would do anything, without moving", async ({ page
   await expect(btn).toHaveAttribute("aria-label", /recentre/i);
   await btn.click();
   await expect(btn).toHaveClass(/idle/);
+});
+
+test("marking a street to avoid doesn't require filing a photo report first", async ({ page }) => {
+  // It was a button in the drawer. Moved beside the hazard categories, it
+  // became reachable only in the 20 s after a photo report — a control that
+  // changes where every future route goes, hidden behind an unrelated action.
+  await startNav(page);
+  const avoid = page.locator("#nav-hazard");
+  await expect(avoid, "avoid-this-street must be reachable while simply riding").toBeVisible();
+  await expect(avoid).toHaveAttribute("aria-label", /avoid this street/i);
+  // and it is not inside the category row, whose delegated handler reads
+  // data-cat and would file a report with no category
+  const inCategories = await avoid.evaluate((b) => b.closest("#nav-classify") !== null);
+  expect(inCategories).toBe(false);
+
+  await avoid.click();
+  // the rider is told it landed — the map change is off-screen behind the dot
+  await expect(page.locator("#nav-alert")).toBeVisible({ timeout: 5_000 });
 });

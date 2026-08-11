@@ -699,10 +699,12 @@ test("a grade is never shown for a route that wasn't computed", async ({ page })
   await page.locator("#search").fill("danehy");
   await expect(page.locator(".search-row").first()).toBeVisible({ timeout: 30_000 });
   await page.waitForTimeout(4000);
-  expect(
-    await page.locator(".search-grade").count(),
-    "a grade appeared with nowhere to route from",
-  ).toBe(0);
+  // hidden rather than removed — taking them out re-flowed the rows under the
+  // finger reaching for one — so this asks what a rider can see
+  const visibleGrades = await page
+    .locator(".search-grade")
+    .evaluateAll((els) => els.filter((e) => getComputedStyle(e).visibility !== "hidden").length);
+  expect(visibleGrades, "a grade appeared with nowhere to route from").toBe(0);
 });
 
 test("typing again abandons the grades for the list that's gone", async ({ page, context }) => {
@@ -757,6 +759,12 @@ test("a destination the router can't reach gets no grade at all", async ({ page,
   await page.waitForTimeout(2500);
   await page.locator("#search").fill("nowhere");
   await expect(page.locator(".search-row").first()).toBeVisible({ timeout: 30_000 });
+  // there IS a start, so a missing grade here means "no route", not "nowhere to
+  // route from" — the two branches look identical on screen
+  expect(
+    await page.evaluate(() => document.querySelectorAll(".maplibregl-marker").length),
+    "this test needs a start marker, or it proves the wrong branch",
+  ).toBeGreaterThan(0);
 
   // it may take a moment to discover there is no route; what it must never do
   // is settle on a letter
@@ -767,53 +775,70 @@ test("a destination the router can't reach gets no grade at all", async ({ page,
   for (const l of letters) {
     expect(l, "graded a route that could not be computed").not.toMatch(/^[ABCDF]$/);
   }
-  // and the row is still usable as a destination — it just makes no claim
+  // and the row is still usable as a destination — it just makes no claim, with
+  // no placeholder left implying a computation is still running
   await expect(page.locator(".search-row").first()).toContainText("Nowhere");
+  const stillChecking = await page.locator(".search-sub").evaluateAll((els) =>
+    els.filter((e) => (e.textContent ?? "").includes("checking")).length,
+  );
+  expect(stillChecking, "a row is still claiming to be working it out").toBe(0);
 });
 
-test("a grade is never replayed after the routing settings change", async ({ page, context }) => {
-  // The cache was keyed on start, destination and profile — but the route also
-  // depends on prefer-flat, the avoided lane types and the walking budget.
-  // Toggling one and searching the same place again replayed the letter
-  // computed under the old settings: a safety claim about a route the app
-  // would no longer plan.
+test("changing a routing setting withdraws the letters it invalidated", async ({
+  page,
+  context,
+}) => {
+  // The letters describe routes under particular settings. Change one and they
+  // are answers to a question nobody asked any more — so they must be withdrawn
+  // and worked out again, not left on screen.
+  //
+  // (Whether the CACHE would have replayed a stale letter is tested directly in
+  // tests/router.test.ts, against routeCacheKey — a browser test can't tell a
+  // recomputed B from a replayed one, which is what made my first attempt at
+  // this test unfalsifiable.)
   await context.grantPermissions(["geolocation"]);
   await context.setGeolocation({ latitude: 42.3875, longitude: -71.0995 });
   await page.goto("/");
   await page.waitForFunction(() => window._map !== undefined, null, { timeout: 60_000 });
   await page.waitForTimeout(2500);
 
-  const gradeFor = async (query: string): Promise<string> => {
-    await page.locator("#search").fill("");
-    await page.waitForTimeout(300);
-    await page.locator("#search").fill(query);
-    await expect(page.locator(".search-row").first()).toBeVisible({ timeout: 30_000 });
-    const badge = page.locator(".search-row").first().locator(".search-grade");
-    await expect.poll(async () => (await badge.innerText()).trim(), { timeout: 60_000 }).toMatch(
-      /^[ABCDF]$/,
-    );
-    return (await badge.innerText()).trim();
-  };
-  const before = await gradeFor("danehy");
+  await page.locator("#search").fill("danehy");
+  await expect(page.locator(".search-row").first()).toBeVisible({ timeout: 30_000 });
+  const badge = page.locator(".search-row").first().locator(".search-grade");
+  await expect.poll(async () => (await badge.innerText()).trim(), { timeout: 60_000 }).toMatch(
+    /^[ABCDF]$/,
+  );
 
-  // avoid everything the router is willing to avoid — a different route by
-  // construction, so a cache that ignored this would hand back the old letter
   const prefs = page.locator("details.section", { has: page.locator("#prefer-flat") });
   await prefs.locator("summary").click();
-  for (const t of ["lane", "sharrow", "moderate_street"]) {
-    await page.locator(`#avoid-${t}`).check();
-  }
-  await page.locator("#prefer-flat").check();
-  await page.waitForTimeout(500);
+  await page.locator("#avoid-lane").check();
 
-  const after = await gradeFor("danehy");
-  // it must have been recomputed, not replayed. The letter may legitimately be
-  // the same — what must not happen is the cache short-circuiting the work, so
-  // check the figure the new settings should move.
-  const sub = await page.locator(".search-row").first().locator(".search-sub").innerText();
-  expect(sub).toMatch(/by the safest way/);
-  expect(["A", "B", "C", "D", "F"]).toContain(after);
-  expect(before.length).toBe(1);
+  // Recorded rather than polled: with the corridor tiles already loaded the
+  // recomputation takes milliseconds, so a poll can miss the withdrawal
+  // entirely and conclude the letter was never taken down.
+  await page.evaluate(() => {
+    const el = document.querySelector(".search-row .search-grade");
+    if (!el) return;
+    (window as unknown as { __seen: string[] }).__seen = [];
+    new MutationObserver(() => {
+      (window as unknown as { __seen: string[] }).__seen.push((el.textContent ?? "").trim());
+    }).observe(el, { childList: true, characterData: true, subtree: true });
+  });
+
+  const prefs2 = page.locator("details.section", { has: page.locator("#prefer-flat") });
+  await expect(prefs2).toBeVisible();
+  await page.locator("#avoid-sharrow").check();
+
+  await expect
+    .poll(
+      () => page.evaluate(() => (window as unknown as { __seen: string[] }).__seen ?? []),
+      { timeout: 60_000 },
+    )
+    .toContain("·");
+  // and it comes back: withdrawing is not the same as deleting
+  await expect.poll(async () => (await badge.innerText()).trim(), { timeout: 60_000 }).toMatch(
+    /^[ABCDF]$/,
+  );
 });
 
 test("picking a start doesn't get graded as if it were a destination", async ({ page, context }) => {
@@ -829,11 +854,17 @@ test("picking a start doesn't get graded as if it were a destination", async ({ 
   await page.locator("#from-field").fill("danehy");
   await expect(page.locator(".search-row").first()).toBeVisible({ timeout: 30_000 });
   await page.waitForTimeout(6000);
-  expect(
-    await page.locator(".search-grade").count(),
-    "the start picker showed a grade for a route nobody is taking",
-  ).toBe(0);
+  const shownGrades = await page
+    .locator(".search-grade")
+    .evaluateAll((els) => els.filter((e) => getComputedStyle(e).visibility !== "hidden").length);
+  expect(shownGrades, "the start picker showed a grade for a route nobody is taking").toBe(0);
   // and no leftover "checking…" either: a row that will never be graded should
   // not claim a computation is running
-  expect(await page.locator(".search-sub").count()).toBe(0);
+  const shownSubs = await page
+    .locator(".search-sub")
+    .evaluateAll((els) =>
+      els.filter((e) => getComputedStyle(e).visibility !== "hidden" && (e.textContent ?? "") !== "")
+        .length,
+    );
+  expect(shownSubs).toBe(0);
 });

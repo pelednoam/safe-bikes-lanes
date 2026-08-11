@@ -1128,6 +1128,26 @@ export class Router {
 // ---------------------------------------------------------------------------
 // export helpers (GPX + cue sheet)
 // ---------------------------------------------------------------------------
+/** The identity of a routing request, for anything that caches its result.
+ *
+ * Lives here rather than at the call site because the list is the router's, not
+ * the caller's: a cache keyed on start, destination and profile alone replayed
+ * a safety grade computed before the rider asked to avoid painted lanes. Adding
+ * an input to routeOptions without adding it here is the bug this exists to
+ * make hard.
+ */
+export function routeCacheKey(opts) {
+    const p = (c) => `${c[0].toFixed(5)},${c[1].toFixed(5)}`;
+    return [
+        p(opts.from),
+        p(opts.to),
+        opts.profileId,
+        String(opts.preferFlat),
+        [...opts.avoid].sort().join("|"),
+        String(opts.walkMaxM),
+        String(opts.avoidRevision),
+    ].join(":");
+}
 export function toGPX(payload, name) {
     const pts = [];
     let last = null;

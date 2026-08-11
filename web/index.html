@@ -371,9 +371,19 @@
   #ride-dock {
     display:none; position:absolute; left:0; right:0;
     bottom:calc(10px + env(safe-area-inset-bottom)); z-index:7;
-    justify-content:space-evenly; align-items:flex-end; gap:6px; padding:0 6px;
-    flex-wrap:wrap-reverse; row-gap:8px;
-    pointer-events:none;
+    justify-content:space-evenly; align-items:center; gap:6px; padding:6px;
+    /* The band is the dock's. With pointer-events:none the gaps between the
+       circles passed taps to the map, which mid-ride asks whether to throw the
+       route away — a miss between two buttons should do nothing, not that. */
+    pointer-events:auto;
+  }
+  /* One row, always. Wrapping put a second row under the lifted attribution and
+     the stops menu; shrinking to fit is predictable, and 54 px is still a
+     comfortable target. */
+  @media (max-width: 380px) {
+    .dock-btn { width:54px; height:54px; }
+    .dock-btn .dock-icon { font-size:21px; }
+    .dock-btn .dock-label { font-size:9px; max-width:52px; }
   }
   body.navigating #ride-dock { display:flex; }
   .dock-btn {
@@ -398,8 +408,11 @@
   .dock-btn.idle { opacity:.5; }
   /* opens upward from the dock, so the thumb doesn't cover it */
   #nav-stops-menu {
-    position:absolute; z-index:8; right:8px;
-    bottom:calc(84px + env(safe-area-inset-bottom));
+    /* Centred, not right-aligned: it used to sit directly over "end ride" with
+       about 10 px of clearance, so a thumb reaching past "park" could end the
+       ride instead. */
+    position:absolute; z-index:8; left:50%; transform:translateX(-50%);
+    bottom:calc(96px + env(safe-area-inset-bottom));
     display:flex; gap:8px; padding:9px; border-radius:var(--r-lg);
     background:var(--surface); border:1px solid var(--line); box-shadow:var(--shadow);
     -webkit-backdrop-filter:blur(20px) saturate(1.5); backdrop-filter:blur(20px) saturate(1.5);
@@ -424,14 +437,13 @@
   .layer-group.planners { border-top:1px solid var(--line); padding-top:11px; }
   .group-note { margin:0 0 7px; font-size:11.5px; color:var(--muted); line-height:1.35; }
   .group-note a { color:var(--accent); }
-  #nav-avoid-row { margin-top:6px; }
-  #nav-avoid-row button { margin:0; width:100%; min-height:40px; font-size:12.5px; }
   #nav-flags { display:flex; gap:6px; justify-content:center; margin-top:7px; }
   #nav-flags button {
     margin:0; padding:3px 9px; font-size:11.5px; font-weight:600; min-height:0;
     border-radius:999px; color:var(--muted);
   }
   #nav-flags button.active { color:var(--accent); border-color:var(--accent); }
+  #nav-hazard { color:var(--s-busy); border-color:rgba(215,48,39,.4); }
   #nav-resume { margin-top:9px; width:100%; min-height:44px; font-size:15px; }
   /* MapLibre's own controls are dead or harmful mid-ride: the zoom buttons lose
      to the follow camera (and hand zoom control away, killing zoom-to-turn),
@@ -601,14 +613,6 @@
     <button data-cat="blocked" aria-label="Blocked lane or path"><span>🚧</span>blocked</button>
     <button data-cat="traffic" aria-label="Dangerous traffic spot"><span>🚗</span>traffic</button>
   </div>
-  <!-- Was its own "sketchy" button in the drawer. It sits beside the hazard
-       categories but outside them: the category row is read by a delegated
-       handler keyed on data-cat, and a button in there without one would file a
-       report with no category. This one changes where future routes go. -->
-  <div id="nav-avoid-row" style="display:none">
-    <button id="nav-hazard" aria-label="Avoid this street in future routes"
-            title="Avoid this street in future routes">🚫 avoid this street in future</button>
-  </div>
   <!-- always reachable: the voice says "tap resume", so it can't be behind a fold -->
   <button id="nav-resume" style="display:none">▶ back to route</button>
   <!-- Two set-and-forget toggles. Not in the dock: they are decisions you make
@@ -619,6 +623,13 @@
             title="Hide the safety-network overlay">🗺️ lanes</button>
     <button id="nav-myway" aria-label="Go with my street choice: reroutes continue in your direction"
             title="Go with my street choice: reroutes continue in your direction">🧭 my way</button>
+    <!-- Kept out of the hazard-category row: that row is read by a delegated
+         handler keyed on data-cat, and it only exists for 20 s after a photo
+         report — which would have made this action, previously always available
+         in the drawer, almost unreachable. It changes where future routes go,
+         so it is available whenever the rider is on a street they dislike. -->
+    <button id="nav-hazard" aria-label="Avoid this street in future routes"
+            title="Avoid this street in future routes">🚫 avoid</button>
   </div>
   <!-- in-page ask: window.confirm blocks the JS thread, which froze guidance,
        the follow camera and the ride recorder until it was answered -->

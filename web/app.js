@@ -5,7 +5,7 @@ import { addHazard, buildReportText, downscalePhoto, getHazardPhoto, HAZARD_LABE
 import { clearRecent, deletePlace, emojiFor, exportBackup, importBackup, listPlaces, listRecent, pushRecent, savePlace, } from "./places.js";
 import { clearRides, deleteRide, loadRides, RideRecorder, rideTotals, saveRide, stashInProgress, takeInProgress, } from "./rides.js";
 import { dataUrl, initDataSource, loadJson, usingRemoteData } from "./data.js";
-import { buildCues, PROFILES, Router, toGPX } from "./router.js";
+import { buildCues, PROFILES, Router, routeCacheKey, toGPX } from "./router.js";
 import { distVoice, fmtDist, fmtClimb, fmtDistTight, fmtSpeed, fromMeters, getUnits, navRound, setUnits, toMeters, unitName, } from "./units.js";
 import { NetworkTiles, TileStore } from "./tiles.js";
 import { drawRideCard, drawTotalsCard, rideShareText, totalsShareText } from "./sharecard.js";
@@ -70,6 +70,10 @@ function loadSketchy() {
 }
 function saveSketchy(marks) {
     localStorage.setItem(SKETCHY_KEY, JSON.stringify(marks));
+    // this is exactly a change to what the router must avoid, so any grade
+    // computed before it is now a claim about a route the app wouldn't plan
+    avoidRevision++;
+    regradeVisible();
 }
 // ---------------------------------------------------------------------------
 // map setup
@@ -549,6 +553,10 @@ function makeMarker(lngLat, color, label) {
     m.on("dragend", () => {
         nameEnd(label === "start" ? "start" : "end");
         void requestRoute();
+        // a grade is the route FROM the start: move it and the letters on screen
+        // describe a journey that no longer begins where the rider does
+        if (label === "start")
+            regradeVisible();
     });
     return m;
 }
@@ -560,6 +568,7 @@ function setPoint(kind, lngLat) {
             start.setLngLat(lngLat);
         else
             start = makeMarker(lngLat, "#2b83ba", "start");
+        regradeVisible();
     }
     else {
         if (end)
@@ -1358,14 +1367,40 @@ async function searchAddress(query) {
         throw new Error(`search failed (${resp.status})`);
     return (await resp.json());
 }
+/** Moves whenever the rider changes what the router must avoid — a sketchy
+ * mark, a filed hazard — so a grade computed before it is never replayed after.
+ * Those change where routes go just as surely as a preference does. */
+let avoidRevision = 0;
+/** The rows currently on screen, so their letters can be withdrawn and redone
+ * when the answer they state stops being true. */
+let gradedRows = [];
+/** The letters on screen describe routes from a particular start under
+ * particular settings. When either changes they are answers to a question
+ * nobody asked any more, so withdraw them and work them out again. */
+function regradeVisible() {
+    if (gradedRows.length === 0)
+        return;
+    for (const row of gradedRows) {
+        if (!row.badge.isConnected)
+            return; // the list is gone; nothing to redo
+        row.badge.textContent = "·";
+        row.badge.style.background = "";
+        row.sub.textContent = "checking the safest way…";
+    }
+    void gradeSearchResults(gradedRows);
+}
 /** Take the placeholders away from a row that will never get a grade.
  *
  * The badge went but the subtitle kept saying "checking the safest way…", so a
  * result the router couldn't reach sat there claiming a computation was still
  * running. Nothing is a better answer than a promise that never resolves. */
 function clearGrading(row) {
-    row.badge.remove();
-    row.sub.remove();
+    // Hidden, not removed. Grading resolves after the list is already on screen
+    // and being tapped; removing elements re-flowed the rows under the finger
+    // that was reaching for one.
+    row.badge.style.visibility = "hidden";
+    row.sub.style.visibility = "hidden";
+    row.sub.textContent = "";
 }
 /** Cancels grading when a new search lands: five routes take a moment, and the
  * answers to the last query must not appear against this one's rows. */
@@ -1385,6 +1420,18 @@ const gradeCache = new Map();
  */
 async function gradeSearchResults(rows) {
     const mine = ++gradeGen;
+    gradedRows = rows;
+    // One snapshot of every routing input, taken before the first await. Reading
+    // them per row let a preference change land mid-grade: the key was built from
+    // the old settings and the route computed with the new ones, so the answer was
+    // filed under a description of itself that was already wrong.
+    const snap = {
+        profileId,
+        preferFlat,
+        avoid: [...avoidTypes],
+        walkMaxM,
+        avoidRevision,
+    };
     const from = start?.getLngLat();
     if (!from) {
         // no start yet: a grade needs somewhere to start from, and inventing one
@@ -1394,23 +1441,27 @@ async function gradeSearchResults(rows) {
         return;
     }
     const a = [from.lng, from.lat];
-    for (const row of rows) {
+    // A cap, because each row is a routing run: the geocoder returns five today,
+    // but nothing here should depend on that staying true.
+    const MAX_GRADED = 5;
+    for (const row of rows.slice(MAX_GRADED))
+        clearGrading(row);
+    for (const row of rows.slice(0, MAX_GRADED)) {
+        // hand the page back between routes: five Dijkstras in a row on the main
+        // thread is a visible stall on a phone
+        await new Promise((r) => setTimeout(r, 0));
         if (mine !== gradeGen)
             return; // a newer search owns the list now
-        // Every input the route depends on, not just the endpoints. Keyed on the
-        // profile alone, toggling "prefer flat" or an avoid-type and searching the
-        // same place again replayed the letter computed under the old settings —
-        // a safety claim about a route the app would no longer plan.
-        const key = `${a[0].toFixed(5)},${a[1].toFixed(5)}>` +
-            `${row.lngLat[0].toFixed(5)},${row.lngLat[1].toFixed(5)}:` +
-            `${profileId}:${String(preferFlat)}:${[...avoidTypes].sort().join("|")}:${walkMaxM}`;
+        const key = routeCacheKey({ from: a, to: row.lngLat, ...snap });
         let hit = gradeCache.get(key);
         if (hit === undefined) {
             try {
                 const r = await ensureRouter([a, row.lngLat], 1200, 1);
                 if (mine !== gradeGen)
                     return;
-                const best = r?.routeOptions(a, row.lngLat, profileId, preferFlat, undefined, avoidTypes, walkMaxM)[0];
+                // routed with the snapshot, so the answer matches the key it is filed
+                // under even if the rider changes a preference while this is running
+                const best = r?.routeOptions(a, row.lngLat, snap.profileId, snap.preferFlat, undefined, new Set(snap.avoid), snap.walkMaxM)[0];
                 if (!best)
                     throw new Error("no route");
                 hit = {
@@ -1462,11 +1513,17 @@ function renderSearchResults(results, target = "end") {
         text.appendChild(sub);
         row.appendChild(text);
         const lngLat = [parseFloat(r.lon), parseFloat(r.lat)];
+        const usable = Number.isFinite(lngLat[0]) && Number.isFinite(lngLat[1]);
         const badge = document.createElement("span");
         badge.className = "search-grade";
         badge.textContent = "·";
         row.appendChild(badge);
-        grading.push({ lngLat, badge, sub });
+        // a malformed answer becomes NaN, which would reach the router and the
+        // cache key as a coordinate
+        if (usable)
+            grading.push({ lngLat, badge, sub });
+        else
+            clearGrading({ badge, sub });
         // the whole row picks the field you searched from — no aiming at a tiny
         // button, which matters on a phone
         const choose = () => {
@@ -2641,11 +2698,13 @@ el("prefer-flat").addEventListener("change", (e) => {
     preferFlat = e.target.checked;
     void requestRoute();
     void computeShed();
+    regradeVisible();
 });
 el("walk-max").addEventListener("change", (e) => {
     walkMaxM = Number(e.target.value);
     localStorage.setItem("walkMaxM", String(walkMaxM));
     void requestRoute();
+    regradeVisible();
 });
 // restore the persisted walking budget
 walkMaxM = Number(localStorage.getItem("walkMaxM") ?? "0") || 0;
@@ -2666,6 +2725,8 @@ for (const [cls] of AVOIDABLE) {
         // previous set and silently drop the change.
         updateHash();
         void requestRoute();
+        // the letters in the search list were computed against the old set
+        regradeVisible();
     });
 }
 syncAvoidSummary();
@@ -2929,7 +2990,6 @@ function hideClassify() {
     window.clearTimeout(classifyTimer);
     classifyId = null;
     el("nav-classify").style.display = "none";
-    el("nav-avoid-row").style.display = "none";
 }
 async function quickReport() {
     if (!navActive) {
@@ -2963,7 +3023,6 @@ async function quickReport() {
     showRideAlert(near ? "📷 already reported here" : "📷 reported — routes will avoid it");
     window.setTimeout(hideRideAlert, 4000);
     el("nav-classify").style.display = "flex";
-    el("nav-avoid-row").style.display = "block";
     window.clearTimeout(classifyTimer);
     // long enough to answer at the next light, short enough to stop nagging
     classifyTimer = window.setTimeout(hideClassify, 20000);
@@ -4113,7 +4172,9 @@ el("nav-ask-yes").addEventListener("click", () => {
 function setRecentreNeeded(needed) {
     const btn = el("nav-recenter");
     btn.classList.toggle("idle", !needed);
-    btn.setAttribute("aria-label", needed ? "Recentre on me" : "Already following you");
+    const label = needed ? "Recentre on me" : "Already following you";
+    btn.setAttribute("aria-label", label);
+    btn.title = label; // it said "Recentre on me" while the label said otherwise
 }
 // Layers: twelve of them, so a way back to the state someone can reason about.
 // Everything routes through a change event rather than being set directly, so a

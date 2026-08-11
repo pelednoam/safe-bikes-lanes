@@ -1,8 +1,9 @@
+import type { ProfileId } from "../src/types.js";
 // Behavior tests for the in-browser router on small synthetic graphs.
 import { beforeEach, describe, expect, it } from "vitest";
 import { setUnits } from "../src/units.js";
 
-import { buildCues, PROFILES, Router, toGPX } from "../src/router.js";
+import { buildCues, PROFILES, Router, toGPX, routeCacheKey } from "../src/router.js";
 import type { PoiFeature } from "../src/types.js";
 
 /*
@@ -519,5 +520,54 @@ describe("loop choices", () => {
     const { option } = toyRouter().loopRoute(A, 400, null, "young_kids", false);
     expect(option.label).not.toContain("null");
     expect(option.label).toMatch(/loop$/i);
+  });
+});
+
+describe("the routing cache key", () => {
+  // A grade shown beside a search result is cached. Keyed on too little, the
+  // app replays a safety letter computed under settings the rider has since
+  // changed — a claim about a route it would no longer plan. This lives with
+  // the router because the list of inputs is the router's, not the caller's.
+  const base = {
+    from: [-71.1, 42.38] as [number, number],
+    to: [-71.09, 42.37] as [number, number],
+    profileId: "young_kids" as ProfileId,
+    preferFlat: false,
+    avoid: [] as string[],
+    walkMaxM: 0,
+    avoidRevision: 0,
+  };
+
+  it("is stable for the same request", () => {
+    expect(routeCacheKey(base)).toBe(routeCacheKey({ ...base }));
+    // set order is not request identity
+    expect(routeCacheKey({ ...base, avoid: ["lane", "sharrow"] })).toBe(
+      routeCacheKey({ ...base, avoid: ["sharrow", "lane"] }),
+    );
+  });
+
+  it("changes when any input the route depends on changes", () => {
+    const variants: [string, Partial<typeof base>][] = [
+      ["a different start", { from: [-71.2, 42.38] }],
+      ["a different destination", { to: [-71.05, 42.37] }],
+      ["a different rider", { profileId: "solo" }],
+      ["prefer flat", { preferFlat: true }],
+      ["an avoided lane type", { avoid: ["lane"] }],
+      ["a walking budget", { walkMaxM: 500 }],
+      ["a newly avoided street", { avoidRevision: 1 }],
+    ];
+    for (const [what, change] of variants) {
+      expect(routeCacheKey({ ...base, ...change }), `${what} produced the same key`).not.toBe(
+        routeCacheKey(base),
+      );
+    }
+  });
+
+  it("tells apart endpoints a few metres apart", () => {
+    // rounding endpoints too coarsely aliases distinct destinations onto one
+    // cached grade — two doors on the same block are not the same journey
+    expect(routeCacheKey({ ...base, to: [-71.09, 42.37] })).not.toBe(
+      routeCacheKey({ ...base, to: [-71.0902, 42.37] }),
+    );
   });
 });
