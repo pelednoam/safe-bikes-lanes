@@ -1380,6 +1380,12 @@ let gradedRows = [];
 function regradeVisible() {
     if (gradedRows.length === 0)
         return;
+    // Never mid-ride. The "avoid this street" chip writes through saveSketchy,
+    // which lands here, and grading is up to five routing runs on the main thread
+    // — a stall in guidance while someone is riding, to refresh a search list
+    // that isn't even on screen.
+    if (navActive)
+        return;
     for (const row of gradedRows) {
         if (!row.badge.isConnected)
             return; // the list is gone; nothing to redo
@@ -1484,7 +1490,11 @@ async function gradeSearchResults(rows) {
                     return;
                 // routed with the snapshot, so the answer matches the key it is filed
                 // under even if the rider changes a preference while this is running
-                const best = r?.routeOptions(a, row.lngLat, snap.profileId, snap.preferFlat, undefined, new Set(snap.avoid), snap.walkMaxM)[0];
+                // by id, not by index: the badge says "safest", and relying on the
+                // order routeOptions happens to build its candidates in makes that a
+                // safety claim held together by an array position
+                const opts = r?.routeOptions(a, row.lngLat, snap.profileId, snap.preferFlat, undefined, new Set(snap.avoid), snap.walkMaxM);
+                const best = opts?.find((o) => o.id === "safest") ?? opts?.[0];
                 if (!best)
                     throw new Error("no route");
                 hit = {

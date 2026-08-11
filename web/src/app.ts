@@ -1518,6 +1518,11 @@ let gradedRows: { lngLat: [number, number]; badge: HTMLElement; sub: HTMLElement
  * nobody asked any more, so withdraw them and work them out again. */
 function regradeVisible(): void {
   if (gradedRows.length === 0) return;
+  // Never mid-ride. The "avoid this street" chip writes through saveSketchy,
+  // which lands here, and grading is up to five routing runs on the main thread
+  // — a stall in guidance while someone is riding, to refresh a search list
+  // that isn't even on screen.
+  if (navActive) return;
   for (const row of gradedRows) {
     if (!row.badge.isConnected) return; // the list is gone; nothing to redo
     row.badge.textContent = "·";
@@ -1623,7 +1628,10 @@ async function gradeSearchResults(
         if (mine !== gradeGen) return;
         // routed with the snapshot, so the answer matches the key it is filed
         // under even if the rider changes a preference while this is running
-        const best = r?.routeOptions(
+        // by id, not by index: the badge says "safest", and relying on the
+        // order routeOptions happens to build its candidates in makes that a
+        // safety claim held together by an array position
+        const opts = r?.routeOptions(
           a,
           row.lngLat,
           snap.profileId,
@@ -1631,7 +1639,8 @@ async function gradeSearchResults(
           undefined,
           new Set(snap.avoid) as typeof avoidTypes,
           snap.walkMaxM,
-        )[0];
+        );
+        const best = opts?.find((o) => o.id === "safest") ?? opts?.[0];
         if (!best) throw new Error("no route");
         hit = {
           grade: best.grade,

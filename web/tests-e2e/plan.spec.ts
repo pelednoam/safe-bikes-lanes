@@ -937,8 +937,21 @@ test("changing rider takes down the letters computed for the last one", async ({
       timeout: 60_000,
     })
     .toContain("·");
-  // the tooltip and the label must go with it — a stale letter left in either
-  // is the same claim, made to someone using a screen reader
-  const stale = await badge.evaluate((b) => b.getAttribute("aria-label") ?? "");
-  expect(stale === "" || /grades [ABCDF]$/.test(stale)).toBe(true);
+  // The tooltip and the label must go with it — a stale letter left in either is
+  // the same claim, made to someone using a screen reader. Sampled at the moment
+  // of withdrawal: `stale === "" || /grades [ABCDF]/` was true of the removed
+  // case, the recomputed case AND the bug, so it asserted nothing.
+  const labelWhileWithdrawn = await page.evaluate(() => {
+    const el = document.querySelector(".search-row .search-grade");
+    return el?.textContent?.trim() === "·" ? (el.getAttribute("aria-label") ?? "") : null;
+  });
+  if (labelWhileWithdrawn !== null) {
+    expect(labelWhileWithdrawn, "a withdrawn badge still announced its old grade").toBe("");
+  }
+  // and once it settles it announces the new one
+  await expect.poll(async () => (await badge.innerText()).trim(), { timeout: 60_000 }).toMatch(
+    /^[ABCDF]$/,
+  );
+  const settled = await badge.getAttribute("aria-label");
+  expect(settled).toMatch(/safest route grades [ABCDF]$/);
 });

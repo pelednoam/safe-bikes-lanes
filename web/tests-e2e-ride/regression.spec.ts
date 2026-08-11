@@ -756,3 +756,30 @@ test("the dock fits the narrowest phone, not just the one I measured", async ({ 
   // and the rule genuinely applied rather than the base size happening to fit
   expect(Math.max(...dock.widths)).toBeLessThan(64);
 });
+
+test("marking a street mid-ride doesn't stall guidance to refresh a hidden list", async ({
+  page,
+}) => {
+  // The avoid chip writes through saveSketchy, which now invalidates the search
+  // grades — up to five routing runs on the main thread, to refresh a list that
+  // isn't even on screen while riding.
+  await startNav(page);
+  const blocked = await page.evaluate(async () => {
+    let worst = 0;
+    let last = performance.now();
+    const tick = (): void => {
+      const now = performance.now();
+      worst = Math.max(worst, now - last);
+      last = now;
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+    await new Promise((r) => setTimeout(r, 400));
+    document.getElementById("nav-hazard")?.click();
+    await new Promise((r) => setTimeout(r, 2500));
+    return worst;
+  });
+  // a frame budget is 16 ms; a routing run is hundreds. Generous, because a
+  // loaded runner has its own stalls — this is looking for the big one.
+  expect(blocked, `the main thread froze for ${Math.round(blocked)} ms mid-ride`).toBeLessThan(400);
+});

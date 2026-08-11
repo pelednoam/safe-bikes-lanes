@@ -563,11 +563,19 @@ describe("the routing cache key", () => {
     }
   });
 
-  it("tells apart endpoints a few metres apart", () => {
-    // rounding endpoints too coarsely aliases distinct destinations onto one
-    // cached grade — two doors on the same block are not the same journey
-    expect(routeCacheKey({ ...base, to: [-71.09, 42.37] })).not.toBe(
-      routeCacheKey({ ...base, to: [-71.0902, 42.37] }),
+  it("tells apart destinations that are different places", () => {
+    // Two doors on the same block are not the same journey. ~16 m apart here;
+    // the key rounds to five decimals, so points closer than about a metre do
+    // share an entry — deliberately, since they snap to the same graph edge and
+    // are therefore the same route. Stating the resolution rather than implying
+    // an exactness the key does not have.
+    const near: [number, number] = [-71.0902, 42.37];
+    const far: [number, number] = [-71.095, 42.37];
+    expect(routeCacheKey({ ...base, to: near })).not.toBe(routeCacheKey({ ...base, to: base.to }));
+    expect(routeCacheKey({ ...base, to: far })).not.toBe(routeCacheKey({ ...base, to: near }));
+    // sub-metre: the same request, and sharing the answer is correct
+    expect(routeCacheKey({ ...base, to: [-71.090001, 42.37] })).toBe(
+      routeCacheKey({ ...base, to: [-71.09, 42.37] }),
     );
   });
 });
