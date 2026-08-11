@@ -33,7 +33,14 @@ jobs:
       - name: Check the deployed data
         id: check
         continue-on-error: true
-        run: python3 scripts/check-live-data.py 2>&1 | tee /tmp/health.txt
+        run: |
+          # pipefail explicitly: a plain `run:` uses `bash -e {0}`, where a
+          # pipeline exits with the status of its LAST command — so `check | tee`
+          # reported tee's success and this watchdog passed three times while the
+          # live data was demonstrably wrong. The failure it exists to catch is
+          # the failure it had.
+          set -o pipefail
+          python3 scripts/check-live-data.py 2>&1 | tee /tmp/health.txt
 
       - name: Say so where it will be seen
         # A failing scheduled run is an email nobody reads twice. An open issue

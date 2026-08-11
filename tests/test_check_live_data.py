@@ -243,3 +243,61 @@ def test_the_publish_gate_reads_the_field_the_pipeline_writes() -> None:
         assert key in gate, f"the publish gate no longer checks {key}"
         assert f'"{key}"' in pipeline, f"the pipeline no longer writes {key}"
     assert json.dumps({"provenance": {}})  # the shape the gate expects, for the reader
+
+
+def test_the_workflow_propagates_a_failing_check_through_its_pipe() -> None:
+    """The watchdog has to fail when the check fails.
+
+    It didn't. The step piped the check into `tee`, and a plain `run:` in GitHub
+    Actions uses `bash -e {0}` — no pipefail — so the pipeline exited with tee's
+    status. The workflow reported success three times while the live data was
+    demonstrably wrong: the exact failure mode it was built to catch, in the thing
+    built to catch it. codex had flagged the same shape in pages.yml an hour
+    earlier, which is why this is a test and not a comment.
+
+    Runs the step's real script, so it checks the plumbing rather than the prose.
+    """
+    import shutil
+    import subprocess
+    import tempfile
+
+    import yaml
+
+    root = Path(__file__).resolve().parents[1]
+    workflow = yaml.safe_load((root / ".github" / "workflows" / "health.yml").read_text())
+    steps = workflow["jobs"]["live"]["steps"]
+    check = next(s for s in steps if s.get("id") == "check")
+    script = check["run"]
+
+    assert shutil.which("bash"), "no bash to test the step with"
+    with tempfile.TemporaryDirectory() as tmp:
+        scripts = Path(tmp) / "scripts"
+        scripts.mkdir()
+        target = scripts / "check-live-data.py"
+
+        target.write_text("import sys\nprint('3 problems')\nsys.exit(1)\n")
+        failing = subprocess.run(
+            ["bash", "-e", "-c", script], cwd=tmp, capture_output=True, text=True, check=False
+        )
+        assert failing.returncode != 0, (
+            "a failing check exits 0 through the step's pipeline — the workflow will"
+            " report success while the live data is wrong"
+        )
+
+        target.write_text("print('live data looks current and complete')\n")
+        passing = subprocess.run(
+            ["bash", "-e", "-c", script], cwd=tmp, capture_output=True, text=True, check=False
+        )
+        assert passing.returncode == 0, f"a healthy check fails the step: {passing.stderr}"
+
+    # And the run must actually be marked failed. The check step tolerates its own
+    # failure so the reporter can run, so something afterwards has to fail the run,
+    # or a red check would still show a green tick.
+    assert check.get("continue-on-error") is True
+    fails_run = [
+        s
+        for s in steps
+        if "steps.check.outcome == 'failure'" in str(s.get("if", ""))
+        and "exit 1" in str(s.get("run", ""))
+    ]
+    assert fails_run, "nothing fails the run when the check fails"
