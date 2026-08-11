@@ -205,7 +205,6 @@ test("safety warnings are shown, not just spoken, and survive muting", async ({ 
   test.slow();
   const path = await startRide(page);
   // mute first: a muted phone used to get no crossing warning at all
-  await page.locator("#nav-toggle").click();
   await page.locator("#nav-mute").click();
   await ride(page, path, { speedKmh: 12, timeScale: 30, untilM: 2500 });
   // the ride passes busy crossings on this route; at least one was displayed
@@ -278,19 +277,18 @@ test("the ride controls are reachable and safe to press one-handed", async ({ pa
   expect(mute?.height ?? 0).toBeGreaterThanOrEqual(48);
   expect(mute?.y ?? 0).toBeGreaterThan(500);
 
-  // the whole banner opens the controls, not just a 27 px chevron
-  await expect(page.locator("#nav-extra")).not.toBeVisible();
-  await page.locator("#nav-banner").click({ position: { x: 40, y: 60 } });
-  await expect(page.locator("#nav-extra")).toBeVisible();
+  // nothing to open: the controls are the dock, and the drawer is gone
+  expect(await page.locator("#nav-extra").count()).toBe(0);
+  expect(await page.locator("#nav-toggle").count()).toBe(0);
 
   // every control is a thumb-sized target
   const tools = await page.evaluate(() =>
-    [...document.querySelectorAll("#nav-tools button, #nav-buttons button")].map((b) => {
+    [...document.querySelectorAll("#ride-dock .dock-btn")].map((b) => {
       const r = b.getBoundingClientRect();
       return { id: b.id, w: Math.round(r.width), h: Math.round(r.height) };
     }),
   );
-  expect(tools.length).toBeGreaterThan(5);
+  expect(tools.length).toBe(5);
   for (const t of tools) {
     expect(t.w, `${t.id} width`).toBeGreaterThanOrEqual(44);
     expect(t.h, `${t.id} height`).toBeGreaterThanOrEqual(44);
@@ -313,7 +311,8 @@ test("the ride controls are reachable and safe to press one-handed", async ({ pa
 test("a mis-tapped detour can be abandoned immediately", async ({ page }) => {
   const path = await startRide(page);
   await ride(page, path, { speedKmh: 12, timeScale: 30, untilM: 150 });
-  await page.locator("#nav-banner").click({ position: { x: 40, y: 60 } });
+  // one tap to the stops menu, one to the fountain
+  await page.locator("#nav-stops").click();
   await page.locator("#nav-water").click();
   // the way back is offered at once, not only on arrival at the fountain
   await expect(page.locator("#nav-resume")).toBeVisible();

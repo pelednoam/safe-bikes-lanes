@@ -403,3 +403,99 @@ test("a shared route link brings the route into view", async ({ page }) => {
     )
     .toBeGreaterThan(80);
 });
+
+test("map layers are grouped by the question they answer", async ({ page }) => {
+  // Twelve checkboxes in one list, with a planner's analysis layers sitting
+  // between dark mode and kid stops. That is how the round-trip planner ended
+  // up invisible inside a drawer called "Other trip types" — the same failure.
+  await boot(page);
+  const box = page.locator("details.section", { has: page.locator("#show-net") });
+  await box.locator("summary").click();
+
+  await expect(box.locator(".layer-group h4")).toHaveText([
+    "Safety",
+    "Places",
+    "Terrain & view",
+    "For planners",
+  ]);
+  // every layer survived the regrouping
+  expect(await box.locator(".layer-group input[type=checkbox]").count()).toBe(12);
+
+  // the planner layers are named as such, not left to be discovered
+  const planners = box.locator(".layer-group.planners");
+  await expect(planners).toContainText(/analysis layers, not riding layers/i);
+  for (const id of ["show-lanes", "show-access", "show-build"]) {
+    await expect(planners.locator(`#${id}`)).toBeAttached();
+  }
+});
+
+test("what each layer does is written down, not left in a tooltip", async ({ page }) => {
+  // this project already has a test asserting that emoji controls carry a word,
+  // because "tooltips don't exist on touch" — the same applies to twelve layers
+  await boot(page);
+  const box = page.locator("details.section", { has: page.locator("#show-net") });
+  await box.locator("summary").click();
+  const described = await box.evaluate((root) =>
+    [...root.querySelectorAll(".layer-group .toggle")].map((l) => ({
+      id: l.querySelector("input")?.id ?? "",
+      note: l.querySelector("small")?.textContent?.trim() ?? "",
+    })),
+  );
+  expect(described.length).toBe(12);
+  for (const d of described) {
+    expect(d.note, `${d.id} has no visible description`).not.toBe("");
+  }
+});
+
+test("Reset puts the layers back to what a rider starts with", async ({ page }) => {
+  await boot(page);
+  const box = page.locator("details.section", { has: page.locator("#show-net") });
+  await box.locator("summary").click();
+
+  // turn the world on
+  for (const id of ["show-heat", "show-pois", "show-aerial", "show-lanes", "show-build"]) {
+    await page.locator(`#${id}`).check();
+  }
+  await page.locator("#show-net").uncheck();
+  await page.waitForTimeout(400);
+
+  await page.locator("#layers-reset").click();
+  await page.waitForTimeout(600);
+  // the two a rider wants on, and nothing else
+  await expect(page.locator("#show-net")).toBeChecked();
+  await expect(page.locator("#show-constr")).toBeChecked();
+  for (const id of ["show-heat", "show-pois", "show-aerial", "show-lanes", "show-build", "show-elev", "show-3d", "show-gates", "show-access"]) {
+    await expect(page.locator(`#${id}`), `${id} should be off after a reset`).not.toBeChecked();
+  }
+  // and the map agrees: reset goes through the same change events a tap does,
+  // so the layers themselves actually went away
+  // Checked without a `?? "none"` fallback: that turned a missing map, a
+  // renamed layer and a never-set property into the same pass as a layer that
+  // was genuinely hidden.
+  const heat = await page.evaluate(() => {
+    const m = window._map;
+    if (!m) return "NO MAP";
+    if (m.getLayer("heatmap") === undefined) return "NO LAYER";
+    return String(m.getLayoutProperty("heatmap", "visibility") ?? "visible");
+  });
+  expect(heat).toBe("none");
+  // and one layer is not the test: every planner layer must have gone too
+  const planners = await page.evaluate(() =>
+    ["lanemap", "access", "build"]
+      .filter((id) => window._map?.getLayer(id) !== undefined)
+      .map((id) => `${id}=${String(window._map?.getLayoutProperty(id, "visibility") ?? "visible")}`),
+  );
+  expect(planners.length, "none of the planner layers existed to check").toBeGreaterThan(0);
+  for (const p of planners) expect(p).toMatch(/=none$/);
+});
+
+test("the planner layers point at the workspace they belong to", async ({ page }) => {
+  await boot(page);
+  const box = page.locator("details.section", { has: page.locator("#show-net") });
+  await box.locator("summary").click();
+  await page.locator("#layers-build-link").click();
+  // the where-to-build section opens rather than the link going nowhere
+  await expect
+    .poll(() => page.locator("#build-box").evaluate((d) => (d as HTMLDetailsElement).open))
+    .toBe(true);
+});

@@ -61,7 +61,7 @@ test("app.js executed across a broad session", async ({ page }) => {
   // navigation
   await tap("#nav-btn");
   await page.waitForTimeout(1500);
-  await tap("#nav-toggle");
+  await tap("#nav-stops");
   await tap("#nav-mute");
   await tap("#nav-exit");
   await tap("#nav-ask-yes");

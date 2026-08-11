@@ -62,9 +62,9 @@ test("every emoji control carries a word and a label (tooltips don't exist on to
   page,
 }) => {
   await startNav(page);
-  await page.locator("#nav-banner").click({ position: { x: 40, y: 60 } });
+  // the controls are in the dock now, not behind a chevron on the banner
   const tools = await page.evaluate(() =>
-    [...document.querySelectorAll("#nav-tools button")].map((b) => ({
+    [...document.querySelectorAll("#ride-dock .dock-btn, #nav-stops-menu button")].map((b) => ({
       id: b.id,
       text: (b.textContent ?? "").replace(/[^\p{L}\p{N} ]/gu, "").trim(),
       aria: b.getAttribute("aria-label") ?? "",
@@ -90,9 +90,8 @@ test("the warning triangle renders as an emoji, not a hairline glyph", async ({ 
 
 test("adjacent controls are far enough apart to not mis-tap", async ({ page }) => {
   await startNav(page);
-  await page.locator("#nav-banner").click({ position: { x: 40, y: 60 } });
   const gaps = await page.evaluate(() => {
-    const rects = [...document.querySelectorAll("#nav-tools button, #nav-buttons button")].map(
+    const rects = [...document.querySelectorAll("#ride-dock .dock-btn")].map(
       (b) => b.getBoundingClientRect(),
     );
     const out: number[] = [];
@@ -563,4 +562,134 @@ test("on a phone the about button survives the sheet hiding the title", async ({
   await expect(page.locator("#about")).toBeVisible();
   const dialog = await page.locator("#about").boundingBox();
   expect(dialog?.width ?? 999).toBeLessThanOrEqual(390);
+});
+
+test("everything a moving rider taps is visible without opening anything", async ({ page }) => {
+  // Before: two buttons in the corner and seven more behind a 27 px chevron on
+  // the banner, so muting the voice or reporting a pothole meant opening a
+  // drawer at 12 mph. The dock is the whole set, always on screen.
+  await startNav(page);
+  const dock = page.locator("#ride-dock .dock-btn");
+  await expect(dock).toHaveCount(5);
+  for (const id of ["nav-recenter", "nav-mute", "nav-report", "nav-stops", "nav-exit"]) {
+    await expect(page.locator(`#${id}`), `${id} must be visible while riding`).toBeVisible();
+    const inFold = await page
+      .locator(`#${id}`)
+      .evaluate((b) => b.closest('[style*="display:none"],[style*="display: none"]') !== null);
+    expect(inFold, `${id} is inside something hidden`).toBe(false);
+  }
+  // and there is no chevron left to hunt for
+  expect(await page.locator("#nav-toggle").count()).toBe(0);
+});
+
+test("the dock sits in the thumb zone and is big enough to hit while moving", async ({ page }) => {
+  await startNav(page);
+  const size = page.viewportSize();
+  const h = size?.height ?? 800;
+  const boxes = await page.evaluate(() =>
+    [...document.querySelectorAll("#ride-dock .dock-btn")].map((b) => {
+      const r = b.getBoundingClientRect();
+      return { w: r.width, h: r.height, top: r.top, bottom: r.bottom };
+    }),
+  );
+  for (const b of boxes) {
+    // 64 px: a rider on a bumpy street is not aiming precisely
+    expect(Math.round(b.w)).toBeGreaterThanOrEqual(60);
+    expect(Math.round(b.h)).toBeGreaterThanOrEqual(60);
+    // in the bottom quarter, where the thumb already is
+    expect(b.top, "a ride control drifted out of the thumb zone").toBeGreaterThan(h * 0.72);
+    expect(b.bottom).toBeLessThanOrEqual(h);
+  }
+});
+
+test("nothing in the dock moves when the camera stops following", async ({ page }) => {
+  // recentre used to be hidden while the camera was following, which re-spaced
+  // the other four — so the target a rider was reaching for moved under them
+  await startNav(page);
+  const positions = async (): Promise<number[]> =>
+    await page.evaluate(() =>
+      [...document.querySelectorAll("#ride-dock .dock-btn")].map((b) =>
+        Math.round(b.getBoundingClientRect().left),
+      ),
+    );
+  const before = await positions();
+  await page.mouse.move(200, 300);
+  await page.mouse.down();
+  await page.mouse.move(200, 420, { steps: 8 });
+  await page.mouse.up();
+  // the drag must actually have taken the camera off follow, or "nothing moved"
+  // is a statement about a state change that never happened
+  await expect(page.locator("#nav-recenter")).not.toHaveClass(/idle/, { timeout: 5_000 });
+  expect(await positions(), "the dock re-spaced when the camera let go").toEqual(before);
+});
+
+test("the map attribution stays legible under the dock", async ({ page }) => {
+  // it is a licensing requirement, not decoration, and the dock was on top of it
+  await startNav(page);
+  const overlap = await page.evaluate(() => {
+    const a = document.querySelector(".maplibregl-ctrl-attrib")?.getBoundingClientRect();
+    const d = document.querySelector("#ride-dock")?.getBoundingClientRect();
+    if (!a || !d) return null;
+    return a.bottom - d.top; // positive means the dock covers it
+  });
+  expect(overlap).not.toBeNull();
+  expect(overlap ?? 1).toBeLessThanOrEqual(0);
+});
+
+test("stops are one tap away, and put themselves away again", async ({ page }) => {
+  await startNav(page);
+  const menu = page.locator("#nav-stops-menu");
+  await expect(menu).toBeHidden();
+  await page.locator("#nav-stops").click();
+  await expect(menu).toBeVisible();
+  await expect(page.locator("#nav-stops")).toHaveAttribute("aria-expanded", "true");
+  for (const id of ["nav-water", "nav-restroom", "nav-playground"]) {
+    await expect(page.locator(`#${id}`)).toBeVisible();
+  }
+  // it opens upward, clear of the thumb that just tapped it
+  const above = await page.evaluate(() => {
+    const m = document.querySelector("#nav-stops-menu")?.getBoundingClientRect();
+    const b = document.querySelector("#nav-stops")?.getBoundingClientRect();
+    return m && b ? m.bottom <= b.top : false;
+  });
+  expect(above, "the stops menu opened under the thumb").toBe(true);
+  await page.locator("#nav-stops").click();
+  await expect(menu).toBeHidden();
+});
+
+test("muting says which state it is in, not just which icon", async ({ page }) => {
+  await startNav(page);
+  const btn = page.locator("#nav-mute");
+  await expect(btn).toContainText("voice on");
+  await btn.click();
+  await expect(btn).toContainText("muted");
+  await expect(btn).toHaveAttribute("aria-label", /tap to turn on/i);
+  await btn.click();
+  await expect(btn).toContainText("voice on");
+});
+
+test("the stops menu gets out of the way when the rider taps the map", async ({ page }) => {
+  await startNav(page);
+  await page.locator("#nav-stops").click();
+  await expect(page.locator("#nav-stops-menu")).toBeVisible();
+  // a tap on the map is "no thanks", not a second trip to the button
+  await page.mouse.click(120, 260);
+  await expect(page.locator("#nav-stops-menu")).toBeHidden();
+  await expect(page.locator("#nav-stops")).toHaveAttribute("aria-expanded", "false");
+});
+
+test("recentre says whether it would do anything, without moving", async ({ page }) => {
+  await startNav(page);
+  const btn = page.locator("#nav-recenter");
+  // following: dimmed, and it says so to a screen reader
+  await expect(btn).toHaveClass(/idle/);
+  await expect(btn).toHaveAttribute("aria-label", /already following/i);
+  await page.mouse.move(200, 300);
+  await page.mouse.down();
+  await page.mouse.move(200, 430, { steps: 8 });
+  await page.mouse.up();
+  await expect(btn).not.toHaveClass(/idle/);
+  await expect(btn).toHaveAttribute("aria-label", /recentre/i);
+  await btn.click();
+  await expect(btn).toHaveClass(/idle/);
 });

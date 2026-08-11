@@ -127,8 +127,18 @@
   #from-field.custom { border-color:var(--accent); }
   #from-field.picking { border-color:var(--accent); color:var(--accent); font-weight:700; }
   #from-field .od-ico { opacity:.85; }
-  .search-row { display:flex; gap:6px; align-items:center; margin:4px 0; }
-  .search-row span { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .search-row { display:flex; gap:8px; align-items:center; margin:6px 0; }
+  .search-text { flex:1; min-width:0; display:flex; flex-direction:column; gap:1px; }
+  .search-text > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  /* how safe the way there is, before you commit to going: a destination across
+     an arterial is a D while you are still reading the list */
+  .search-sub { color:var(--muted); font-size:11.5px; line-height:1.25;
+                overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .search-grade {
+    flex:none; width:24px; height:24px; border-radius:6px; display:grid; place-items:center;
+    font-family:var(--font-cond); font-weight:700; font-size:14px; color:#fff;
+    background:var(--line);
+  }
   .search-row button { margin:0; padding:3px 9px; font-size:12px; }
 
   /* ── Rider mode: a segmented control, not radio dots ───────────────── */
@@ -339,7 +349,7 @@
     z-index:6; background:var(--surface); color:var(--ink);
     -webkit-backdrop-filter:blur(22px) saturate(1.6); backdrop-filter:blur(22px) saturate(1.6);
     border:1px solid var(--line); border-radius:var(--r-lg); box-shadow:var(--shadow);
-    padding:9px 34px 9px 14px; min-width:236px; max-width:calc(100% - 90px);
+    padding:9px 14px; min-width:236px; max-width:calc(100% - 90px);
     text-align:center;
   }
   #nav-main { display:flex; align-items:center; gap:11px; justify-content:center; }
@@ -354,26 +364,74 @@
               margin-top:3px; white-space:nowrap; min-height:19px; }
   #nav-remaining { font-size:15px; font-weight:600; font-variant-numeric:tabular-nums; }
   #nav-speed { font-size:13.5px; color:var(--muted); font-variant-numeric:tabular-nums; }
-  #nav-buttons button { margin-top:7px; padding:5px 11px; }
-  #nav-toggle {
-    position:absolute; top:5px; right:6px; margin:0; padding:2px 7px; font-size:15px;
-    line-height:1.1; background:none; border:none; color:var(--muted);
-    transition:transform .16s ease;
+  /* The dock. Five things, all of them reachable with the hand already on the
+     bar, none of them behind anything. 64 px because a moving rider on a bumpy
+     street is not aiming precisely, and spread across the width because the
+     thumb arrives from either side. */
+  #ride-dock {
+    display:none; position:absolute; left:0; right:0;
+    bottom:calc(10px + env(safe-area-inset-bottom)); z-index:7;
+    justify-content:space-evenly; align-items:flex-end; gap:6px; padding:0 6px;
+    flex-wrap:wrap-reverse; row-gap:8px;
+    pointer-events:none;
   }
-  #nav-banner.expanded #nav-toggle { transform:rotate(180deg); }
-  #nav-extra { display:none; }
-  #nav-banner.expanded #nav-extra { display:block; }
-  #nav-quick {
-    display:none; position:absolute; right:12px; bottom:calc(88px + env(safe-area-inset-bottom));
-    z-index:7; flex-direction:column; gap:11px; align-items:flex-end;
-  }
-  body.navigating #nav-quick { display:flex; }
-  #nav-quick button {
-    width:56px; height:56px; margin:0; padding:0; border-radius:50%;
-    font-size:22px; line-height:1; background:var(--surface); color:var(--ink);
+  body.navigating #ride-dock { display:flex; }
+  .dock-btn {
+    pointer-events:auto;
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1px;
+    flex:0 0 auto; width:64px; height:64px; margin:0; padding:0; border-radius:50%;
+    background:var(--surface); color:var(--ink);
     -webkit-backdrop-filter:blur(20px) saturate(1.5); backdrop-filter:blur(20px) saturate(1.5);
     border:1px solid var(--line); box-shadow:var(--shadow);
   }
+  .dock-btn .dock-icon { font-size:24px; line-height:1; }
+  .dock-btn .dock-label { font-size:9.5px; font-weight:600; letter-spacing:-.01em;
+                          color:var(--muted); line-height:1;
+                          max-width:60px; overflow:hidden; text-overflow:ellipsis;
+                          white-space:nowrap; }
+  .dock-btn.danger { color:var(--s-busy); }
+  .dock-btn.danger .dock-label { color:var(--s-busy); }
+  .dock-btn[aria-expanded="true"] { border-color:var(--accent); }
+  .dock-btn.muted .dock-icon { opacity:.55; }
+  /* "recentring would do nothing right now" — said with weight, not by
+     disappearing and re-spacing the row under a moving thumb */
+  .dock-btn.idle { opacity:.5; }
+  /* opens upward from the dock, so the thumb doesn't cover it */
+  #nav-stops-menu {
+    position:absolute; z-index:8; right:8px;
+    bottom:calc(84px + env(safe-area-inset-bottom));
+    display:flex; gap:8px; padding:9px; border-radius:var(--r-lg);
+    background:var(--surface); border:1px solid var(--line); box-shadow:var(--shadow);
+    -webkit-backdrop-filter:blur(20px) saturate(1.5); backdrop-filter:blur(20px) saturate(1.5);
+  }
+  #nav-stops-menu button {
+    display:flex; flex-direction:column; align-items:center; gap:3px;
+    min-width:58px; min-height:56px; margin:0; padding:6px; font-size:10.5px; font-weight:600;
+  }
+  #nav-stops-menu button span { font-size:22px; line-height:1; }
+  /* Layer groups. The point is that a rider can see at a glance which of these
+     are about their ride and which are a planner's analysis — before, the two
+     were interleaved in one list of twelve. */
+  .layer-head { display:flex; align-items:center; justify-content:space-between;
+                margin:2px 0 8px; font-size:11.5px; color:var(--muted); }
+  .layer-head button { margin:0; padding:2px 9px; font-size:11.5px; min-height:0; }
+  .layer-group { margin-bottom:13px; }
+  .layer-group h4 { margin:0 0 5px; font-size:11px; font-weight:700; letter-spacing:.07em;
+                    text-transform:uppercase; color:var(--muted); }
+  .layer-group .toggle { margin-bottom:5px; }
+  .layer-group .toggle small { display:block; margin-left:25px; color:var(--muted);
+                               font-size:11.5px; line-height:1.3; }
+  .layer-group.planners { border-top:1px solid var(--line); padding-top:11px; }
+  .group-note { margin:0 0 7px; font-size:11.5px; color:var(--muted); line-height:1.35; }
+  .group-note a { color:var(--accent); }
+  #nav-avoid-row { margin-top:6px; }
+  #nav-avoid-row button { margin:0; width:100%; min-height:40px; font-size:12.5px; }
+  #nav-flags { display:flex; gap:6px; justify-content:center; margin-top:7px; }
+  #nav-flags button {
+    margin:0; padding:3px 9px; font-size:11.5px; font-weight:600; min-height:0;
+    border-radius:999px; color:var(--muted);
+  }
+  #nav-flags button.active { color:var(--accent); border-color:var(--accent); }
   #nav-resume { margin-top:9px; width:100%; min-height:44px; font-size:15px; }
   /* MapLibre's own controls are dead or harmful mid-ride: the zoom buttons lose
      to the follow camera (and hand zoom control away, killing zoom-to-turn),
@@ -381,16 +439,16 @@
      second position dot and a second GPS watch. The attribution stays — it's a
      licensing requirement. */
   body.navigating .maplibregl-ctrl-group { display:none; }
-  /* nothing may cover the turn distance or the controls chevron */
-  body.navigating #update-banner, body.navigating #data-update { display:none !important; }
-  #nav-tools button {
-    display:inline-flex; flex-direction:column; align-items:center; gap:2px;
-    min-width:56px; min-height:52px; padding:6px 8px; font-size:10.5px;
-    font-weight:600; letter-spacing:.01em; margin:0 10px 12px 0;
+  /* The dock covered the attribution, which is a licensing requirement, not
+     decoration — lift it clear. The scale bar is not required and competes with
+     the turn distance for a rider's attention, so it goes. */
+  body.navigating .maplibregl-ctrl-bottom-left,
+  body.navigating .maplibregl-ctrl-bottom-right {
+    bottom:calc(80px + env(safe-area-inset-bottom));
   }
-  #nav-tools button span { font-size:20px; line-height:1.05; }
-  #nav-buttons { margin-top:6px; border-top:1px solid var(--line); padding-top:14px; }
-  #nav-buttons button { margin-top:0; min-height:44px; padding:6px 14px; }
+  body.navigating .maplibregl-ctrl-scale { display:none; }
+  /* nothing may cover the turn distance or the dock */
+  body.navigating #update-banner, body.navigating #data-update { display:none !important; }
   #nav-alert {
     margin-top:8px; padding:7px 10px; border-radius:var(--r-sm);
     background:var(--s-busy); color:#fff; font-size:15px; font-weight:700;
@@ -434,8 +492,13 @@
   #nav-ask .row { gap:8px; }
   #nav-ask button { flex:1; margin:0; min-height:44px; }
   #nav-ask button.primary { width:auto; padding:11px; font-size:14.5px; }
+  /* "on" as a tinted chip rather than a solid block: at 11.5 px the white-on-
+     green label stopped being readable, which for "my way" — a setting that
+     changes where reroutes send you — is the one that must be legible */
   #nav-myway.active, #nav-net.active {
-    background:var(--accent); color:#fff; border-color:var(--accent); }
+    background:rgba(18,131,63,.12); color:var(--accent); border-color:var(--accent);
+    font-weight:700;
+  }
   .nav-dot {
     width:18px; height:18px; border-radius:50%; background:#2b6ef2;
     border:3px solid #fff; box-shadow:0 0 0 1px rgba(10,14,18,.25), 0 0 12px rgba(43,110,242,.8);
@@ -489,12 +552,29 @@
   <a id="update-get" href="#" target="_blank" rel="noopener" style="margin:0;padding:5px 10px;border:1px solid var(--border);border-radius:6px;background:var(--btn-bg);color:var(--fg);text-decoration:none;cursor:pointer">⬇ install</a>
   <button id="update-dismiss" style="margin:0">later</button>
 </div>
-<!-- The two controls a rider needs while actually moving. They sit low on the
-     right, in the easy thumb zone: everything used to live at the top of the
-     screen behind a 27 px chevron, with 60% of the display holding nothing. -->
-<div id="nav-quick">
-  <button id="nav-recenter" aria-label="Recentre on me" title="Recentre on me" style="display:none">⌖</button>
-  <button id="nav-mute" aria-label="Voice on or off" title="Voice on or off">🔊</button>
+<!-- Everything a moving rider taps, always visible, in the thumb zone.
+     It used to be two buttons here and seven more behind a 27 px chevron at the
+     top of the screen — so muting the voice or reporting a pothole meant opening
+     a drawer at 12 mph. Nothing here is behind anything. -->
+<div id="ride-dock">
+  <button id="nav-recenter" class="dock-btn" aria-label="Recentre on me" title="Recentre on me">
+    <span class="dock-icon">⌖</span><span class="dock-label">recentre</span></button>
+  <button id="nav-mute" class="dock-btn" aria-label="Voice on or off" title="Voice on or off">
+    <span class="dock-icon">🔊</span><span class="dock-label">voice on</span></button>
+  <button id="nav-report" class="dock-btn" aria-label="Report a hazard here" title="Report a hazard here">
+    <span class="dock-icon">⚠️</span><span class="dock-label">report</span></button>
+  <button id="nav-stops" class="dock-btn" aria-label="Find a stop nearby"
+          title="Detour to water, a toilet or a playground" aria-expanded="false">
+    <span class="dock-icon">🚰</span><span class="dock-label">stops</span></button>
+  <button id="nav-exit" class="dock-btn danger" aria-label="End the ride" title="End the ride">
+    <span class="dock-icon">✕</span><span class="dock-label">end ride</span></button>
+</div>
+<!-- the three detours, one tap from the dock rather than three buttons competing
+     for thumb room with the ones that matter more often -->
+<div id="nav-stops-menu" style="display:none">
+  <button id="nav-water" aria-label="Detour to the nearest water fountain"><span>🚰</span>water</button>
+  <button id="nav-restroom" aria-label="Detour to the nearest restroom"><span>🚻</span>toilet</button>
+  <button id="nav-playground" aria-label="Detour to the nearest playground"><span>🛝</span>park</button>
 </div>
 <div id="nav-banner">
   <div id="nav-main">
@@ -521,24 +601,25 @@
     <button data-cat="blocked" aria-label="Blocked lane or path"><span>🚧</span>blocked</button>
     <button data-cat="traffic" aria-label="Dangerous traffic spot"><span>🚗</span>traffic</button>
   </div>
+  <!-- Was its own "sketchy" button in the drawer. It sits beside the hazard
+       categories but outside them: the category row is read by a delegated
+       handler keyed on data-cat, and a button in there without one would file a
+       report with no category. This one changes where future routes go. -->
+  <div id="nav-avoid-row" style="display:none">
+    <button id="nav-hazard" aria-label="Avoid this street in future routes"
+            title="Avoid this street in future routes">🚫 avoid this street in future</button>
+  </div>
   <!-- always reachable: the voice says "tap resume", so it can't be behind a fold -->
   <button id="nav-resume" style="display:none">▶ back to route</button>
-  <!-- the rest stays folded away so the banner doesn't cover the map -->
-  <div id="nav-extra">
-    <div id="nav-tools">
-      <button id="nav-water" aria-label="Detour to the nearest water fountain" title="Detour to the nearest water fountain"><span>🚰</span>water</button>
-      <button id="nav-restroom" aria-label="Detour to the nearest restroom" title="Detour to the nearest restroom"><span>🚻</span>toilet</button>
-      <button id="nav-playground" aria-label="Detour to the nearest playground" title="Detour to the nearest playground"><span>🛝</span>park</button>
-      <button id="nav-hazard" aria-label="Mark this spot as sketchy" title="Mark this spot as sketchy"><span>⚠️</span>sketchy</button>
-      <button id="nav-report" aria-label="Report a hazard here" title="Report a hazard here"><span>📷</span>report</button>
-      <button id="nav-net" class="active" aria-label="Hide the safety-network overlay" title="Hide the safety-network overlay"><span>🗺️</span>lanes</button>
-      <button id="nav-myway" aria-label="Go with my street choice: reroutes continue in your direction" title="Go with my street choice: reroutes continue in your direction"><span>🧭</span>my way</button>
-    </div>
-    <div id="nav-buttons">
-      <button id="nav-exit">✕ end ride</button>
-    </div>
+  <!-- Two set-and-forget toggles. Not in the dock: they are decisions you make
+       once, not things you reach for at speed — but not behind a drawer either,
+       because a rider needs to see whether "my way" is on. -->
+  <div id="nav-flags">
+    <button id="nav-net" class="active" aria-label="Hide the safety-network overlay"
+            title="Hide the safety-network overlay">🗺️ lanes</button>
+    <button id="nav-myway" aria-label="Go with my street choice: reroutes continue in your direction"
+            title="Go with my street choice: reroutes continue in your direction">🧭 my way</button>
   </div>
-  <button id="nav-toggle" title="Ride controls" aria-expanded="false">⌄</button>
   <!-- in-page ask: window.confirm blocks the JS thread, which froze guidance,
        the follow camera and the ride recorder until it was answered -->
   <div id="nav-ask" style="display:none">
@@ -735,30 +816,57 @@
 
   <details class="section">
     <summary>🗺 Map layers</summary>
-    <label class="toggle"><input type="checkbox" id="show-net" checked> safety network
-      <small>(dashed = OSM-only facility)</small></label>
-    <label class="toggle" title="~100 m cells: average stress of the streets inside — green safe, yellow moderate, red unsafe">
-      <input type="checkbox" id="show-heat"> safety heatmap</label>
-    <label class="toggle" title="Terrain elevation: blue low → red high; hover for meters">
-      <input type="checkbox" id="show-elev"> elevation map</label>
-    <label class="toggle" title="Where bike infrastructure is dense vs missing: greener = more lane/path meters per block; hover for numbers">
-      <input type="checkbox" id="show-lanes"> 🚴 lane coverage</label>
-    <label class="toggle" title="Share of residents who can reach a school, playground or library on kid-safe streets — red means almost nobody can">
-      <input type="checkbox" id="show-access"> 🚸 safe reach</label>
-    <label class="toggle" title="Ranked candidate projects: thicker and brighter means a bigger gain for the length built">
-      <input type="checkbox" id="show-build"> 🏗 build-next projects</label>
-    <label class="toggle" title="Tilt the map with 3D terrain; heatmaps extrude — taller = more stress / higher ground. Drag with two fingers (or right-drag) to rotate">
-      <input type="checkbox" id="show-3d"> 3D view</label>
-    <label class="toggle" title="Dark basemap and UI for night rides (remembered; defaults to your system setting)">
-      <input type="checkbox" id="dark-mode"> 🌙 dark mode</label>
-    <label class="toggle" title="MassGIS 15 cm aerial imagery (2023) — sharp enough to see lane paint and flexposts">
-      <input type="checkbox" id="show-aerial"> 🛰 aerial view</label>
-    <label class="toggle" title="Active work zones and street permits (MassDOT + Cambridge); routes automatically avoid them">
-      <input type="checkbox" id="show-constr" checked> 🚧 construction</label>
-    <label class="toggle" title="Playgrounds, ice cream, libraries, water fountains, restrooms">
-      <input type="checkbox" id="show-pois"> kid stops</label>
-    <label class="toggle" title="Signalized crossings of busy streets — the safe ways through barriers">
-      <input type="checkbox" id="show-gates"> safe crossings</label>
+    <!-- Twelve checkboxes in one list, with the planner's analysis layers sitting
+         between dark mode and kid stops. Grouped by the question each answers,
+         and the descriptions are visible text rather than title attributes —
+         a tooltip is not reachable on a phone. -->
+    <div class="layer-head">
+      <span>Twelve layers, four questions</span>
+      <button id="layers-reset" type="button" title="Back to the default layers">Reset</button>
+    </div>
+
+    <div class="layer-group">
+      <h4>Safety</h4>
+      <label class="toggle"><input type="checkbox" id="show-net" checked> 🛡 safety network
+        <small>dashed = facility only OpenStreetMap knows about</small></label>
+      <label class="toggle"><input type="checkbox" id="show-heat"> 🔥 safety heatmap
+        <small>~100 m cells: green safe, yellow moderate, red unsafe</small></label>
+      <label class="toggle"><input type="checkbox" id="show-gates"> 🚸 safe crossings
+        <small>signalized crossings of busy streets — the ways through</small></label>
+      <label class="toggle"><input type="checkbox" id="show-constr" checked> 🚧 construction
+        <small>routes already avoid these</small></label>
+    </div>
+
+    <div class="layer-group">
+      <h4>Places</h4>
+      <label class="toggle"><input type="checkbox" id="show-pois"> 🛝 kid stops
+        <small>playgrounds, ice cream, libraries, water, restrooms</small></label>
+    </div>
+
+    <div class="layer-group">
+      <h4>Terrain &amp; view</h4>
+      <label class="toggle"><input type="checkbox" id="show-elev"> ⛰ elevation
+        <small>blue low → red high</small></label>
+      <label class="toggle"><input type="checkbox" id="show-3d"> 🧊 3D view
+        <small>tilt the map; heatmaps extrude — taller = more stress</small></label>
+      <label class="toggle"><input type="checkbox" id="show-aerial"> 🛰 aerial view
+        <small>MassGIS 15 cm imagery (2023) — lane paint and flexposts</small></label>
+      <label class="toggle"><input type="checkbox" id="dark-mode"> 🌙 dark mode
+        <small>for night rides; follows your system setting at first</small></label>
+    </div>
+
+    <div class="layer-group planners">
+      <h4>For planners</h4>
+      <p class="group-note">Analysis layers, not riding layers. The same data as the
+        <a href="#" id="layers-build-link">where-to-build</a> workspace.</p>
+      <label class="toggle"><input type="checkbox" id="show-lanes"> 🚴 lane coverage
+        <small>greener = more lane/path metres per block</small></label>
+      <label class="toggle"><input type="checkbox" id="show-access"> 🚸 safe reach
+        <small>share of residents who can reach a school or park safely</small></label>
+      <label class="toggle"><input type="checkbox" id="show-build"> 🏗 build-next projects
+        <small>ranked candidates: thicker means a bigger gain per metre built</small></label>
+    </div>
+
     <div class="legend" id="legend"></div>
   </details>
 

@@ -161,7 +161,6 @@ test("the safety network can be toggled off and on mid-ride", async ({ page, con
 
   // the panel is hidden while navigating, so the control lives in the nav bar —
   // behind the toggle, which keeps the banner off the map by default
-  await page.locator("#nav-toggle").click();
   const btn = page.locator("#nav-net");
   await expect(btn).toBeVisible();
   await expect(btn).toHaveClass(/active/);
@@ -216,16 +215,20 @@ test("the rider's own zoom is kept (no snapping back), recenter restores follow"
   // rider scroll/pinch-zooms out to look further ahead. This must be a real
   // input event — a programmatic zoomTo isn't a rider gesture and shouldn't
   // (and doesn't) hand zoom control over.
-  // wheel until the app registers it as a rider gesture (the recenter button
-  // appearing is that acknowledgement) — under load the first wheel can land
-  // before the map is interactive
+  // Wheel until the app registers it as a rider gesture. The acknowledgement is
+  // the recentre button going live — it used to be the button *appearing*, but
+  // it is always in the dock now (hiding it re-spaced the other four under a
+  // moving thumb), so "visible" was true on the first pass and the loop exited
+  // before the zoom had moved at all.
   await page.mouse.move(600, 400);
   const recenter = page.locator("#nav-recenter");
-  for (let i = 0; i < 15 && !(await recenter.isVisible()); i++) {
+  const live = async (): Promise<boolean> =>
+    (await recenter.getAttribute("class"))?.includes("idle") === false;
+  for (let i = 0; i < 15 && !(await live()); i++) {
     await page.mouse.wheel(0, 240);
     await page.waitForTimeout(150);
   }
-  await expect(recenter).toBeVisible();
+  await expect(recenter).not.toHaveClass(/idle/);
   // let the gesture's own inertia settle before sampling, so we measure the
   // steady state rather than a mid-animation value (flaky under load)
   const readZoom = (): Promise<number> => page.evaluate(() => window._map?.getZoom() ?? 0);
@@ -260,26 +263,40 @@ test("the rider's own zoom is kept (no snapping back), recenter restores follow"
     longitude: coords[13]?.[0] ?? 0,
     latitude: coords[13]?.[1] ?? 0,
   });
+  // Back to the follow camera's own cruise zoom — not "0.5 above wherever the
+  // rider stopped". The wheel gesture doesn't always travel the same distance
+  // on a loaded runner, and a run where it barely moved made the old assertion
+  // impossible to satisfy however correctly the camera behaved.
+  const CRUISE = 16.6;
+  // Guard the premise before asserting the conclusion: if the wheel gesture
+  // never actually moved the camera, "it came back to cruise" is true of a
+  // camera that never left, and the test proves nothing.
+  expect(
+    Math.abs(zoomed - CRUISE),
+    "the zoom gesture didn't move the camera, so there is nothing to come back from",
+  ).toBeGreaterThan(0.4);
   await expect
     .poll(() => page.evaluate(() => window._map?.getZoom() ?? 0), { timeout: 25_000 })
-    .toBeGreaterThan(zoomed + 0.5);
+    .toBeCloseTo(CRUISE, 0);
 });
 
-test("the banner stays compact until the rider opens it", async ({ page }) => {
+test("the banner stays compact, because it no longer holds the controls", async ({ page }) => {
   await startNav(page);
-  // riding: the turn and the ETA are visible, the controls are not — the
-  // banner sits over the map, so it earns as little of it as possible
+  // The banner used to grow when the rider opened a drawer of controls inside
+  // it. The controls are in the dock now, so the banner has one job — the turn
+  // and the ETA — and never earns more of the map than that.
   await expect(page.locator("#nav-main")).toBeVisible();
   await expect(page.locator("#nav-trip")).toBeVisible();
-  await expect(page.locator("#nav-extra")).not.toBeVisible();
   const compact = (await page.locator("#nav-banner").boundingBox())?.height ?? 0;
   expect(compact).toBeLessThan(150);
 
-  await page.locator("#nav-toggle").click();
-  await expect(page.locator("#nav-extra")).toBeVisible();
-  await expect(page.locator("#nav-exit")).toBeVisible();
-  const open = (await page.locator("#nav-banner").boundingBox())?.height ?? 0;
-  expect(open).toBeGreaterThan(compact);
+  // there is nothing left that could make it grow
+  expect(await page.locator("#nav-extra").count()).toBe(0);
+  await page.locator("#nav-banner").click({ position: { x: 40, y: 40 } });
+  await page.waitForTimeout(300);
+  expect((await page.locator("#nav-banner").boundingBox())?.height ?? 0).toBe(compact);
+  // and the way out is on the dock, in the thumb zone
+  await expect(page.locator("#ride-dock #nav-exit")).toBeVisible();
 });
 
 test("tapping the map mid-ride asks before it throws the route away", async ({ page, context }) => {
@@ -316,11 +333,13 @@ test("the camera takes itself back after the rider stops panning", async ({ page
   // read the result in the same round trip as the event: the handler is
   // synchronous, and a separate polling assertion can lose the race to the
   // 10 s auto-refollow when the machine is loaded
-  const shownOnPan = await page.evaluate(() => {
+  const liveOnPan = await page.evaluate(() => {
     window._map?.fire("dragstart" as never);
-    return getComputedStyle(document.getElementById("nav-recenter") as HTMLElement).display;
+    return document.getElementById("nav-recenter")?.classList.contains("idle") === false;
   });
-  expect(shownOnPan).not.toBe("none");
-  // ...and comes back on its own, without hunting for the button
-  await expect(page.locator("#nav-recenter")).toBeHidden({ timeout: 20_000 });
+  // The button is always in the dock now — hiding it re-spaced the other four
+  // under a moving thumb — so "offered" means live rather than present.
+  expect(liveOnPan).toBe(true);
+  // ...and the camera comes back on its own, without hunting for the button
+  await expect(page.locator("#nav-recenter")).toHaveClass(/idle/, { timeout: 20_000 });
 });

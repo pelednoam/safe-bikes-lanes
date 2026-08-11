@@ -1358,22 +1358,115 @@ async function searchAddress(query) {
         throw new Error(`search failed (${resp.status})`);
     return (await resp.json());
 }
+/** Take the placeholders away from a row that will never get a grade.
+ *
+ * The badge went but the subtitle kept saying "checking the safest way…", so a
+ * result the router couldn't reach sat there claiming a computation was still
+ * running. Nothing is a better answer than a promise that never resolves. */
+function clearGrading(row) {
+    row.badge.remove();
+    row.sub.remove();
+}
+/** Cancels grading when a new search lands: five routes take a moment, and the
+ * answers to the last query must not appear against this one's rows. */
+let gradeGen = 0;
+const gradeCache = new Map();
+/** Put the grade of the safest route on each result.
+ *
+ * The point of the app is that where you go is a safety decision, and until now
+ * it only said so after you had chosen. A destination on the far side of an
+ * arterial is a D before you set out, and that is worth knowing while you are
+ * still looking at a list.
+ *
+ * Sequential on purpose. Each route needs the map along its corridor, and five
+ * destinations in one neighbourhood overlap almost entirely — so the first costs
+ * a corridor's worth of tiles and the rest are close to free, where five in
+ * parallel would fetch five times over.
+ */
+async function gradeSearchResults(rows) {
+    const mine = ++gradeGen;
+    const from = start?.getLngLat();
+    if (!from) {
+        // no start yet: a grade needs somewhere to start from, and inventing one
+        // would be a safety claim about a route nobody asked for
+        for (const r of rows)
+            clearGrading(r);
+        return;
+    }
+    const a = [from.lng, from.lat];
+    for (const row of rows) {
+        if (mine !== gradeGen)
+            return; // a newer search owns the list now
+        // Every input the route depends on, not just the endpoints. Keyed on the
+        // profile alone, toggling "prefer flat" or an avoid-type and searching the
+        // same place again replayed the letter computed under the old settings —
+        // a safety claim about a route the app would no longer plan.
+        const key = `${a[0].toFixed(5)},${a[1].toFixed(5)}>` +
+            `${row.lngLat[0].toFixed(5)},${row.lngLat[1].toFixed(5)}:` +
+            `${profileId}:${String(preferFlat)}:${[...avoidTypes].sort().join("|")}:${walkMaxM}`;
+        let hit = gradeCache.get(key);
+        if (hit === undefined) {
+            try {
+                const r = await ensureRouter([a, row.lngLat], 1200, 1);
+                if (mine !== gradeGen)
+                    return;
+                const best = r?.routeOptions(a, row.lngLat, profileId, preferFlat, undefined, avoidTypes, walkMaxM)[0];
+                if (!best)
+                    throw new Error("no route");
+                hit = {
+                    grade: best.grade,
+                    meters: best.payload.summary.meters,
+                    minutes: best.payload.summary.minutes,
+                };
+                gradeCache.set(key, hit);
+            }
+            catch {
+                // unroutable, or off the edge of the mapped area: say nothing rather
+                // than showing a letter we can't stand behind
+                if (mine === gradeGen)
+                    clearGrading(row);
+                continue;
+            }
+        }
+        if (mine !== gradeGen)
+            return;
+        row.badge.textContent = hit.grade;
+        row.badge.style.background = GRADE_COLORS[hit.grade];
+        row.badge.title = `Safest route here grades ${hit.grade}`;
+        row.badge.setAttribute("aria-label", `safest route grades ${hit.grade}`);
+        row.sub.textContent = `${fmtDist(hit.meters)} · ${hit.minutes} min by the safest way`;
+    }
+}
 function renderSearchResults(results, target = "end") {
     const box = el("search-results");
     box.innerHTML = "";
+    gradeGen++; // abandon grading for whatever list was here before
     if (results.length === 0) {
         box.textContent = "no results in this area";
         return;
     }
+    const grading = [];
     for (const r of results) {
         const row = document.createElement("div");
         row.className = "search-row";
         const short = r.display_name.split(",").slice(0, 3).join(",");
+        const text = document.createElement("span");
+        text.className = "search-text";
         const name = document.createElement("span");
         name.textContent = short;
         name.title = r.display_name;
-        row.appendChild(name);
+        const sub = document.createElement("small");
+        sub.className = "search-sub";
+        sub.textContent = "checking the safest way…";
+        text.appendChild(name);
+        text.appendChild(sub);
+        row.appendChild(text);
         const lngLat = [parseFloat(r.lon), parseFloat(r.lat)];
+        const badge = document.createElement("span");
+        badge.className = "search-grade";
+        badge.textContent = "·";
+        row.appendChild(badge);
+        grading.push({ lngLat, badge, sub });
         // the whole row picks the field you searched from — no aiming at a tiny
         // button, which matters on a phone
         const choose = () => {
@@ -1381,14 +1474,15 @@ function renderSearchResults(results, target = "end") {
             const field = el(target === "start" ? "from-field" : "search");
             field.value = short;
             field.classList.remove("picking");
+            gradeGen++; // the list is going away; stop routing for it
             if (target === "start")
                 activeField = "end";
             syncOD();
             map.flyTo({ center: lngLat, zoom: 15 });
             box.innerHTML = "";
         };
-        name.style.cursor = "pointer";
-        name.addEventListener("click", choose);
+        text.style.cursor = "pointer";
+        text.addEventListener("click", choose);
         const use = document.createElement("button");
         use.textContent = target === "start" ? "start" : "go";
         use.addEventListener("click", choose);
@@ -1403,6 +1497,14 @@ function renderSearchResults(results, target = "end") {
         row.appendChild(star);
         box.appendChild(row);
     }
+    // Only for destinations. A grade on the start-picker list would describe the
+    // route from the CURRENT start to a candidate start — a journey nobody is
+    // taking, labelled as if they were.
+    if (target === "end")
+        void gradeSearchResults(grading);
+    else
+        for (const r of grading)
+            clearGrading(r);
 }
 // ---------------------------------------------------------------------------
 // safe-shed (reachability)
@@ -2234,6 +2336,14 @@ map.on("click", (e) => {
     // Mid-ride the map is for looking at, not re-planning: a stray tap on the
     // handlebars used to silently swap the route out from under the rider.
     if (navActive) {
+        // A tap that dismisses the open stops menu is that and nothing else — it
+        // must not also offer to throw the ride away. MapLibre's preventDefault
+        // doesn't stop other listeners, so the guard lives here, where the acting
+        // handler is.
+        if (el("nav-stops").getAttribute("aria-expanded") === "true") {
+            stopsOpen(false);
+            return;
+        }
         askDuringRide("End this ride and route to the spot you tapped instead?", () => {
             exitNav();
             setPoint("end", e.lngLat);
@@ -2819,6 +2929,7 @@ function hideClassify() {
     window.clearTimeout(classifyTimer);
     classifyId = null;
     el("nav-classify").style.display = "none";
+    el("nav-avoid-row").style.display = "none";
 }
 async function quickReport() {
     if (!navActive) {
@@ -2852,6 +2963,7 @@ async function quickReport() {
     showRideAlert(near ? "📷 already reported here" : "📷 reported — routes will avoid it");
     window.setTimeout(hideRideAlert, 4000);
     el("nav-classify").style.display = "flex";
+    el("nav-avoid-row").style.display = "block";
     window.clearTimeout(classifyTimer);
     // long enough to answer at the next light, short enough to stop nagging
     classifyTimer = window.setTimeout(hideClassify, 20000);
@@ -3802,8 +3914,7 @@ async function startNav() {
     recorder = new RideRecorder();
     document.body.classList.add("navigating");
     el("nav-banner").style.display = "block";
-    el("nav-banner").classList.remove("expanded");
-    el("nav-recenter").style.display = "none";
+    setRecentreNeeded(false);
     map.setLayoutProperty("route-done", "visibility", "visible");
     // label-free basemap, our own upright labels, and the network dimmed behind
     // the route — all of which applyBasemap decides from navActive
@@ -3832,6 +3943,8 @@ async function startNav() {
 function exitNav() {
     finishAndSaveRide();
     navActive = false;
+    // the stops menu belongs to the ride; left open it floated over the planner
+    stopsOpen(false);
     navOriginalDest = null;
     navLastPos = null;
     if (navWatchId !== null)
@@ -3991,34 +4104,91 @@ el("nav-ask-yes").addEventListener("click", () => {
     closeAsk();
     yes?.();
 });
-function toggleRideControls() {
-    const banner = el("nav-banner");
-    const open = banner.classList.toggle("expanded");
-    el("nav-toggle").setAttribute("aria-expanded", String(open));
+/** Whether recentring would do anything, shown by weight rather than presence.
+ *
+ * It used to be hidden while the camera was already following. In a row of five
+ * that re-spaces the other four, so the target a rider was reaching for moves
+ * under their thumb — the one thing a control in a moving vehicle must not do.
+ */
+function setRecentreNeeded(needed) {
+    const btn = el("nav-recenter");
+    btn.classList.toggle("idle", !needed);
+    btn.setAttribute("aria-label", needed ? "Recentre on me" : "Already following you");
 }
-el("nav-toggle").addEventListener("click", (e) => {
+// Layers: twelve of them, so a way back to the state someone can reason about.
+// Everything routes through a change event rather than being set directly, so a
+// reset takes exactly the path a tap does and can't drift from it.
+const LAYER_DEFAULTS = {
+    "show-net": true,
+    "show-constr": true,
+    "show-heat": false,
+    "show-gates": false,
+    "show-pois": false,
+    "show-elev": false,
+    "show-3d": false,
+    "show-aerial": false,
+    "show-lanes": false,
+    "show-access": false,
+    "show-build": false,
+    // dark-mode is deliberately absent. It follows the system setting and belongs
+    // to the rider, not to the map: resetting the layers on a night ride should
+    // not white out the screen.
+};
+el("layers-reset").addEventListener("click", () => {
+    for (const [id, want] of Object.entries(LAYER_DEFAULTS)) {
+        const box = document.getElementById(id);
+        if (!box || box.checked === want)
+            continue;
+        box.checked = want;
+        box.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+});
+// the planner layers name the workspace they belong to, so the link goes there
+el("layers-build-link").addEventListener("click", (e) => {
+    e.preventDefault();
+    const build = document.getElementById("build-box");
+    if (build) {
+        build.open = true;
+        build.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+});
+// The stops menu. The three detours were three of nine buttons in a drawer;
+// they are one dock button and a menu that opens upward, out from under the
+// thumb that just tapped it.
+function stopsOpen(open) {
+    el("nav-stops-menu").style.display = open ? "flex" : "none";
+    el("nav-stops").setAttribute("aria-expanded", String(open));
+}
+el("nav-stops").addEventListener("click", (e) => {
     e.stopPropagation();
-    toggleRideControls();
+    stopsOpen(el("nav-stops").getAttribute("aria-expanded") !== "true");
 });
-// The chevron was 27 px wide and the only way in to every ride control, with
-// 14 px of clear space before the map — so tap anywhere on the banner that
-// isn't itself a control.
-el("nav-banner").addEventListener("click", (e) => {
-    const t = e.target;
-    if (t.closest("button") || t.closest("#nav-ask"))
-        return;
-    toggleRideControls();
+// Tapping the map puts it away — and only that. The map's own mid-ride handler
+// asks whether to abandon the route, so without swallowing this tap, dismissing
+// a menu also offered to throw the ride away.
+// Outside a ride the map has no "are you sure", so a tap just closes the menu.
+map.on("click", () => {
+    if (!navActive)
+        stopsOpen(false);
 });
+for (const id of ["nav-water", "nav-restroom", "nav-playground"]) {
+    el(id).addEventListener("click", () => stopsOpen(false));
+}
 el("nav-mute").addEventListener("click", () => {
     navMuted = !navMuted;
-    el("nav-mute").textContent = navMuted ? "🔇" : "🔊";
+    const btn = el("nav-mute");
+    // the icon alone read as decoration at a glance; the word says which it is
+    btn.querySelector(".dock-icon").textContent = navMuted ? "🔇" : "🔊";
+    btn.querySelector(".dock-label").textContent = navMuted ? "muted" : "voice on";
+    btn.classList.toggle("muted", navMuted);
+    btn.setAttribute("aria-label", navMuted ? "Voice off — tap to turn on" : "Voice on — tap to mute");
     if (navMuted)
         clearSpeech();
 });
 el("nav-recenter").addEventListener("click", () => {
     navFollowing = true;
     navUserZoom = false; // hand the zoom back to the follow camera
-    el("nav-recenter").style.display = "none";
+    setRecentreNeeded(false);
 });
 window.addEventListener("popstate", () => {
     if (!navActive)
@@ -4030,7 +4200,7 @@ window.addEventListener("popstate", () => {
 map.on("dragstart", () => {
     if (navActive) {
         navFollowing = false;
-        el("nav-recenter").style.display = "inline-block";
+        setRecentreNeeded(true);
         scheduleRefollow();
     }
 });
@@ -4040,7 +4210,7 @@ map.on("dragstart", () => {
 map.on("zoomstart", (e) => {
     if (navActive && e.originalEvent) {
         navUserZoom = true;
-        el("nav-recenter").style.display = "inline-block";
+        setRecentreNeeded(true);
     }
 });
 // The follow camera writes the map every animation frame, which would fight
@@ -4063,7 +4233,7 @@ function takeZoomControl() {
     if (!navActive)
         return;
     navUserZoom = true;
-    el("nav-recenter").style.display = "inline-block";
+    setRecentreNeeded(true);
     scheduleRefollow();
 }
 /** Hand the camera back to the route once the rider has stopped fiddling. */
@@ -4074,7 +4244,7 @@ function scheduleRefollow() {
             return;
         navFollowing = true;
         navUserZoom = false;
-        el("nav-recenter").style.display = "none";
+        setRecentreNeeded(false);
     }, REFOLLOW_MS);
 }
 // Bound to the map's own input events, not a canvas listener (wheel/touch land

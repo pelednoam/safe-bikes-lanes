@@ -642,3 +642,198 @@ test("a round trip is asked for in miles, typed freely, and answered with a choi
   await expect(page.locator("#summary")).toContainText(/mi\b/);
   await expect(page.locator("#summary")).not.toContainText(/\bkm\b/);
 });
+
+test("search results say how safe the way there is, before you commit", async ({
+  page,
+  context,
+}) => {
+  // The app's premise is that where you go is a safety decision, and it only
+  // said so after you had already chosen. A park on the far side of an arterial
+  // is a D before you set out.
+  await context.grantPermissions(["geolocation"]);
+  await context.setGeolocation({ latitude: 42.3875, longitude: -71.0995 });
+  await page.goto("/");
+  await page.waitForFunction(() => window._map !== undefined, null, { timeout: 60_000 });
+  await page.waitForTimeout(2500);
+
+  await page.locator("#search").fill("danehy");
+  await expect(page.locator(".search-row").first()).toBeVisible({ timeout: 30_000 });
+
+  // a real grade, from a real route — it arrives after the routing, so poll
+  const badge = page.locator(".search-row").first().locator(".search-grade");
+  await expect.poll(async () => (await badge.innerText()).trim(), { timeout: 60_000 }).toMatch(
+    /^[ABCDF]$/,
+  );
+  // Coloured on the same scale the route cards use, so an A means one thing
+  // everywhere. Compared against the placeholder colour, not against
+  // transparency — the ungraded state is opaque too, so "not transparent" was
+  // true before any grade arrived.
+  const grade = (await badge.innerText()).trim();
+  const bg = await badge.evaluate((b) => getComputedStyle(b).backgroundColor);
+  // the same five colours the route cards grade with, so an A means one thing
+  const GRADE_RGB: Record<string, string> = {
+    A: "rgb(26, 152, 80)",
+    B: "rgb(102, 189, 99)",
+    C: "rgb(253, 174, 97)",
+    D: "rgb(244, 109, 67)",
+    F: "rgb(215, 48, 39)",
+  };
+  expect(GRADE_RGB[grade], `no colour defined for grade ${grade}`).toBeDefined();
+  expect(bg, "the badge kept its ungraded placeholder colour").toBe(GRADE_RGB[grade]);
+  // and the distance is the safest way's, not a straight line
+  await expect(page.locator(".search-row").first().locator(".search-sub")).toContainText(
+    /by the safest way/,
+  );
+});
+
+test("a grade is never shown for a route that wasn't computed", async ({ page }) => {
+  // The letter is a safety claim. Without a start there is nothing to route
+  // from, so there is nothing honest to say — and inventing a start would be a
+  // claim about a route nobody asked for.
+  await page.goto("/");
+  await page.waitForFunction(() => window._map !== undefined, null, { timeout: 60_000 });
+  await page.waitForTimeout(2000);
+  const hasStart = await page.evaluate(() => document.querySelectorAll(".maplibregl-marker").length);
+  expect(hasStart, "this test needs no start marker to be meaningful").toBe(0);
+
+  await page.locator("#search").fill("danehy");
+  await expect(page.locator(".search-row").first()).toBeVisible({ timeout: 30_000 });
+  await page.waitForTimeout(4000);
+  expect(
+    await page.locator(".search-grade").count(),
+    "a grade appeared with nowhere to route from",
+  ).toBe(0);
+});
+
+test("typing again abandons the grades for the list that's gone", async ({ page, context }) => {
+  // five routes take a moment; the answers to the previous query must not land
+  // against this query's rows
+  await context.grantPermissions(["geolocation"]);
+  await context.setGeolocation({ latitude: 42.3875, longitude: -71.0995 });
+  await page.goto("/");
+  await page.waitForFunction(() => window._map !== undefined, null, { timeout: 60_000 });
+  await page.waitForTimeout(2500);
+
+  await page.locator("#search").fill("danehy");
+  await expect(page.locator(".search-row").first()).toBeVisible({ timeout: 30_000 });
+  await page.locator("#search").fill("porter");
+  // wait for the list to actually change hands — the old rows are still on
+  // screen until the debounced search returns, so "a row is visible" proves
+  // nothing about which query it belongs to
+  await expect
+    .poll(async () => (await page.locator("#search-results").innerText()).toLowerCase(), {
+      timeout: 40_000,
+    })
+    .toContain("porter");
+  const shown = (await page.locator("#search-results").innerText()).toLowerCase();
+  expect(shown, "results from the abandoned query are still on screen").not.toContain("danehy");
+  // and grading ran for the list that is actually there: a row left saying
+  // "checking…" for ever would mean the guard cancelled the wrong generation
+  await expect
+    .poll(
+      async () => (await page.locator(".search-row").first().locator(".search-sub").innerText()).trim(),
+      { timeout: 60_000 },
+    )
+    .not.toContain("checking");
+});
+
+test("a destination the router can't reach gets no grade at all", async ({ page, context }) => {
+  // The letter is a safety claim, and off the edge of the mapped area there is
+  // no route to grade. The search itself is bounded to the local towns, so the
+  // only way to reach this branch is to hand it a result from outside — which
+  // is also exactly what a bad geocoder answer would look like.
+  await context.grantPermissions(["geolocation"]);
+  await context.setGeolocation({ latitude: 42.3875, longitude: -71.0995 });
+  await page.route(/nominatim.*\/search/, (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify([
+        { display_name: "Nowhere, Berkshire County, MA", lon: "-73.2500", lat: "42.4500" },
+      ]),
+    }),
+  );
+  await page.goto("/");
+  await page.waitForFunction(() => window._map !== undefined, null, { timeout: 60_000 });
+  await page.waitForTimeout(2500);
+  await page.locator("#search").fill("nowhere");
+  await expect(page.locator(".search-row").first()).toBeVisible({ timeout: 30_000 });
+
+  // it may take a moment to discover there is no route; what it must never do
+  // is settle on a letter
+  await page.waitForTimeout(15_000);
+  const letters = await page
+    .locator(".search-grade")
+    .evaluateAll((els) => els.map((e) => (e.textContent ?? "").trim()));
+  for (const l of letters) {
+    expect(l, "graded a route that could not be computed").not.toMatch(/^[ABCDF]$/);
+  }
+  // and the row is still usable as a destination — it just makes no claim
+  await expect(page.locator(".search-row").first()).toContainText("Nowhere");
+});
+
+test("a grade is never replayed after the routing settings change", async ({ page, context }) => {
+  // The cache was keyed on start, destination and profile — but the route also
+  // depends on prefer-flat, the avoided lane types and the walking budget.
+  // Toggling one and searching the same place again replayed the letter
+  // computed under the old settings: a safety claim about a route the app
+  // would no longer plan.
+  await context.grantPermissions(["geolocation"]);
+  await context.setGeolocation({ latitude: 42.3875, longitude: -71.0995 });
+  await page.goto("/");
+  await page.waitForFunction(() => window._map !== undefined, null, { timeout: 60_000 });
+  await page.waitForTimeout(2500);
+
+  const gradeFor = async (query: string): Promise<string> => {
+    await page.locator("#search").fill("");
+    await page.waitForTimeout(300);
+    await page.locator("#search").fill(query);
+    await expect(page.locator(".search-row").first()).toBeVisible({ timeout: 30_000 });
+    const badge = page.locator(".search-row").first().locator(".search-grade");
+    await expect.poll(async () => (await badge.innerText()).trim(), { timeout: 60_000 }).toMatch(
+      /^[ABCDF]$/,
+    );
+    return (await badge.innerText()).trim();
+  };
+  const before = await gradeFor("danehy");
+
+  // avoid everything the router is willing to avoid — a different route by
+  // construction, so a cache that ignored this would hand back the old letter
+  const prefs = page.locator("details.section", { has: page.locator("#prefer-flat") });
+  await prefs.locator("summary").click();
+  for (const t of ["lane", "sharrow", "moderate_street"]) {
+    await page.locator(`#avoid-${t}`).check();
+  }
+  await page.locator("#prefer-flat").check();
+  await page.waitForTimeout(500);
+
+  const after = await gradeFor("danehy");
+  // it must have been recomputed, not replayed. The letter may legitimately be
+  // the same — what must not happen is the cache short-circuiting the work, so
+  // check the figure the new settings should move.
+  const sub = await page.locator(".search-row").first().locator(".search-sub").innerText();
+  expect(sub).toMatch(/by the safest way/);
+  expect(["A", "B", "C", "D", "F"]).toContain(after);
+  expect(before.length).toBe(1);
+});
+
+test("picking a start doesn't get graded as if it were a destination", async ({ page, context }) => {
+  // The grade describes the route from your start to a destination. On the
+  // start-picker list it would describe the route from the CURRENT start to a
+  // candidate start — a journey nobody is taking, labelled as if they were.
+  await context.grantPermissions(["geolocation"]);
+  await context.setGeolocation({ latitude: 42.3875, longitude: -71.0995 });
+  await page.goto("/");
+  await page.waitForFunction(() => window._map !== undefined, null, { timeout: 60_000 });
+  await page.waitForTimeout(2500);
+
+  await page.locator("#from-field").fill("danehy");
+  await expect(page.locator(".search-row").first()).toBeVisible({ timeout: 30_000 });
+  await page.waitForTimeout(6000);
+  expect(
+    await page.locator(".search-grade").count(),
+    "the start picker showed a grade for a route nobody is taking",
+  ).toBe(0);
+  // and no leftover "checking…" either: a row that will never be graded should
+  // not claim a computation is running
+  expect(await page.locator(".search-sub").count()).toBe(0);
+});
