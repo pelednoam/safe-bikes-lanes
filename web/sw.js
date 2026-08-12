@@ -13,10 +13,25 @@ const CACHE = "family-bike-router-v11";
 const ASSETS = [
   ".",
   "index.html",
+  // Every module app.js imports, not a subset. The rest were being cached
+  // opportunistically by the fetch handler, which works only if the page finishes
+  // loading them before the network goes — and a module added later (search.js
+  // was) is exactly the one a first offline load would be missing. A test asserts
+  // this list covers the import graph, so the next one cannot be forgotten.
   "app.js",
+  "data.js",
+  "hazards.js",
+  "native.js",
+  "nav.js",
+  "places.js",
+  "rides.js",
   "router.js",
-  "types.js",
+  "search.js",
+  "segment.js",
+  "sharecard.js",
   "tiles.js",
+  "types.js",
+  "units.js",
   "manifest.json",
   "fonts/Barlow-400.woff2",
   "fonts/Barlow-500.woff2",
