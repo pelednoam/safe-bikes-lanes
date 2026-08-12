@@ -591,3 +591,78 @@ test("the planner layers point at the workspace they belong to", async ({ page }
   await expect(page.locator("#rank-panel h1")).toBeVisible();
   await expect(page.locator(".row").first()).toBeVisible({ timeout: 30_000 });
 });
+
+test("the info box says which build you are looking at", async ({ page }) => {
+  test.slow();
+  // A hard refresh that appears to change nothing is indistinguishable from a
+  // deploy that never happened. This is the only thing in the app that can tell
+  // them apart, and it is the first line of the box people open to ask.
+  await boot(page);
+  await page.locator("#about-top").click();
+  await expect(page.locator("#about")).toBeVisible();
+  const stamp = page.locator("#build-stamp");
+  await expect(stamp).toBeVisible();
+
+  // Served from the repo rather than from a deploy, so the placeholder is
+  // unsubstituted — and it says so plainly instead of inventing a date.
+  await expect(stamp).toHaveText(/Development build|You're running/);
+
+  // The data date is beside it, and is the pipeline's, not today's.
+  await expect(page.locator("#built-date")).toHaveText(/\d{4}-\d{2}-\d{2}/);
+});
+
+// The app's service worker is network-first and answers same-origin requests
+// itself, and page.route cannot intercept what a service worker serves — so the
+// routes below would silently do nothing. Blocked for this test only; every
+// other test wants the app as it really runs.
+test.describe("build identity", () => {
+  test.use({ serviceWorkers: "block" });
+
+  test("a deployed build names itself and notices a newer one", async ({ page }) => {
+  test.slow();
+  // The substitution the deploy performs, done here so the deployed behaviour is
+  // exercised rather than only the development fallback.
+  await page.route("**/app.js", async (route) => {
+    const res = await route.fetch();
+    const body = (await res.text())
+      .replace("__BUILD_VERSION__", "web")
+      .replace("__BUILD_TIME__", "2026-08-12T02:00:00Z")
+      .replace("__BUILD_COMMIT__", "aaaa111");
+    await route.fulfill({
+      response: res,
+      body,
+      headers: { ...res.headers(), "content-type": "text/javascript" },
+    });
+  });
+  // and a site serving a different build than this page
+  await page.route("**/build.json", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: '{"version":"web","built":"2026-08-12T03:30:00Z","commit":"bbbb222"}',
+    }),
+  );
+  await boot(page);
+  await page.locator("#about-top").click();
+  const stamp = page.locator("#build-stamp");
+  await expect(stamp).toContainText("aaaa111");
+  await expect(stamp).toContainText("You're running");
+  // the page is stale, and is told so rather than left to guess
+  await expect(stamp.locator(".stale-build")).toBeVisible({ timeout: 10_000 });
+  await expect(stamp).toContainText("bbbb222");
+  await expect(stamp).toContainText("cached copy");
+
+  // When the site agrees with the page, it says nothing further.
+  await page.unroute("**/build.json");
+  await page.route("**/build.json", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: '{"version":"web","built":"2026-08-12T02:00:00Z","commit":"aaaa111"}',
+    }),
+  );
+  await page.reload();
+  await page.locator("#about-top").click();
+  await expect(page.locator("#build-stamp")).toContainText("aaaa111");
+  await page.waitForTimeout(1500);
+  expect(await page.locator(".stale-build").count()).toBe(0);
+  });
+});

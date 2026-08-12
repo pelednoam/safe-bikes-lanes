@@ -367,6 +367,12 @@ test("the route line is on the map by the time the numbers are", async ({ page }
 test("a destination set from a link gets a name, and a typed one is left alone", async ({
   page,
 }) => {
+  // Measured at ~52 s of a 60 s budget on a quiet machine: a cold map, a route
+  // across two cities, and a drag with eight steps. It was passing with 8 s to
+  // spare and failing whenever anything else ran, which reads as flakiness and is
+  // really a test spending its whole allowance. Nothing here is weakened by
+  // giving it room.
+  test.slow();
   // the geocoder is a nicety, so it's stubbed: what's under test is that the
   // field gets filled at all, and that it never overwrites what you typed
   await page.route(/nominatim\.openstreetmap\.org\/reverse/, (route) => {

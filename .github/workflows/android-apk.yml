@@ -79,6 +79,10 @@ jobs:
         env:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          # build.gradle derives versionCode from this (app-v50 -> 50). Without
+          # it every APK is versionCode 1 again, silently — which is the state
+          # this replaced, and nothing about the build would look wrong.
+          APP_VERSION: ${{ github.ref_name }}
         run: ./gradlew assembleDebug
         working-directory: web/android
       - name: Verify the APK is signed with the expected key

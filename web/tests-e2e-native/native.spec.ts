@@ -263,3 +263,36 @@ test("the where-to-build link works inside the app, offline", async ({ page }) =
   await expect(page.locator(".row").first()).toBeVisible({ timeout: 45_000 });
   await expect(page.locator("#built")).not.toHaveText("—");
 });
+
+test("the app says which release it is", async ({ page }) => {
+  // On the phone the stamp carries the release tag, which is the version someone
+  // would quote when reporting a problem. dist/build.json is written by
+  // assemble.sh from the tag CI built with, and baked into app.js so it describes
+  // the bundle actually installed rather than whatever the site serves now.
+  await nativeShim(page);
+  await page.goto("/");
+  await page.locator("#about-top").click();
+  await expect(page.locator("#about")).toBeVisible();
+
+  const stamp = (await page.locator("#build-stamp").textContent()) ?? "";
+  const bundled = (await (await page.request.get("/build.json")).json()) as {
+    version?: string;
+    built?: string;
+    commit?: string;
+  };
+  expect(bundled.commit, "assemble.sh did not record the commit").toBeTruthy();
+  expect(bundled.built).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+
+  // A local build says "dev"; a CI build says app-vNN. Either way the stamp
+  // names it rather than leaving the reader to guess.
+  expect(stamp).toContain("You're running");
+  expect(stamp).toContain(bundled.commit as string);
+  if ((bundled.version ?? "dev") !== "dev") {
+    expect(stamp, "the release tag is missing from the stamp").toContain(
+      bundled.version as string,
+    );
+  }
+  // and never the placeholder: an unsubstituted stamp is a broken assembly
+  expect(stamp).not.toContain("__BUILD_STAMP__");
+  expect(stamp).not.toContain("Development build");
+});

@@ -1,5 +1,11 @@
 apply plugin: 'com.android.application'
 
+// app-v50 -> 50. Only a well-formed tag yields a code; anything else stays at 1
+// rather than throwing and taking the release down at its last step.
+def releaseCode = { String tag ->
+    (tag =~ /^app-v(\d+)$/).with { it.matches() ? it.group(1).toInteger() : 1 }
+}
+
 android {
     namespace = "com.pelednoam.safebikes"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -7,8 +13,20 @@ android {
         applicationId "com.pelednoam.safebikes"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        // Derived from the release tag (app-v50 -> 50), not a literal.
+        //
+        // It was pinned at 1, so every build claimed to be the same version.
+        // Installs still worked — the stable signing key lets one APK replace
+        // another, and the in-app updater compares the tag string — but Android
+        // itself had no way to tell a newer build from an older one: a downgrade
+        // looked identical to an upgrade, and anything that reasons about
+        // versionCode (the Play Store, `adb install` without -r, backup and
+        // restore) was being told these were all the same app build.
+        //
+        // Local builds with no tag stay at 1, which is below every released
+        // build, so a hand-built APK can never masquerade as a newer one.
+        versionCode releaseCode(System.getenv("APP_VERSION") ?: "")
+        versionName(System.getenv("APP_VERSION") ?: "dev")
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.

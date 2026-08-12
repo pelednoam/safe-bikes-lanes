@@ -304,6 +304,12 @@
   .opt-chip.sel { border-color:#fff; outline:2px solid var(--accent); }
 
   /* ── Dialogs ───────────────────────────────────────────────────────── */
+  /* right padding clears the absolutely-positioned close button, which sat on
+     top of the commit id — the one part of this line someone would read out */
+  .build-stamp { margin:0 0 12px; padding:7px 40px 7px 9px; border-radius:8px;
+    background:var(--field, rgba(17,22,25,.05)); font-size:12px; color:var(--muted, #5c6a72);
+    line-height:1.45; }
+  .build-stamp .stale-build { color:var(--s-busy, #d73027); font-weight:600; }
   #about, #rides, #hazard {
     /* without border-box the 24 px padding pushed #hazard to 398 px on a 390 px
        phone, so the dialog hung off the side of the screen */
@@ -931,6 +937,9 @@
 </dialog>
 <dialog id="about">
   <button id="about-close" title="close">✕</button>
+  <!-- First thing in the box, because it is what someone opens this to check
+       when a refresh appeared to change nothing. -->
+  <p id="build-stamp" class="build-stamp">…</p>
   <p style="margin:0 0 14px"><a href="install/">Put this on your phone</a> — an
   Android app, or add it to an iPhone home screen from Safari.</p>
   <h2>How this router decides what's safe</h2>
