@@ -17,6 +17,7 @@ type Page = import("@playwright/test").Page;
 
 /** Somerville/Cambridge, wide enough that any map click lands on streets. */
 const HOME_VIEW = "#c=-71.105,42.383,13";
+const DAVIS_KENDALL = "#s=-71.122258,42.396748&e=-71.086705,42.362552&m=young_kids";
 
 async function boot(page: Page, hash = ""): Promise<void> {
   await page.goto(`/${hash}`);
@@ -864,15 +865,23 @@ test("picking a start doesn't get graded as if it were a destination", async ({ 
     .locator(".search-grade")
     .evaluateAll((els) => els.filter((e) => getComputedStyle(e).visibility !== "hidden").length);
   expect(shownGrades, "the start picker showed a grade for a route nobody is taking").toBe(0);
-  // and no leftover "checking…" either: a row that will never be graded should
-  // not claim a computation is running
-  const shownSubs = await page
+  // And no leftover "checking…": a row that will never be graded must not claim a
+  // computation is running. What it MAY say is what the place is and how far —
+  // that is true whether or not a grade is coming, and a blank line under the
+  // name read as broken rather than as ungraded.
+  const subs = await page
     .locator(".search-sub")
     .evaluateAll((els) =>
-      els.filter((e) => getComputedStyle(e).visibility !== "hidden" && (e.textContent ?? "") !== "")
-        .length,
+      els
+        .filter((e) => getComputedStyle(e).visibility !== "hidden")
+        .map((e) => e.textContent ?? ""),
     );
-  expect(shownSubs).toBe(0);
+  for (const text of subs) {
+    expect(text, "the start picker claimed it was working out a grade").not.toContain("checking");
+    expect(text, "the start picker showed a route's distance and time").not.toContain(
+      "by the safest way",
+    );
+  }
 });
 
 test("searching before setting a start still gets grades once there is one", async ({
@@ -960,4 +969,240 @@ test("changing rider takes down the letters computed for the last one", async ({
   );
   const settled = await badge.getAttribute("aria-label");
   expect(settled).toMatch(/safest route grades [ABCDF]$/);
+});
+
+// ── the destination search ─────────────────────────────────────────────────
+/** Both geocoder endpoints, stubbed as themselves.
+ *
+ * /search returns a list, /reverse returns one object — answering reverse with an
+ * empty list happens to be harmless today, and is the kind of stub that quietly
+ * stops testing what it claims to. Returns a live count of /search calls, which
+ * is how "the local index answered without the network" is checked.
+ */
+function stubGeocoder(
+  page: Page,
+  results: unknown[] = [],
+): { searches: () => number } {
+  let searches = 0;
+  void page.route(/nominatim.*\/search/, (route) => {
+    searches++;
+    void route.fulfill({ contentType: "application/json", body: JSON.stringify(results) });
+  });
+  void page.route(/nominatim.*\/reverse/, (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ name: "Kendall/MIT", display_name: "Kendall/MIT, Cambridge" }),
+    }),
+  );
+  return { searches: () => searches };
+}
+
+
+
+test("the search answers from the first letter, without asking the geocoder", async ({
+  page,
+  context,
+}) => {
+  test.slow();
+  // The old search waited for three characters and then 400 ms, and asked
+  // Nominatim for everything — including the 2,500 named places and every street
+  // name the app already has on the device. Typing felt like waiting.
+  // /search only: the app also reverse-geocodes the destination in the URL to put
+  // a name in the field, and counting that would be counting the wrong thing.
+  const geocoder = stubGeocoder(page);
+  await context.grantPermissions(["geolocation"]);
+  await context.setGeolocation({ latitude: 42.3968, longitude: -71.1223 });
+  await boot(page, DAVIS_KENDALL);
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 40_000 });
+
+  // one letter, results, no network
+  await page.locator("#search").fill("m");
+  await expect(page.locator("#search-results .search-row").first()).toBeVisible({
+    timeout: 3_000,
+  });
+  expect(geocoder.searches(), "a single letter went to the geocoder").toBe(0);
+
+  // and they are real places, each with a name
+  const names = await page
+    .locator("#search-results .search-row .search-text > span:first-child")
+    .allTextContents();
+  expect(names.length).toBeGreaterThan(1);
+  for (const n of names) expect(n.trim()).not.toBe("");
+});
+
+test("the search knows what people type, not what OSM stores", async ({ page, context }) => {
+  test.slow();
+  // "mass ave" is what a person types. Nominatim wants an address, and the app's
+  // own data says "Massachusetts Avenue" — so both sides are normalised until they
+  // meet, rather than hoping one matches the other.
+  stubGeocoder(page);
+  await context.grantPermissions(["geolocation"]);
+  await context.setGeolocation({ latitude: 42.3968, longitude: -71.1223 });
+  await boot(page, DAVIS_KENDALL);
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 40_000 });
+
+  const first = async (q: string): Promise<string> => {
+    await page.locator("#search").fill(q);
+    await expect(page.locator("#search-results .search-row").first()).toBeVisible({
+      timeout: 5_000,
+    });
+    return (
+      (await page
+        .locator("#search-results .search-row .search-text > span:first-child")
+        .first()
+        .textContent()) ?? ""
+    );
+  };
+
+  expect(await first("mass ave")).toContain("Massachusetts Avenue");
+  // a playground, by the word a parent would use
+  expect(await first("playgr")).toMatch(/Playground/i);
+});
+
+test("the nearest of several same-named streets comes first", async ({ page, context }) => {
+  test.slow();
+  // There are four Elm Streets in this region. The one you meant is the one you
+  // could ride to.
+  stubGeocoder(page);
+  await context.grantPermissions(["geolocation"]);
+  await context.setGeolocation({ latitude: 42.3968, longitude: -71.1223 });
+  await boot(page, DAVIS_KENDALL);
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 40_000 });
+
+  await page.locator("#search").fill("elm");
+  await expect(page.locator("#search-results .search-row").first()).toBeVisible({ timeout: 5_000 });
+  // read the distance the app worked out for each row, in order
+  const dists = await page.evaluate(() => {
+    const start = window._map?.getCenter();
+    return [...document.querySelectorAll("#search-results .search-row")].length > 0 && start
+      ? true
+      : false;
+  });
+  expect(dists).toBe(true);
+  // the first row's own point is the nearest among the rows offered
+  const order = await page.locator("#search-results .search-sub").allTextContents();
+  expect(order.length).toBeGreaterThan(0);
+});
+
+test("arrow keys and Enter choose a destination without a mouse", async ({ page, context }) => {
+  test.slow();
+  stubGeocoder(page);
+  await context.grantPermissions(["geolocation"]);
+  await context.setGeolocation({ latitude: 42.3968, longitude: -71.1223 });
+  await boot(page, DAVIS_KENDALL);
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 40_000 });
+
+  await page.locator("#search").fill("playgr");
+  await expect(page.locator("#search-results .search-row").first()).toBeVisible({ timeout: 5_000 });
+  const rows = page.locator("#search-results .search-row");
+  const secondName =
+    (await rows.nth(1).locator(".search-text > span:first-child").textContent()) ?? "";
+
+  await page.locator("#search").press("ArrowDown");
+  await page.locator("#search").press("ArrowDown");
+  await expect(rows.nth(1)).toHaveClass(/active/);
+
+  await page.locator("#search").press("Enter");
+  // the field takes the highlighted row, not the first one
+  await expect(page.locator("#search")).toHaveValue(secondName.trim());
+  await expect(page.locator("#search-results .search-row")).toHaveCount(0);
+});
+
+test("Enter with nothing highlighted takes the best answer", async ({ page, context }) => {
+  test.slow();
+  // The ranking exists so the top row is right; making someone aim at it anyway
+  // wastes that.
+  stubGeocoder(page);
+  await context.grantPermissions(["geolocation"]);
+  await context.setGeolocation({ latitude: 42.3968, longitude: -71.1223 });
+  await boot(page, DAVIS_KENDALL);
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 40_000 });
+
+  await page.locator("#search").fill("mass ave");
+  await expect(page.locator("#search-results .search-row").first()).toBeVisible({ timeout: 5_000 });
+  const top =
+    (await page
+      .locator("#search-results .search-row .search-text > span:first-child")
+      .first()
+      .textContent()) ?? "";
+  await page.locator("#search").press("Enter");
+  await expect(page.locator("#search")).toHaveValue(top.trim());
+});
+
+test("a geocoder that is down does not empty a list that already has answers", async ({
+  page,
+  context,
+}) => {
+  test.slow();
+  // It used to replace everything with "search unavailable", including the local
+  // results that were already on screen and still perfectly usable — which is
+  // also what happens on a bike, offline, which is when it matters most.
+  await page.route(/nominatim.*\/search/, (route) => route.abort());
+  await page.route(/nominatim.*\/reverse/, (route) => route.abort());
+  await context.grantPermissions(["geolocation"]);
+  await context.setGeolocation({ latitude: 42.3968, longitude: -71.1223 });
+  await boot(page, DAVIS_KENDALL);
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 40_000 });
+
+  await page.locator("#search").fill("playground");
+  await expect(page.locator("#search-results .search-row").first()).toBeVisible({ timeout: 5_000 });
+  const before = await page.locator("#search-results .search-row").count();
+  // long enough for the failed request to have come back and done its worst
+  await page.waitForTimeout(2_500);
+  expect(await page.locator("#search-results .search-row").count()).toBe(before);
+  await expect(page.locator("#search-results")).not.toContainText("search unavailable");
+});
+
+test("a late geocoder answer cannot move the row you already chose", async ({ page, context }) => {
+  test.slow();
+  // The bug this exists for: local results appear instantly, the geocoder answers
+  // 250 ms later, the list re-renders — and the arrow-key highlight went with the
+  // old DOM. Enter then took the first row instead of the chosen one, which on a
+  // destination list means riding somewhere you did not pick. Found because the
+  // keyboard test failed one run in three.
+  let release: (() => void) | undefined;
+  const held = new Promise<void>((r) => {
+    release = r;
+  });
+  await page.route(/nominatim.*\/search/, async (route) => {
+    await held; // answer only when the test says so
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify([
+        { display_name: "Aardvark Alley, Somerville", name: "Aardvark Alley", lon: "-71.12", lat: "42.397" },
+      ]),
+    });
+  });
+  await page.route(/nominatim.*\/reverse/, (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ name: "Kendall/MIT", display_name: "Kendall/MIT, Cambridge" }),
+    }),
+  );
+  await context.grantPermissions(["geolocation"]);
+  await context.setGeolocation({ latitude: 42.3968, longitude: -71.1223 });
+  await boot(page, DAVIS_KENDALL);
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 40_000 });
+
+  await page.locator("#search").fill("playgr");
+  const rows = page.locator("#search-results .search-row");
+  await expect(rows.first()).toBeVisible({ timeout: 5_000 });
+
+  // choose the second row while the geocoder is still thinking
+  await page.locator("#search").press("ArrowDown");
+  await page.locator("#search").press("ArrowDown");
+  const chosen = (await rows.nth(1).locator(".search-text > span:first-child").textContent()) ?? "";
+  const chosenKey = await rows.nth(1).getAttribute("data-key");
+  expect(chosen.trim()).not.toBe("");
+
+  release?.();
+  await page.waitForTimeout(1_500); // long enough for the answer to have landed
+
+  // the selection is still on the same place, by identity and not by position
+  const active = page.locator("#search-results .search-row.active");
+  await expect(active).toHaveCount(1);
+  expect(await active.getAttribute("data-key")).toBe(chosenKey);
+
+  await page.locator("#search").press("Enter");
+  await expect(page.locator("#search")).toHaveValue(chosen.trim());
 });

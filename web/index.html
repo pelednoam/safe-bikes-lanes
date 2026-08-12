@@ -127,7 +127,11 @@
   #from-field.custom { border-color:var(--accent); }
   #from-field.picking { border-color:var(--accent); color:var(--accent); font-weight:700; }
   #from-field .od-ico { opacity:.85; }
-  .search-row { display:flex; gap:8px; align-items:center; margin:6px 0; }
+  .search-row { display:flex; gap:8px; align-items:center; margin:6px 0;
+    border-radius:8px; padding:2px 4px; }
+  /* arrow-key highlight: the same affordance as hover, so keyboard and thumb
+     agree about which row Enter would take */
+  .search-row.active { background:var(--field, rgba(17,22,25,.06)); }
   .search-text { flex:1; min-width:0; display:flex; flex-direction:column; gap:1px; }
   .search-text > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   /* how safe the way there is, before you commit to going: a destination across

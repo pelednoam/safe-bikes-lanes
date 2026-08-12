@@ -22,6 +22,14 @@ import {
   webVoiceCount,
 } from "./native.js";
 import {
+  type Candidate,
+  matchScore,
+  metresBetween,
+  rank as rankSearch,
+  describe as describeRow,
+  type Ranked,
+} from "./search.js";
+import {
   CLASS_LABELS,
   cautionsHtml,
   clearPhotoCache,
@@ -110,6 +118,9 @@ interface NominatimResult {
   display_name: string;
   lon: string;
   lat: string;
+  /** jsonv2's short label ("Kendall/MIT"), when it has one: the full
+   * display_name is five commas of address that no row has space for. */
+  name?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -1494,6 +1505,79 @@ function renderPlacesAndRecent(): void {
 // address search (Nominatim, bounded to our area)
 // ---------------------------------------------------------------------------
 
+/** Everything already on the device that could answer a query.
+ *
+ * Assembled per keystroke rather than kept in an index: 2,500 POIs and a
+ * viewport of streets is a few thousand string comparisons, which is nothing, and
+ * an index would have to be invalidated every time a place is saved, a trip is
+ * taken, or the map moves.
+ */
+function localCandidates(): Candidate[] {
+  const out: Candidate[] = [];
+
+  for (const p of listPlaces()) {
+    out.push({ name: p.name, lon: p.lon, lat: p.lat, source: "place", kind: "saved place" });
+  }
+  // where they went, not where they started: the search box asks "where to?"
+  const seenRecent = new Set<string>();
+  for (const r of listRecent()) {
+    const key = `${r.e[0].toFixed(4)},${r.e[1].toFixed(4)}`;
+    if (seenRecent.has(key)) continue;
+    seenRecent.add(key);
+    // the stored label is "A to B"; the destination is what this row offers
+    const label = r.label.includes(" to ") ? (r.label.split(" to ").pop() ?? r.label) : r.label;
+    out.push({ name: label, lon: r.e[0], lat: r.e[1], source: "recent", kind: "you rode here" });
+  }
+  for (const poi of pois) {
+    const name = poi.properties.name;
+    if (typeof name !== "string" || name === "") continue;
+    const meta = POI_META[poi.properties.kind];
+    out.push({
+      name,
+      lon: poi.geometry.coordinates[0],
+      lat: poi.geometry.coordinates[1],
+      source: "poi",
+      kind: meta?.label ?? poi.properties.kind,
+    });
+  }
+  return out;
+}
+
+/** Streets from the tiles already loaded, each reduced to its nearest point.
+ *
+ * A street is long, so which point matters depends on where you are: "Elm
+ * Street" should offer the end you could actually ride to, and its distance
+ * should be to that end rather than to some midpoint in another town.
+ */
+function streetCandidates(query: string, origin: [number, number] | undefined): Candidate[] {
+  const out: Candidate[] = [];
+  for (const st of netTiles.loadedStreets()) {
+    if (matchScore(query, st.name) === 0) continue; // name first: cheap, and most fail
+    let best = st.coords[0];
+    if (best === undefined) continue;
+    if (origin !== undefined) {
+      let bestD = Infinity;
+      for (const c of st.coords) {
+        const d = metresBetween(origin, c);
+        if (d < bestD) {
+          bestD = d;
+          best = c;
+        }
+      }
+    }
+    out.push({ name: st.name, lon: best[0], lat: best[1], source: "street", kind: "street" });
+  }
+  return out;
+}
+
+/** Where distances are measured from: the start if set, else what you're looking at. */
+function searchOrigin(): [number, number] | undefined {
+  const from = start?.getLngLat();
+  if (from) return [from.lng, from.lat];
+  const c = map.getCenter();
+  return [c.lng, c.lat];
+}
+
 async function searchAddress(query: string): Promise<NominatimResult[]> {
   const url =
     "https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&bounded=1" +
@@ -1546,8 +1630,12 @@ function clearGrading(row: { badge: HTMLElement; sub: HTMLElement }): void {
   // and being tapped; removing elements re-flowed the rows under the finger
   // that was reaching for one.
   row.badge.style.visibility = "hidden";
-  row.sub.style.visibility = "hidden";
-  row.sub.textContent = "";
+  // What the place is and how far stays, when the row knows it: a row that
+  // cannot be graded yet is still a useful row, and blanking the only line under
+  // the name left it looking broken rather than ungraded.
+  const where = row.sub.dataset["where"] ?? "";
+  row.sub.style.visibility = where === "" ? "hidden" : "visible";
+  row.sub.textContent = where;
   // the letter is withdrawn from assistive technology too, not just from view
   row.badge.removeAttribute("title");
   row.badge.removeAttribute("aria-label");
@@ -1664,32 +1752,62 @@ async function gradeSearchResults(
   }
 }
 
-function renderSearchResults(results: NominatimResult[], target: "start" | "end" = "end"): void {
+/** Nominatim's answers as candidates, so one ranking covers every source. */
+function geocoderCandidates(results: NominatimResult[]): Candidate[] {
+  const out: Candidate[] = [];
+  for (const r of results) {
+    const lon = parseFloat(r.lon);
+    const lat = parseFloat(r.lat);
+    // a malformed answer becomes NaN, which would reach the router and the
+    // cache key as a coordinate
+    if (!Number.isFinite(lon) || !Number.isFinite(lat)) continue;
+    const parts = r.display_name.split(",").map((p) => p.trim());
+    out.push({
+      name: r.name !== undefined && r.name !== "" ? r.name : (parts[0] ?? r.display_name),
+      lon,
+      lat,
+      source: "geocoder",
+      context: parts.slice(1, 3).join(", "),
+    });
+  }
+  return out;
+}
+
+function renderSearchResults(rows: Ranked[], target: "start" | "end" = "end"): void {
   const box = el<HTMLDivElement>("search-results");
   box.innerHTML = "";
   gradeGen++; // abandon grading for whatever list was here before
-  if (results.length === 0) {
+  if (rows.length === 0) {
     box.textContent = "no results in this area";
     return;
   }
   const grading: { lngLat: [number, number]; badge: HTMLElement; sub: HTMLElement }[] = [];
-  for (const r of results) {
+  for (const r of rows) {
     const row = document.createElement("div");
     row.className = "search-row";
-    const short = r.display_name.split(",").slice(0, 3).join(",");
+    // Identity, so an arrow-key selection survives the list being rebuilt when
+    // the geocoder answers: without it the highlight was destroyed with the DOM
+    // and Enter silently took the first row instead of the chosen one.
+    row.dataset["key"] = `${r.name}|${r.lon.toFixed(5)},${r.lat.toFixed(5)}`;
+    const short = r.name;
     const text = document.createElement("span");
     text.className = "search-text";
     const name = document.createElement("span");
     name.textContent = short;
-    name.title = r.display_name;
+    name.title = [r.name, r.context].filter((p) => p !== undefined && p !== "").join(" — ");
     const sub = document.createElement("small");
     sub.className = "search-sub";
-    sub.textContent = "checking the safest way…";
+    // What this place is and how far, until the grade replaces it. The old row
+    // said "checking the safest way…" and nothing else, so a list of five said
+    // the same thing five times while you waited.
+    const where = describeRow(r, (m) => fmtDist(m));
+    sub.textContent = where === "" ? "checking the safest way…" : where;
+    sub.dataset["where"] = where;
     text.appendChild(name);
     text.appendChild(sub);
     row.appendChild(text);
-    const lngLat: [number, number] = [parseFloat(r.lon), parseFloat(r.lat)];
-    const usable = Number.isFinite(lngLat[0]) && Number.isFinite(lngLat[1]);
+    const lngLat: [number, number] = [r.lon, r.lat];
+    const usable = true;
     const badge = document.createElement("span");
     badge.className = "search-grade";
     badge.textContent = "·";
@@ -3031,24 +3149,107 @@ for (const radio of document.querySelectorAll<HTMLInputElement>("input[name=prof
  * only settable by tapping the map or using the current location. */
 function attachSearch(input: HTMLInputElement, target: "start" | "end"): void {
   let timer: number | undefined;
+  // The geocoder's last answer for the query still in the box, so a keystroke
+  // can re-rank without asking again — and so local and remote results appear in
+  // one list rather than the local ones being replaced when the network answers.
+  let remote: { query: string; rows: Candidate[] } = { query: "", rows: [] };
+  /** The row the arrow keys are on, by identity rather than by position. */
+  let activeKey: string | null = null;
+
+  const rowsNow = (): HTMLElement[] => [
+    ...el<HTMLDivElement>("search-results").querySelectorAll<HTMLElement>(".search-row"),
+  ];
+
+  const highlight = (key: string | null): void => {
+    activeKey = key;
+    for (const row of rowsNow()) {
+      row.classList.toggle("active", key !== null && row.dataset["key"] === key);
+    }
+  };
+
+  const show = (q: string): void => {
+    const origin = searchOrigin();
+    const candidates = [
+      ...localCandidates(),
+      ...streetCandidates(q, origin),
+      ...(remote.query === q ? remote.rows : []),
+    ];
+    renderSearchResults(rankSearch(q, candidates, { origin }), target);
+    // put the selection back where it was, or drop it if that place is gone —
+    // never leave it pointing at whatever row inherited the position
+    highlight(rowsNow().some((r) => r.dataset["key"] === activeKey) ? activeKey : null);
+  };
+
   input.addEventListener("input", () => {
     window.clearTimeout(timer);
     const q = input.value.trim();
-    if (q.length < 3) {
+    if (q === "") {
       el<HTMLDivElement>("search-results").innerHTML = "";
       return;
     }
+    // Local first, on every keystroke, from the first letter. This is the part
+    // that makes the box feel like it is answering rather than thinking: 2,500
+    // named places and the streets on screen are already here, and waiting 400 ms
+    // to ask a geocoder for what we have on the device is waiting for nothing.
+    highlight(null); // a new query is a new list
+    show(q);
+
+    // Then the geocoder, for house numbers and businesses we do not have. Its
+    // answers are merged into the same ranking rather than replacing the list.
+    if (q.length < 3) return;
     timer = window.setTimeout(() => {
       searchAddress(q)
         .then((results) => {
-          // a later keystroke in the other field may have moved on
-          if (input.value.trim() !== q) return;
-          renderSearchResults(results, target);
+          if (input.value.trim() !== q) return; // a later keystroke moved on
+          remote = { query: q, rows: geocoderCandidates(results) };
+          // Not while a row is chosen. Re-ranking under a committed selection is
+          // how someone ends up riding to a place they did not pick; the answers
+          // are kept and merge into the next keystroke's list instead.
+          //
+          // Deliberately redundant with the highlight restore in show(): either
+          // alone keeps the selection, and a test can only kill both together.
+          // This one avoids the churn; that one covers re-renders from any other
+          // cause, which is where the bug came from in the first place.
+          if (activeKey !== null) return;
+          show(q);
         })
         .catch(() => {
-          el<HTMLDivElement>("search-results").textContent = "search unavailable";
+          // The local list is still on screen and still useful, so this is a
+          // footnote rather than an error state — the old code replaced
+          // everything with "search unavailable".
+          const box = el<HTMLDivElement>("search-results");
+          if (box.querySelector(".search-row") === null) {
+            box.textContent = "search unavailable";
+          }
         });
-    }, 400);
+    }, 250);
+  });
+
+  // Arrow keys and Enter, because a list you can only reach with a mouse is a
+  // list you cannot use one-handed.
+  input.addEventListener("keydown", (e: KeyboardEvent) => {
+    const rows = rowsNow();
+    if (rows.length === 0) return;
+    const current = rows.findIndex((r) => r.classList.contains("active"));
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const next =
+        e.key === "ArrowDown" ? Math.min(current + 1, rows.length - 1) : Math.max(current - 1, 0);
+      const chosen = rows[next === -1 ? 0 : next];
+      highlight(chosen?.dataset["key"] ?? null);
+      chosen?.scrollIntoView({ block: "nearest" });
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      // Enter with nothing highlighted takes the first row, which is what the
+      // ranking is for: the best answer should need no aiming at all.
+      const chosen = rows[current === -1 ? 0 : current];
+      chosen?.querySelector<HTMLElement>(".search-text")?.click();
+    } else if (e.key === "Escape" && activeKey !== null) {
+      // step back out of the list without wiping the query
+      e.preventDefault();
+      e.stopPropagation();
+      highlight(null);
+    }
   });
 }
 attachSearch(el<HTMLInputElement>("search"), "end");

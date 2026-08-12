@@ -230,6 +230,33 @@ export class NetworkTiles {
     }
     /** Fetch the tiles the bbox covers (± margin) and return their features —
      * only the visible tiles, so the rendered set stays viewport-bounded. */
+    /** Every named street among the tiles already fetched.
+     *
+     * For the destination search: the street names the app has on the device beat
+     * asking a geocoder for them — instantly, and offline. Only what is already
+     * loaded, so this costs nothing and never fetches; the area you have been
+     * looking at is also the area you are searching in, and the geocoder covers
+     * anything further out.
+     */
+    loadedStreets() {
+        const byName = new Map();
+        for (const feats of this.loaded.values()) {
+            for (const f of feats) {
+                const name = f.properties?.["name"];
+                if (typeof name !== "string" || name === "")
+                    continue;
+                const coords = f.geometry.coordinates;
+                const seen = byName.get(name);
+                // one entry per name per tile-set, carrying all its points: a street is
+                // long, and which end of it is nearest depends on where you are
+                if (seen)
+                    seen.push(...coords);
+                else
+                    byName.set(name, [...coords]);
+            }
+        }
+        return [...byName].map(([name, coords]) => ({ name, coords }));
+    }
     async visibleFeatures(box, margin = 1) {
         if (!this.grid)
             throw new Error("network manifest not loaded");
