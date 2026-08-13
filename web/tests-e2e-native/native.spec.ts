@@ -159,8 +159,52 @@ test("tapping install actually requests the APK", async ({ page }) => {
   await expect(page.locator("#update-banner")).toBeVisible({ timeout: 30_000 });
   await page.locator("#update-get").click();
   await expect.poll(() => apkRequested, { timeout: 10_000 }).toBe(true);
-  // and the rider is told where the download went
-  await expect(page.locator("#update-text")).toContainText(/notification/i);
+
+  // The rider is told where to look, and not told that it worked.
+  //
+  // This message used to read "downloading…" from the moment the button was
+  // tapped, whatever Android then did with the request — so a download that
+  // silently went nowhere was reported as a success, and the only way to find out
+  // was to go looking in Downloads for a file that was never written.
+  const said = (await page.locator("#update-text").textContent()) ?? "";
+  expect(said).toMatch(/notification/i);
+  expect(said, "the app should say where to look, not that the file arrived").toMatch(
+    /downloads/i,
+  );
+  expect(said, "claimed the download succeeded without knowing").not.toMatch(/^downloading/i);
+});
+
+test("the Android side asks for a real download, not for something to open the link", async () => {
+  // Not runnable in a browser: this is the Java that decides what tapping
+  // "install" does, and it is where the bug was. The WebView's DownloadListener
+  // used to fire an ACTION_VIEW intent — "let some app open this URL" — which is
+  // not a download request at all: whichever app claimed the link decided what to
+  // do, and the file never reliably reached anywhere the rider could find it.
+  //
+  // Asserted as text because the alternative is an instrumented device. It cannot
+  // prove the download works; it can prove nobody quietly went back to asking an
+  // app to look at a link.
+  const { readFileSync } = await import("node:fs");
+  const java = readFileSync(
+    "android/app/src/main/java/com/pelednoam/safebikes/MainActivity.java",
+    "utf8",
+  );
+  expect(java, "no DownloadListener: the WebView drops downloads silently").toContain(
+    "setDownloadListener",
+  );
+  expect(java, "downloads are not going through the system download service").toContain(
+    "DownloadManager.Request",
+  );
+  // into the folder the rider will actually open, under a name worth reading
+  expect(java).toContain("DIRECTORY_DOWNLOADS");
+  expect(java).toContain("family-bike-router.apk");
+  // and it shows progress, because a 90 MB file over a phone connection is not instant
+  expect(java).toContain("VISIBILITY_VISIBLE_NOTIFY_COMPLETED");
+  // ACTION_VIEW survives only as the fallback, inside a catch
+  const listenerBody = java.slice(java.indexOf("setDownloadListener"));
+  const firstView = listenerBody.indexOf("ACTION_VIEW");
+  const firstCatch = listenerBody.indexOf("catch (");
+  expect(firstView, "ACTION_VIEW is back on the main path").toBeGreaterThan(firstCatch);
 });
 
 // ── voice ─────────────────────────────────────────────────────────────────

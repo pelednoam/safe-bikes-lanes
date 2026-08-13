@@ -4901,9 +4901,14 @@ async function checkAppUpdate() {
         const text = el("update-text");
         getBtn.addEventListener("click", (ev) => {
             ev.preventDefault();
-            // downloads land in the notification shade, so say where it went —
-            // the app itself shows no visible change
-            text.textContent = "downloading… open your notifications to install";
+            // Says where to look, not that it worked.
+            //
+            // This used to read "downloading…" the instant the button was tapped,
+            // before anything had been asked of Android and whatever the answer was —
+            // so when the download silently went nowhere, the app still reported
+            // success. The wording now names the two places the file can appear and
+            // leaves the rider able to tell that it hasn't.
+            text.textContent = "asked Android to download it — look in your notifications, then Downloads";
             startDownload(APK_URL);
         });
         el("update-dismiss").addEventListener("click", () => {
