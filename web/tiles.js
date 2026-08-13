@@ -207,6 +207,18 @@ export class NetworkTiles {
         this.grid = null;
         this.loaded = new Map();
         this.inflight = new Map();
+        /** Fetch the tiles the bbox covers (± margin) and return their features —
+         * only the visible tiles, so the rendered set stays viewport-bounded. */
+        /** Every named street among the tiles already fetched.
+         *
+         * For the destination search: the street names the app has on the device beat
+         * asking a geocoder for them — instantly, and offline. Only what is already
+         * loaded, so this costs nothing and never fetches; the area you have been
+         * looking at is also the area you are searching in, and the geocoder covers
+         * anything further out.
+         */
+        /** Cached, and thrown away whenever a tile arrives. See loadedStreets. */
+        this.streetCache = null;
     }
     async loadManifest() {
         const m = await this.fetchJson("nettiles/manifest.json");
@@ -221,6 +233,7 @@ export class NetworkTiles {
         const p = this.fetchJson(`nettiles/${key}.json`)
             .then((fc) => {
             this.loaded.set(key, fc.features);
+            this.streetCache = null; // new streets to offer the search
         })
             .finally(() => {
             this.inflight.delete(key);
@@ -228,17 +241,13 @@ export class NetworkTiles {
         this.inflight.set(key, p);
         return p;
     }
-    /** Fetch the tiles the bbox covers (± margin) and return their features —
-     * only the visible tiles, so the rendered set stays viewport-bounded. */
-    /** Every named street among the tiles already fetched.
-     *
-     * For the destination search: the street names the app has on the device beat
-     * asking a geocoder for them — instantly, and offline. Only what is already
-     * loaded, so this costs nothing and never fetches; the area you have been
-     * looking at is also the area you are searching in, and the geocoder covers
-     * anything further out.
-     */
     loadedStreets() {
+        // Rebuilt only when the loaded set changes. This is called on every keystroke,
+        // and `loaded` never shrinks — after a few minutes of panning it holds every
+        // tile ever fetched, so walking it per keystroke would grow into real work
+        // exactly for the reader who has been using the map the longest.
+        if (this.streetCache !== null)
+            return this.streetCache;
         // One entry per segment, NOT one per name. Grouping by name merged the four
         // Elm Streets in this region into a single candidate holding all their points,
         // so "the nearest Elm Street" could not be offered — the whole point of
@@ -254,6 +263,7 @@ export class NetworkTiles {
                 out.push({ name, coords: f.geometry.coordinates });
             }
         }
+        this.streetCache = out;
         return out;
     }
     async visibleFeatures(box, margin = 1) {

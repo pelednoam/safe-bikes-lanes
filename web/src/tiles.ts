@@ -285,6 +285,7 @@ export class NetworkTiles {
     const p = this.fetchJson<{ features: NetFeature[] }>(`nettiles/${key}.json`)
       .then((fc) => {
         this.loaded.set(key, fc.features);
+        this.streetCache = null; // new streets to offer the search
       })
       .finally(() => {
         this.inflight.delete(key);
@@ -303,7 +304,15 @@ export class NetworkTiles {
    * looking at is also the area you are searching in, and the geocoder covers
    * anything further out.
    */
+  /** Cached, and thrown away whenever a tile arrives. See loadedStreets. */
+  private streetCache: { name: string; coords: [number, number][] }[] | null = null;
+
   loadedStreets(): { name: string; coords: [number, number][] }[] {
+    // Rebuilt only when the loaded set changes. This is called on every keystroke,
+    // and `loaded` never shrinks — after a few minutes of panning it holds every
+    // tile ever fetched, so walking it per keystroke would grow into real work
+    // exactly for the reader who has been using the map the longest.
+    if (this.streetCache !== null) return this.streetCache;
     // One entry per segment, NOT one per name. Grouping by name merged the four
     // Elm Streets in this region into a single candidate holding all their points,
     // so "the nearest Elm Street" could not be offered — the whole point of
@@ -318,6 +327,7 @@ export class NetworkTiles {
         out.push({ name, coords: f.geometry.coordinates as [number, number][] });
       }
     }
+    this.streetCache = out;
     return out;
   }
 

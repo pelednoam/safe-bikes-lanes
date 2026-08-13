@@ -38,6 +38,18 @@ suite("normalising what people type", () => {
     expect(normalise("St. Peter's")).toBe("street peters");
   });
 
+  it("keeps letters from any script, so a name is never unsearchable", () => {
+    // Nothing in today's data needs this — the non-ASCII names shipped are Latin
+    // with diacritics — but a name in another script used to normalise to the empty
+    // string, and an empty normal form matches nothing at all.
+    expect(words("Kyōyo Haus")).toEqual(["kyoyo", "haus"]);
+    expect(normalise("Häagen-Dazs")).toBe("haagen dazs");
+    expect(words("北京 Cafe")).toEqual(["北京", "cafe"]);
+    expect(matchScore("北京", "北京 Cafe")).toBeGreaterThan(0);
+    // and punctuation is still dropped, whatever the script
+    expect(words("«Café»")).toEqual(["cafe"]);
+  });
+
   it("drops filler so a missing 'the' cannot lose a match", () => {
     expect(words("the park at the end")).toEqual(["park", "end"]);
   });

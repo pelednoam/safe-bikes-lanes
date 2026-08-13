@@ -104,7 +104,12 @@ export function words(text: string): string[] {
     // "st peter s", and a lone "s" then expanded to "south" through the
     // direction table. A possessive is part of its word.
     .replace(/['\u2019]/g, "")
-    .replace(/[^a-z0-9\s]/g, " ")
+    // Any letter or digit, not just a-z: a name in a script this regex did not
+    // list would normalise to the empty string and become unsearchable. Nothing in
+    // today's data does — the non-ASCII names here are all Latin with diacritics,
+    // which the folding above handles — but "unsearchable" is a bad failure for a
+    // shop to inherit from its own name.
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
     .split(/\s+/)
     .filter((w) => w !== "")
     .flatMap((w) => (ABBREVIATIONS[w] ?? w).split(" "))
@@ -128,7 +133,7 @@ function rawWords(text: string): string[] {
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/['\u2019]/g, "")
-    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
     .split(/\s+/)
     .filter((w) => w !== "" && !FILLER.has(w));
 }

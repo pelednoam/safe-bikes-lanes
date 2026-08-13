@@ -167,6 +167,23 @@ describe("NetworkTiles", () => {
       expect(names).toEqual(["Broadway", "Elm Street", "Elm Street"]);
     });
 
+    it("does not walk every tile again on every call", async () => {
+      // It is called on each keystroke, and `loaded` never shrinks — after some
+      // panning it holds every tile ever fetched. The result is cached until a new
+      // tile arrives, so typing does not get slower the longer the map has been used.
+      const net = new NetworkTiles(netFetch([]));
+      await net.loadManifest();
+      await net.visibleFeatures({ west: 0.3, south: 0.4, east: 0.6, north: 0.6 }, 0);
+      const first = net.loadedStreets();
+      expect(net.loadedStreets(), "a fresh array was built for an unchanged tile set").toBe(first);
+
+      // and a new tile invalidates it, or the search would never see new streets
+      await net.visibleFeatures({ west: 1.3, south: 0.4, east: 1.6, north: 0.6 }, 0);
+      const second = net.loadedStreets();
+      expect(second).not.toBe(first);
+      expect(second.map((s) => s.name)).toContain("Oak Road");
+    });
+
     it("fetches nothing itself", async () => {
       // It runs on every keystroke. A method that could fetch would turn typing
       // into a download.
