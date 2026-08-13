@@ -23,10 +23,22 @@ function precachedAssets(): string[] {
   return [...(block?.groups?.["body"] ?? "").matchAll(/"([^"]+)"/g)].map((m) => m[1] as string);
 }
 
-/** Every local module reachable from app.ts, as the .js files the browser asks for. */
+/** Every local module reachable from app.ts, as the .js files the browser asks for.
+ *
+ * Matches the import forms this codebase can actually produce, and one it cannot
+ * yet: a bare side-effect import (`import "./x.js"`) and a dynamic one
+ * (`import("./x.js")`) both fetch a file, and the first version of this walker saw
+ * neither — so a module added that way would have been missed by the very test
+ * written to stop modules being missed.
+ */
 function importedModules(): string[] {
   const seen = new Set<string>();
   const queue = ["app.ts"];
+  const patterns = [
+    /from\s*"\.\/([\w.-]+)\.js"/g, // import { x } from "./y.js"  /  export … from
+    /import\s*"\.\/([\w.-]+)\.js"/g, // import "./y.js"
+    /import\(\s*"\.\/([\w.-]+)\.js"\s*\)/g, // await import("./y.js")
+  ];
   while (queue.length > 0) {
     const file = queue.pop() as string;
     if (seen.has(file)) continue;
@@ -37,12 +49,25 @@ function importedModules(): string[] {
     } catch {
       continue; // not one of ours
     }
-    for (const m of source.matchAll(/from "\.\/([a-z0-9-]+)\.js"/g)) {
-      queue.push(`${m[1] as string}.ts`);
+    for (const pattern of patterns) {
+      for (const m of source.matchAll(pattern)) queue.push(`${m[1] as string}.ts`);
     }
   }
   seen.delete("app.ts");
+  // `import type` lines name a module the browser never fetches, but they are
+  // harmless here: a type-only module still exists as a .js file after tsc, and
+  // precaching one costs a few bytes. Missing a real one costs the whole app.
   return [...seen].map((f) => f.replace(/\.ts$/, ".js")).sort();
+}
+
+/** Everything index.html loads with a src/href of its own. */
+function pageAssets(): string[] {
+  const html = readFileSync(join(WEB, "index.html"), "utf8");
+  return [
+    ...new Set(
+      [...html.matchAll(/(?:src|href)="([\w./-]+\.(?:js|css))"/g)].map((m) => m[1] as string),
+    ),
+  ].sort();
 }
 
 describe("the offline shell", () => {
@@ -56,6 +81,16 @@ describe("the offline shell", () => {
     ).toEqual([]);
   });
 
+  it("precaches everything the page itself loads", () => {
+    // maplibre-gl.js is loaded by a plain <script src> in index.html, not imported
+    // by app.ts — so the module walker could never see it, and it was missing from
+    // the precache while the module list was being carefully checked. A first
+    // offline load failed before app.js even ran.
+    const assets = precachedAssets();
+    const missing = pageAssets().filter((a) => !assets.includes(a));
+    expect(missing, "index.html loads these, and offline they would 404").toEqual([]);
+  });
+
   it("precaches app.js itself, and the page that loads it", () => {
     const assets = precachedAssets();
     expect(assets).toContain("app.js");
@@ -67,11 +102,12 @@ describe("the offline shell", () => {
     // The other direction: a file removed from src/ but left in ASSETS makes
     // install fail entirely, because cache.addAll rejects if any request 404s —
     // taking offline support down with it rather than degrading.
-    const modules = new Set(importedModules());
-    const stale = precachedAssets().filter(
-      (a) => /^[a-z0-9-]+\.js$/.test(a) && a !== "app.js" && !modules.has(a),
-    );
-    expect(stale, "listed for precache but not imported by the app").toEqual([]);
+    const known = new Set([...importedModules(), ...pageAssets(), "app.js"]);
+    const stale = precachedAssets().filter((a) => /^[\w.-]+\.js$/.test(a) && !known.has(a));
+    expect(
+      stale,
+      "listed for precache but neither imported by the app nor loaded by the page",
+    ).toEqual([]);
   });
 
   it("keeps the fonts the map needs to label streets mid-ride", () => {

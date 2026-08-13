@@ -979,16 +979,19 @@ test("changing rider takes down the letters computed for the last one", async ({
  * stops testing what it claims to. Returns a live count of /search calls, which
  * is how "the local index answered without the network" is checked.
  */
-function stubGeocoder(
+async function stubGeocoder(
   page: Page,
   results: unknown[] = [],
-): { searches: () => number } {
+): Promise<{ searches: () => number }> {
+  // Awaited, not fired and forgotten: page.route returns a promise, and a boot that
+  // navigates before the route is installed would reach the real Nominatim — a
+  // flake, and a request to somebody else's donated service from a test.
   let searches = 0;
-  void page.route(/nominatim.*\/search/, (route) => {
+  await page.route(/nominatim.*\/search/, (route) => {
     searches++;
     void route.fulfill({ contentType: "application/json", body: JSON.stringify(results) });
   });
-  void page.route(/nominatim.*\/reverse/, (route) =>
+  await page.route(/nominatim.*\/reverse/, (route) =>
     route.fulfill({
       contentType: "application/json",
       body: JSON.stringify({ name: "Kendall/MIT", display_name: "Kendall/MIT, Cambridge" }),
@@ -1009,7 +1012,7 @@ test("the search answers from the first letter, without asking the geocoder", as
   // name the app already has on the device. Typing felt like waiting.
   // /search only: the app also reverse-geocodes the destination in the URL to put
   // a name in the field, and counting that would be counting the wrong thing.
-  const geocoder = stubGeocoder(page);
+  const geocoder = await stubGeocoder(page);
   await context.grantPermissions(["geolocation"]);
   await context.setGeolocation({ latitude: 42.3968, longitude: -71.1223 });
   await boot(page, DAVIS_KENDALL);
@@ -1035,7 +1038,7 @@ test("the search knows what people type, not what OSM stores", async ({ page, co
   // "mass ave" is what a person types. Nominatim wants an address, and the app's
   // own data says "Massachusetts Avenue" — so both sides are normalised until they
   // meet, rather than hoping one matches the other.
-  stubGeocoder(page);
+  await stubGeocoder(page);
   await context.grantPermissions(["geolocation"]);
   await context.setGeolocation({ latitude: 42.3968, longitude: -71.1223 });
   await boot(page, DAVIS_KENDALL);
@@ -1061,32 +1064,67 @@ test("the search knows what people type, not what OSM stores", async ({ page, co
 
 test("the nearest of several same-named streets comes first", async ({ page, context }) => {
   test.slow();
-  // There are four Elm Streets in this region. The one you meant is the one you
-  // could ride to.
-  stubGeocoder(page);
+  // There are several Elm Streets in this region, and the one you meant is the one
+  // you could ride to. The first version of this test read the rows and asserted
+  // nothing about their order — it could not fail whatever the ranking did.
+  await stubGeocoder(page);
   await context.grantPermissions(["geolocation"]);
   await context.setGeolocation({ latitude: 42.3968, longitude: -71.1223 });
   await boot(page, DAVIS_KENDALL);
   await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 40_000 });
 
   await page.locator("#search").fill("elm");
-  await expect(page.locator("#search-results .search-row").first()).toBeVisible({ timeout: 5_000 });
-  // read the distance the app worked out for each row, in order
-  const dists = await page.evaluate(() => {
-    const start = window._map?.getCenter();
-    return [...document.querySelectorAll("#search-results .search-row")].length > 0 && start
-      ? true
-      : false;
+  await expect(page.locator("#search-results .search-row").first()).toBeVisible({ timeout: 8_000 });
+
+  // Each row's own point, from its identity, measured against the start the app is
+  // routing from — no text, no grades, just the geometry the ranking used.
+  const rows = await page.evaluate(() => {
+    const from = window._map?.getCenter();
+    if (!from) return [];
+    const R = 6_371_000;
+    return [...document.querySelectorAll<HTMLElement>("#search-results .search-row")].map((r) => {
+      const key = r.dataset["key"] ?? "";
+      const name = key.split("|")[0] ?? "";
+      const [lon, lat] = (key.split("|")[1] ?? "0,0").split(",").map(Number);
+      const dLat = (((lat ?? 0) - from.lat) * Math.PI) / 180;
+      const dLon = (((lon ?? 0) - from.lng) * Math.PI * Math.cos((from.lat * Math.PI) / 180)) / 180;
+      return { name, m: Math.hypot(dLat, dLon) * R };
+    });
   });
-  expect(dists).toBe(true);
-  // the first row's own point is the nearest among the rows offered
-  const order = await page.locator("#search-results .search-sub").allTextContents();
-  expect(order.length).toBeGreaterThan(0);
+  expect(rows.length).toBeGreaterThan(1);
+
+  // Among rows sharing a name, they must be offered nearest first.
+  const byName = new Map<string, number[]>();
+  for (const r of rows) byName.set(r.name, [...(byName.get(r.name) ?? []), r.m]);
+  let compared = 0;
+  for (const [name, ds] of byName) {
+    for (let i = 1; i < ds.length; i++) {
+      compared++;
+      expect(
+        ds[i] ?? 0,
+        `a further ${name} was offered before a nearer one`,
+      ).toBeGreaterThanOrEqual((ds[i - 1] ?? 0) - 1);
+    }
+  }
+  // NOT "the first row is the nearest": that would contradict the rule the ranking
+  // states. Typing "elm" here offers a street literally called "Elm" 7.6 km away
+  // ahead of "Elm Street" 2.1 km away, because an exact name match is a better
+  // answer than a prefix and distance never crosses a tier. Asserting nearest-first
+  // across the whole list would be asserting the opposite of the design.
+  //
+  // What must hold is that a far exact match does not crowd the near ones out.
+  const nearest = Math.min(...rows.map((r) => r.m));
+  expect(rows.length).toBeGreaterThan(2);
+  expect(
+    rows.slice(0, 3).some((r) => r.m <= nearest + 1),
+    "the nearest match was pushed out of the top of the list",
+  ).toBe(true);
+  expect(compared + rows.length).toBeGreaterThan(1);
 });
 
 test("arrow keys and Enter choose a destination without a mouse", async ({ page, context }) => {
   test.slow();
-  stubGeocoder(page);
+  await stubGeocoder(page);
   await context.grantPermissions(["geolocation"]);
   await context.setGeolocation({ latitude: 42.3968, longitude: -71.1223 });
   await boot(page, DAVIS_KENDALL);
@@ -1112,7 +1150,7 @@ test("Enter with nothing highlighted takes the best answer", async ({ page, cont
   test.slow();
   // The ranking exists so the top row is right; making someone aim at it anyway
   // wastes that.
-  stubGeocoder(page);
+  await stubGeocoder(page);
   await context.grantPermissions(["geolocation"]);
   await context.setGeolocation({ latitude: 42.3968, longitude: -71.1223 });
   await boot(page, DAVIS_KENDALL);
@@ -1205,4 +1243,315 @@ test("a late geocoder answer cannot move the row you already chose", async ({ pa
 
   await page.locator("#search").press("Enter");
   await expect(page.locator("#search")).toHaveValue(chosen.trim());
+});
+
+test("your own places and the trips you took come first", async ({ page, context }) => {
+  test.slow();
+  // Two of the four sources the search reads live in localStorage rather than in
+  // the data snapshot: places the rider named, and destinations they have already
+  // ridden to. They outrank a street of the same name, because someone saying "this
+  // matters" is better evidence than a name match.
+  await stubGeocoder(page);
+  await context.grantPermissions(["geolocation"]);
+  await context.setGeolocation({ latitude: 42.3968, longitude: -71.1223 });
+  await boot(page, DAVIS_KENDALL);
+  await page.evaluate(() => {
+    // Named exactly like a real street, and further away, so the only thing that
+    // can put it first is being theirs.
+    localStorage.setItem(
+      "savedPlaces",
+      JSON.stringify([{ name: "Elm Street", lon: -71.06, lat: 42.35 }]),
+    );
+    localStorage.setItem(
+      "recentRoutes",
+      JSON.stringify([
+        {
+          s: [-71.1223, 42.3968],
+          e: [-71.07, 42.36],
+          label: "Davis to Elmwood Pool",
+          km: 5,
+          grade: "B",
+          t: Date.now(),
+        },
+      ]),
+    );
+  });
+  await page.reload();
+  await page.waitForFunction(() => window._map !== undefined && window._map.loaded(), null, {
+    timeout: 60_000,
+  });
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 40_000 });
+
+  const names = async (q: string): Promise<string[]> => {
+    await page.locator("#search").fill(q);
+    await expect(page.locator("#search-results .search-row").first()).toBeVisible({
+      timeout: 5_000,
+    });
+    return page
+      .locator("#search-results .search-row .search-text > span:first-child")
+      .allTextContents();
+  };
+
+  // The saved place beats the real Elm Streets, though it is further away. The
+  // names are identical on purpose, so the rows are told apart by their point.
+  await page.locator("#search").fill("elm street");
+  await expect(page.locator("#search-results .search-row").first()).toBeVisible({ timeout: 5_000 });
+  const firstKey = await page
+    .locator("#search-results .search-row")
+    .first()
+    .getAttribute("data-key");
+  expect(firstKey, "a street outranked the rider's own place of the same name").toContain(
+    "-71.06000,42.35000",
+  );
+
+  // and somewhere they have ridden to is offered by the name it was filed under
+  const pool = await names("elmwood");
+  expect(pool.some((n) => n.includes("Elmwood Pool"))).toBe(true);
+});
+
+test("with no start set, the search orders by what you are looking at", async ({
+  page,
+  context,
+}) => {
+  test.slow();
+  // Distances have to come from somewhere before a start exists — the app opens
+  // with an empty from-field, and a list in arbitrary order is the first thing a
+  // new reader would see.
+  await stubGeocoder(page);
+  await context.grantPermissions(["geolocation"]);
+  await page.goto("/#c=-71.1223,42.3968,14"); // a view, no start and no destination
+  await page.waitForFunction(() => window._map !== undefined && window._map.loaded(), null, {
+    timeout: 60_000,
+  });
+  await page.waitForTimeout(2_500);
+
+  await page.locator("#search").fill("playgr");
+  await expect(page.locator("#search-results .search-row").first()).toBeVisible({ timeout: 8_000 });
+
+  // Ordered by distance from the map centre. Read the rows' own points and check
+  // the order rather than trusting the text, which has no grade yet.
+  const dists = await page.evaluate(() => {
+    const c = window._map?.getCenter();
+    if (!c) return [];
+    const R = 6_371_000;
+    return [...document.querySelectorAll<HTMLElement>("#search-results .search-row")].map((r) => {
+      const key = r.dataset["key"] ?? "";
+      const [lon, lat] = (key.split("|")[1] ?? "0,0").split(",").map(Number);
+      const dLat = (((lat ?? 0) - c.lat) * Math.PI) / 180;
+      const dLon =
+        (((lon ?? 0) - c.lng) * Math.PI * Math.cos((c.lat * Math.PI) / 180)) / 180;
+      return Math.hypot(dLat, dLon) * R;
+    });
+  });
+  // The first row is the nearest of those offered. Not globally monotonic: rows can
+  // come from different match tiers, and a better-named match further away
+  // legitimately outranks a nearer loose one — asserting monotonicity would have
+  // been asserting the opposite of the ranking's stated rule.
+  expect(dists.length).toBeGreaterThan(2);
+  expect(dists[0] ?? Infinity, "the first row is not the nearest match").toBeLessThanOrEqual(
+    Math.min(...dists) + 1,
+  );
+});
+
+test("a geocoder answer with a broken coordinate is dropped, not offered", async ({
+  page,
+  context,
+}) => {
+  test.slow();
+  // Nominatim is someone else's service and its answers are parsed with
+  // parseFloat. A malformed one becomes NaN, and NaN as a destination reaches the
+  // router and the route cache key — so the row is dropped rather than shown.
+  await page.route(/nominatim.*\/search/, (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify([
+        // a token nothing local can match, so only the geocoder's answers can
+        // appear and the test is about them rather than about the ranking
+        { display_name: "Zzyzx Broken, Somerville", name: "Zzyzx Broken", lon: "not-a-number", lat: "42.39" },
+        { display_name: "Zzyzx Empty, Somerville", name: "Zzyzx Empty", lon: "-71.1", lat: "" },
+        { display_name: "Zzyzx Fine, Somerville", name: "Zzyzx Fine", lon: "-71.1", lat: "42.39" },
+      ]),
+    }),
+  );
+  await page.route(/nominatim.*\/reverse/, (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ name: "Kendall/MIT", display_name: "Kendall/MIT, Cambridge" }),
+    }),
+  );
+  await context.grantPermissions(["geolocation"]);
+  await context.setGeolocation({ latitude: 42.3968, longitude: -71.1223 });
+  await boot(page, DAVIS_KENDALL);
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 40_000 });
+
+  await page.locator("#search").fill("zzyzx");
+  await expect(page.locator("#search-results .search-row").first()).toBeVisible({ timeout: 8_000 });
+  await page.waitForTimeout(1_200); // the geocoder's answer has landed
+
+  const rows = await page.locator("#search-results .search-row").evaluateAll((rs) =>
+    rs.map((r) => ({
+      name: r.querySelector(".search-text > span")?.textContent ?? "",
+      key: (r as HTMLElement).dataset["key"] ?? "",
+    })),
+  );
+  const names = rows.map((r) => r.name);
+  expect(names, "the good answer was dropped too").toContain("Zzyzx Fine");
+  expect(names, "a row was offered with an unusable coordinate").not.toContain("Zzyzx Broken");
+  expect(names).not.toContain("Zzyzx Empty");
+  // and nothing anywhere carries a NaN, which would poison the route cache key
+  for (const r of rows) expect(r.key).not.toContain("NaN");
+});
+
+test("a build with no recorded weighting still opens a usable list", async ({ page }) => {
+  test.slow();
+  // The app's planner list reads the weighting the pipeline published. A snapshot
+  // without it — an older build, or a partial write — must fall back rather than
+  // put NaN into the sliders and rank by it.
+  await page.route(/priorities_meta\.json/, async (route) => {
+    const res = await route.fetch();
+    const meta = (await res.json()) as { model?: Record<string, unknown> };
+    // three of the four weights: partial, which is the case that produces NaN
+    meta.model = { ...(meta.model ?? {}), weights: { severance: 0.4, access: 0.3, crash: 0.15 } };
+    await route.fulfill({ response: res, json: meta });
+  });
+  await boot(page, HOME_VIEW);
+  await page.locator("#build-box > summary").click();
+  await expect(page.locator(".build-row").first()).toBeVisible({ timeout: 30_000 });
+
+  // Asserted on the ranking, not on the slider values: a range input silently
+  // rejects "NaN" and keeps whatever it had, so the sliders look fine either way.
+  // What a NaN weighting actually does is make every score NaN, which leaves the
+  // list in file order — ranked-looking, and not ranked.
+  const scores = await page.evaluate(async () => {
+    const fc = (await (await fetch("data/priorities.geojson")).json()) as {
+      features: { properties: Record<string, number | string> }[];
+    };
+    const byPid = new Map(
+      fc.features.map((f) => [String(f.properties["pid"]), Number(f.properties["score"])]),
+    );
+    return [...document.querySelectorAll<HTMLElement>(".build-row")].map(
+      (r) => byPid.get(r.getAttribute("data-pid") ?? "") ?? Number.NaN,
+    );
+  });
+  expect(scores.length).toBeGreaterThan(1);
+  for (const s of scores) expect(Number.isFinite(s)).toBe(true);
+  for (let i = 1; i < scores.length; i++) {
+    expect(
+      (scores[i] ?? 0) - 1e-9,
+      "the list is not ranked — a partial weighting was used instead of the fallback",
+    ).toBeLessThanOrEqual(scores[i - 1] ?? 0);
+  }
+  await expect(page.locator("#build-list")).toContainText(/top \d+ of \d+/);
+});
+
+test("a late answer for the start field cannot retarget the destination list", async ({
+  page,
+  context,
+}) => {
+  test.slow();
+  // Both fields render into one #search-results box, and each closure captured its
+  // own target. A slow answer for the start field could therefore re-render the
+  // list while the reader was typing a destination — and every row in it would then
+  // set the START when tapped. The wrong point, silently, on a safety app.
+  let release: (() => void) | undefined;
+  const held = new Promise<void>((r) => {
+    release = r;
+  });
+  await page.route(/nominatim.*\/search/, async (route) => {
+    await held;
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify([
+        { display_name: "Zzyzx Start, Somerville", name: "Zzyzx Start", lon: "-71.09", lat: "42.37" },
+      ]),
+    });
+  });
+  await page.route(/nominatim.*\/reverse/, (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ name: "Kendall/MIT", display_name: "Kendall/MIT, Cambridge" }),
+    }),
+  );
+  await context.grantPermissions(["geolocation"]);
+  await context.setGeolocation({ latitude: 42.3968, longitude: -71.1223 });
+  await boot(page, DAVIS_KENDALL);
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 40_000 });
+
+  // ask from the START field, with a query that only the geocoder can answer
+  await page.locator("#from-field").fill("zzyzx start");
+  await page.waitForTimeout(300);
+  // then move to the destination field before the answer lands
+  await page.locator("#search").fill("playgr");
+  await expect(page.locator("#search-results .search-row").first()).toBeVisible({ timeout: 8_000 });
+  const startBefore = await page.evaluate(() => {
+    const s = window._map?.getSource("route") as unknown;
+    return JSON.stringify(document.querySelector<HTMLInputElement>("#from-field")?.value ?? "") + String(s !== undefined);
+  });
+
+  release?.();
+  await page.waitForTimeout(2_000);
+
+  // the list still belongs to the destination field: its rows are playgrounds, and
+  // choosing one fills the destination rather than the start
+  const names = await page
+    .locator("#search-results .search-row .search-text > span:first-child")
+    .allTextContents();
+  expect(names.join(" "), "the start field's answer took over the list").not.toContain("Zzyzx");
+  await page.locator("#search-results .search-row").first().locator(".search-text").click();
+  await expect(page.locator("#search")).not.toHaveValue("playgr");
+  // and the start field was left alone
+  expect(await page.locator("#from-field").inputValue()).toBe("zzyzx start");
+  expect(startBefore.length).toBeGreaterThan(0);
+});
+
+test("the geocoder is asked sparingly, and never faster than once a second", async ({
+  page,
+  context,
+}) => {
+  test.slow();
+  // Nominatim's usage policy asks for at most one request per second and says
+  // plainly that it is not for autocomplete. The first version of this search
+  // debounced at 250 ms and fired from the third character — the exact pattern it
+  // asks people not to send, to a service that is donated.
+  const at: number[] = [];
+  await page.route(/nominatim.*\/search/, (route) => {
+    at.push(Date.now());
+    void route.fulfill({ contentType: "application/json", body: "[]" });
+  });
+  await page.route(/nominatim.*\/reverse/, (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ name: "Kendall/MIT", display_name: "Kendall/MIT, Cambridge" }),
+    }),
+  );
+  await context.grantPermissions(["geolocation"]);
+  await context.setGeolocation({ latitude: 42.3968, longitude: -71.1223 });
+  await boot(page, DAVIS_KENDALL);
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 40_000 });
+  at.length = 0;
+
+  // A query the device answers well, typed and then left alone long enough for the
+  // debounce to have fired. Not a burst: a burst is bounded by the debounce alone,
+  // so it would pass whatever the policy did — which is how the first version of
+  // this test passed with the policy removed.
+  await page.locator("#search").fill("playgr");
+  await expect(page.locator("#search-results .search-row").first()).toBeVisible({ timeout: 8_000 });
+  const localRows = await page.locator("#search-results .search-row").count();
+  expect(localRows, "the local index did not answer, so this proves nothing").toBeGreaterThan(2);
+  await page.waitForTimeout(2_500);
+  expect(
+    at.length,
+    "a query the device already answered was sent to the geocoder anyway",
+  ).toBe(0);
+
+  // A house number is different: only the geocoder knows those, so it is asked.
+  at.length = 0;
+  await page.locator("#search").fill("123 broadway");
+  await page.waitForTimeout(2_500);
+  expect(at.length, "an address query never reached the geocoder").toBeGreaterThan(0);
+
+  // The one-per-second floor is asserted in tests/search.test.ts, on the function
+  // that decides it. Through the browser the request offsets vary by more than a
+  // second between runs on this machine, so the same assertion here was both flaky
+  // and unable to fail when the floor was deleted.
 });

@@ -304,20 +304,21 @@ export class NetworkTiles {
    * anything further out.
    */
   loadedStreets(): { name: string; coords: [number, number][] }[] {
-    const byName = new Map<string, [number, number][]>();
+    // One entry per segment, NOT one per name. Grouping by name merged the four
+    // Elm Streets in this region into a single candidate holding all their points,
+    // so "the nearest Elm Street" could not be offered — the whole point of
+    // searching streets locally. Segments of one street are within a few hundred
+    // metres of each other and the ranking's own dedupe collapses them; two Elm
+    // Streets a mile apart stay two answers.
+    const out: { name: string; coords: [number, number][] }[] = [];
     for (const feats of this.loaded.values()) {
       for (const f of feats) {
         const name = f.properties?.["name"];
         if (typeof name !== "string" || name === "") continue;
-        const coords = f.geometry.coordinates as [number, number][];
-        const seen = byName.get(name);
-        // one entry per name per tile-set, carrying all its points: a street is
-        // long, and which end of it is nearest depends on where you are
-        if (seen) seen.push(...coords);
-        else byName.set(name, [...coords]);
+        out.push({ name, coords: f.geometry.coordinates as [number, number][] });
       }
     }
-    return [...byName].map(([name, coords]) => ({ name, coords }));
+    return out;
   }
 
   async visibleFeatures(box: BBox, margin = 1): Promise<NetFeature[]> {

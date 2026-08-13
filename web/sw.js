@@ -19,6 +19,12 @@ const ASSETS = [
   // was) is exactly the one a first offline load would be missing. A test asserts
   // this list covers the import graph, so the next one cannot be forgotten.
   "app.js",
+  // MapLibre itself, vendored. index.html loads it with a plain <script src>, and
+  // without it in the precache a first offline load fails before app.js runs —
+  // the same failure the module list above was extended to prevent, one file
+  // further out. A test now reads index.html rather than trusting this list.
+  "maplibre-gl.js",
+  "maplibre-gl.css",
   "data.js",
   "hazards.js",
   "native.js",

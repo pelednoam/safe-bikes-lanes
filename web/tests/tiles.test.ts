@@ -112,16 +112,20 @@ describe("TileStore", () => {
 
 describe("NetworkTiles", () => {
   const NET_MANIFEST = { originLon: 0, originLat: 0, tileDeg: 1, tiles: ["0_0", "1_0"] };
-  const feat = (lon: number): unknown => ({
+  const feat = (lon: number, name: string | null = null): unknown => ({
     type: "Feature",
-    properties: { cls: "path", color: "#000", name: null, source: "osm", crashes: 0 },
+    properties: { cls: "path", color: "#000", name, source: "osm", crashes: 0 },
     geometry: { type: "LineString", coordinates: [[lon, 0.5], [lon + 0.05, 0.5]] },
   });
   const netFetch = (fetched: string[]): (<T>(name: string) => Promise<T>) => {
     const table: Record<string, unknown> = {
       "nettiles/manifest.json": NET_MANIFEST,
-      "nettiles/0_0.json": { type: "FeatureCollection", features: [feat(0.2), feat(0.6)] },
-      "nettiles/1_0.json": { type: "FeatureCollection", features: [feat(1.4)] },
+      "nettiles/0_0.json": {
+        type: "FeatureCollection",
+        // two pieces of one street, one of another, and one the mapper never named
+        features: [feat(0.2, "Elm Street"), feat(0.6, "Elm Street"), feat(0.4, "Broadway"), feat(0.5)],
+      },
+      "nettiles/1_0.json": { type: "FeatureCollection", features: [feat(1.4, "Oak Road")] },
     };
     return <T,>(name: string): Promise<T> => {
       fetched.push(name);
@@ -135,7 +139,7 @@ describe("NetworkTiles", () => {
     const net = new NetworkTiles(netFetch(fetched));
     await net.loadManifest();
     const feats = await net.visibleFeatures({ west: 0.3, south: 0.4, east: 0.6, north: 0.6 }, 0);
-    expect(feats.length).toBe(2); // both features of tile 0_0
+    expect(feats.length).toBe(4); // every feature of tile 0_0
     expect(fetched).toContain("nettiles/0_0.json");
     expect(fetched).not.toContain("nettiles/1_0.json");
   });
@@ -151,11 +155,82 @@ describe("NetworkTiles", () => {
     expect(fetched.filter((f) => f === "nettiles/0_0.json").length).toBe(1);
   });
 
+  describe("loadedStreets", () => {
+    // The destination search reads this: the street names already on the device
+    // answer a keystroke instantly, where a geocoder round trip cannot.
+    it("offers every named street among the tiles already fetched", async () => {
+      const net = new NetworkTiles(netFetch([]));
+      await net.loadManifest();
+      await net.visibleFeatures({ west: 0.3, south: 0.4, east: 0.6, north: 0.6 }, 0);
+      const names = net.loadedStreets().map((s) => s.name).sort();
+      // two Elm Street segments and one Broadway: a segment each, not one per name
+      expect(names).toEqual(["Broadway", "Elm Street", "Elm Street"]);
+    });
+
+    it("fetches nothing itself", async () => {
+      // It runs on every keystroke. A method that could fetch would turn typing
+      // into a download.
+      const fetched: string[] = [];
+      const net = new NetworkTiles(netFetch(fetched));
+      await net.loadManifest();
+      await net.visibleFeatures({ west: 0.3, south: 0.4, east: 0.6, north: 0.6 }, 0);
+      const before = fetched.length;
+      net.loadedStreets();
+      net.loadedStreets();
+      expect(fetched.length).toBe(before);
+    });
+
+    it("keeps same-named streets apart, so the nearest one can be offered", async () => {
+      // Grouping by name merged the four Elm Streets in this region into a single
+      // candidate holding all their points; the ranking could then offer only one
+      // of them, at whichever end happened to be nearest. A segment each keeps them
+      // distinguishable, and the ranking's dedupe rejoins the pieces of one street.
+      const net = new NetworkTiles(netFetch([]));
+      await net.loadManifest();
+      await net.visibleFeatures({ west: 0.3, south: 0.4, east: 0.6, north: 0.6 }, 0);
+      const elms = net.loadedStreets().filter((s) => s.name === "Elm Street");
+      expect(elms).toHaveLength(2);
+      for (const e of elms) expect(e.coords).toHaveLength(2); // its own points only
+      expect(elms.map((e) => e.coords[0]?.[0]).sort()).toEqual([0.2, 0.6]);
+    });
+
+    it("skips the streets nobody named", async () => {
+      const net = new NetworkTiles(netFetch([]));
+      await net.loadManifest();
+      await net.visibleFeatures({ west: 0.3, south: 0.4, east: 0.6, north: 0.6 }, 0);
+      // one of the four features in that tile has no name; a nameless row would
+      // be an unlabelled destination
+      expect(net.loadedStreets()).toHaveLength(3);
+      for (const s of net.loadedStreets()) expect(s.name).not.toBe("");
+    });
+
+    it("knows nothing before a tile is fetched", async () => {
+      const net = new NetworkTiles(netFetch([]));
+      await net.loadManifest();
+      expect(net.loadedStreets()).toEqual([]);
+    });
+
+    it("grows as the map moves, without refetching what it has", async () => {
+      const fetched: string[] = [];
+      const net = new NetworkTiles(netFetch(fetched));
+      await net.loadManifest();
+      await net.visibleFeatures({ west: 0.3, south: 0.4, east: 0.6, north: 0.6 }, 0);
+      expect(new Set(net.loadedStreets().map((s) => s.name))).toEqual(
+        new Set(["Broadway", "Elm Street"]),
+      );
+      await net.visibleFeatures({ west: 1.3, south: 0.4, east: 1.6, north: 0.6 }, 0);
+      expect(new Set(net.loadedStreets().map((s) => s.name))).toEqual(
+        new Set(["Broadway", "Elm Street", "Oak Road"]),
+      );
+      expect(fetched.filter((f) => f === "nettiles/0_0.json")).toHaveLength(1);
+    });
+  });
+
   it("margin pulls in the neighbouring tile", async () => {
     const net = new NetworkTiles(netFetch([]));
     await net.loadManifest();
     const feats = await net.visibleFeatures({ west: 0.3, south: 0.4, east: 0.6, north: 0.6 }, 1);
-    expect(feats.length).toBe(3); // 0_0 (2) + 1_0 (1)
+    expect(feats.length).toBe(5); // 0_0 (4) + 1_0 (1)
   });
 });
 

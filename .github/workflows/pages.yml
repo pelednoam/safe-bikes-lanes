@@ -47,7 +47,12 @@ jobs:
         run: npm ci
         working-directory: web
       - name: Type-check, test, build
-        run: npm run check && npm test && npm run build
+        # test:coverage, not test: the coverage thresholds are the ratchet on unit
+        # coverage, and they only apply when --coverage is passed. Running plain
+        # `vitest run` here meant nobody saw them fail — a new page entry point
+        # (src/build.ts) sat 0%-covered in the global number for a day with every
+        # threshold red and the deploy green.
+        run: npm run check && npm run test:coverage && npm run build
         working-directory: web
       - name: Install Playwright browser
         run: npx playwright install --with-deps chromium

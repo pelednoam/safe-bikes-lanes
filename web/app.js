@@ -1,5 +1,5 @@
 import { isNativeApp, isNewerAppVersion, lastNativeSpeechError, nativeSpeak, startDownload, startBackgroundWatcher, stopBackgroundWatcher, webVoiceCount, } from "./native.js";
-import { matchScore, metresBetween, rank as rankSearch, describe as describeRow, } from "./search.js";
+import { GEOCODE_DEBOUNCE_MS, geocodeDelayMs, matchScore, metresBetween, rank as rankSearch, describe as describeRow, worthGeocoding, } from "./search.js";
 import { CLASS_LABELS, cautionsHtml, clearPhotoCache, esc, FACILITY_CLASSES, nearestMapillary, fillSegmentPhoto as fillPhotoSlot, GRADE_COLORS, segmentHtml, } from "./segment.js";
 import { bearingDeg, buildAlerts, buildManeuvers, buildTrack, distM, snapToTrack, sunsetTime, trackBearingAhead, trackSlice, } from "./nav.js";
 import { addHazard, buildReportText, downscalePhoto, getHazardPhoto, HAZARD_LABELS, listHazards, removeHazard, setHazardCategory, } from "./hazards.js";
@@ -1423,6 +1423,12 @@ function streetCandidates(query, origin) {
     }
     return out;
 }
+/** How many rows the search offers.
+ *
+ * Every one is graded, and every grade is a routing run on the main thread — five
+ * in a row is already a visible pause on a phone. A longer list would mean rows
+ * without letters, which is the one thing this search must not show. */
+const SEARCH_ROWS = 5;
 /** Where distances are measured from: the start if set, else what you're looking at. */
 function searchOrigin() {
     const from = start?.getLngLat();
@@ -1431,6 +1437,9 @@ function searchOrigin() {
     const c = map.getCenter();
     return [c.lng, c.lat];
 }
+/** When the geocoder was last asked. The policy itself is in search.ts, where it
+ * can be tested as arithmetic rather than through browser timing. */
+let lastGeocodeAt = 0;
 async function searchAddress(query) {
     const url = "https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&bounded=1" +
         `&viewbox=${BBOX.west},${BBOX.north},${BBOX.east},${BBOX.south}` +
@@ -1539,9 +1548,14 @@ async function gradeSearchResults(rows) {
         return;
     }
     const a = [from.lng, from.lat];
-    // A cap, because each row is a routing run: the geocoder returns five today,
-    // but nothing here should depend on that staying true.
-    const MAX_GRADED = 5;
+    // Every row gets a letter, and the list is capped to make that affordable.
+    //
+    // This used to be a cap of five under a list of eight, which left three rows
+    // showing no grade for no reason a reader could see. The letter is the whole
+    // point of this app's search — a row without one is a destination with no
+    // safety claim — so the list length and this cap are the same number, and
+    // SEARCH_ROWS is where it is set.
+    const MAX_GRADED = SEARCH_ROWS;
     for (const row of rows.slice(MAX_GRADED))
         clearGrading(row);
     for (const row of rows.slice(0, MAX_GRADED)) {
@@ -1616,6 +1630,10 @@ function geocoderCandidates(results) {
             lat,
             source: "geocoder",
             context: parts.slice(1, 3).join(", "),
+            // "123 Broadway" comes back as name "123" with the street in display_name,
+            // so scoring the short label alone dropped every address query — the one
+            // thing this geocoder is still called for.
+            match: r.display_name,
         });
     }
     return out;
@@ -1654,7 +1672,12 @@ function renderSearchResults(rows, target = "end") {
         text.appendChild(sub);
         row.appendChild(text);
         const lngLat = [r.lon, r.lat];
-        const usable = true;
+        // Still checked, for every source. Saved places and recent trips come from
+        // localStorage, which is editable and survives across app versions, and a NaN
+        // here reaches the router and the route cache key as a coordinate. I had
+        // replaced this with `true` on the grounds that the geocoder path filters
+        // already, which left the other four sources unguarded.
+        const usable = Number.isFinite(lngLat[0]) && Number.isFinite(lngLat[1]);
         const badge = document.createElement("span");
         badge.className = "search-grade";
         badge.textContent = "·";
@@ -1699,10 +1722,25 @@ function renderSearchResults(rows, target = "end") {
     // route from the CURRENT start to a candidate start — a journey nobody is
     // taking, labelled as if they were.
     if (target === "end")
-        void gradeSearchResults(grading);
+        scheduleGrading(grading);
     else
         for (const r of grading)
             clearGrading(r);
+}
+let gradeTimer;
+/** Grade the list once it has stopped changing.
+ *
+ * The list is now rebuilt on every keystroke, and grading it is up to five routing
+ * runs. Typing "playground" therefore queued fifty — each abandoned by the next
+ * letter, all of them on the main thread, against a geocoder-rate-limited service
+ * that also fetches routing tiles. The rows appear instantly; their letters arrive
+ * a moment after the typing stops, which is when they can be read anyway.
+ */
+function scheduleGrading(rows) {
+    window.clearTimeout(gradeTimer);
+    gradeTimer = window.setTimeout(() => {
+        void gradeSearchResults(rows);
+    }, 400);
 }
 // ---------------------------------------------------------------------------
 // safe-shed (reachability)
@@ -2947,6 +2985,13 @@ for (const radio of document.querySelectorAll("input[name=profile]")) {
 }
 /** Wire an address search to a field, so the origin is searchable too and not
  * only settable by tapping the map or using the current location. */
+/** Which field the visible result list belongs to.
+ *
+ * Both fields render into #search-results, and each attachSearch closure captures
+ * its own target. A late geocoder answer for the start field could therefore
+ * re-render the list while the reader was typing a destination — and every row in
+ * it would then set the START when tapped. Wrong point, silently. */
+let searchOwner = null;
 function attachSearch(input, target) {
     let timer;
     // The geocoder's last answer for the query still in the box, so a keystroke
@@ -2965,19 +3010,22 @@ function attachSearch(input, target) {
         }
     };
     const show = (q) => {
+        if (searchOwner !== input)
+            return; // the other field owns the list now
         const origin = searchOrigin();
         const candidates = [
             ...localCandidates(),
             ...streetCandidates(q, origin),
             ...(remote.query === q ? remote.rows : []),
         ];
-        renderSearchResults(rankSearch(q, candidates, { origin }), target);
+        renderSearchResults(rankSearch(q, candidates, { origin, limit: SEARCH_ROWS }), target);
         // put the selection back where it was, or drop it if that place is gone —
         // never leave it pointing at whatever row inherited the position
         highlight(rowsNow().some((r) => r.dataset["key"] === activeKey) ? activeKey : null);
     };
     input.addEventListener("input", () => {
         window.clearTimeout(timer);
+        searchOwner = input;
         const q = input.value.trim();
         if (q === "") {
             el("search-results").innerHTML = "";
@@ -2989,15 +3037,29 @@ function attachSearch(input, target) {
         // to ask a geocoder for what we have on the device is waiting for nothing.
         highlight(null); // a new query is a new list
         show(q);
-        // Then the geocoder, for house numbers and businesses we do not have. Its
-        // answers are merged into the same ranking rather than replacing the list.
-        if (q.length < 3)
+        // Then the geocoder, for house numbers and businesses we do not have — as a
+        // fallback, and on its terms. See worthGeocoding and GEOCODE_MIN_GAP_MS.
+        const localHits = el("search-results").querySelectorAll(".search-row").length;
+        if (!worthGeocoding(q, localHits))
             return;
         timer = window.setTimeout(() => {
+            const wait = geocodeDelayMs(Date.now(), lastGeocodeAt);
+            if (wait > 0) {
+                // too soon: ask again once the floor has passed, rather than dropping the
+                // query or hammering the service
+                timer = window.setTimeout(() => {
+                    if (input.value.trim() === q)
+                        input.dispatchEvent(new Event("input"));
+                }, wait);
+                return;
+            }
+            lastGeocodeAt = Date.now();
             searchAddress(q)
                 .then((results) => {
                 if (input.value.trim() !== q)
                     return; // a later keystroke moved on
+                if (searchOwner !== input)
+                    return; // and the other field owns the list
                 remote = { query: q, rows: geocoderCandidates(results) };
                 // Not while a row is chosen. Re-ranking under a committed selection is
                 // how someone ends up riding to a place they did not pick; the answers
@@ -3014,13 +3076,17 @@ function attachSearch(input, target) {
                 .catch(() => {
                 // The local list is still on screen and still useful, so this is a
                 // footnote rather than an error state — the old code replaced
-                // everything with "search unavailable".
+                // everything with "search unavailable". And only for the query and the
+                // field it was asked for: a slow failure used to be able to write over a
+                // list the reader had since moved on from.
+                if (input.value.trim() !== q || searchOwner !== input)
+                    return;
                 const box = el("search-results");
                 if (box.querySelector(".search-row") === null) {
                     box.textContent = "search unavailable";
                 }
             });
-        }, 250);
+        }, GEOCODE_DEBOUNCE_MS);
     });
     // Arrow keys and Enter, because a list you can only reach with a mouse is a
     // list you cannot use one-handed.
@@ -3044,10 +3110,13 @@ function attachSearch(input, target) {
             chosen?.querySelector(".search-text")?.click();
         }
         else if (e.key === "Escape" && activeKey !== null) {
-            // step back out of the list without wiping the query
+            // Step back out of the list without wiping the query — and show whatever the
+            // geocoder answered while a row was selected, which was deliberately held
+            // back then and would otherwise never have appeared at all.
             e.preventDefault();
             e.stopPropagation();
             highlight(null);
+            show(input.value.trim());
         }
     });
 }

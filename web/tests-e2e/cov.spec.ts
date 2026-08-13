@@ -17,8 +17,33 @@ test("app.js executed across a broad session", async ({ page }) => {
   // plan a trip
   await page.goto("/#s=-71.122258,42.396748&e=-71.086705,42.362552&m=young_kids");
   await page.waitForFunction(() => window._map !== undefined && window._map.loaded(), null, { timeout: 45000 });
-  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30000 });
+  // Generous because V8 coverage instrumentation is running: it slows the
+  // router's Dijkstras enough that the same route which computes in seconds
+  // normally can take a minute here. This file measures; it does not assert.
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 120000 });
   await page.locator(".option-card").last().click().catch(() => undefined);
+
+  // the destination search: local index, geocoder merge, keyboard, and the
+  // ungraded-row path — the newest wiring in this file
+  for (const q of ["m", "ma", "mass ave", "playgr", "kennedy", "xyzzynotaplace"]) {
+    await page.locator("#search").fill(q);
+    await page.waitForTimeout(350);
+  }
+  await page.locator("#search").press("ArrowDown");
+  await page.locator("#search").press("ArrowUp");
+  await page.locator("#search").press("Escape");
+  await page.locator("#search").press("ArrowDown");
+  await page.locator("#search").press("Enter");
+  await page.waitForTimeout(800);
+  // the start picker, whose rows are never graded
+  await page.locator("#from-field").fill("elm");
+  await page.waitForTimeout(600);
+  await page.locator("#from-field").fill("");
+
+  // which build this is, and whether the site has a newer one
+  await tap("#about-top");
+  await page.waitForTimeout(400);
+  await tap("#about-close");
 
   // preferences, modes, swap
   await tap('summary:has-text("Preferences")');
@@ -42,9 +67,11 @@ test("app.js executed across a broad session", async ({ page }) => {
   await tap("#build-box > summary");
   await page.waitForTimeout(2000);
   await page.locator(".build-row").first().click().catch(() => undefined);
-  await tap("#whatif-run");
-  await page.waitForTimeout(2500);
-  await tap("#whatif-clear");
+  // The what-if re-routes the whole trip with upgraded edges. Under V8 coverage
+  // instrumentation that was enough to kill the page — "target closed" partway
+  // through — and a crashed page reports no coverage at all, so this tool measured
+  // nothing. Its own behaviour is covered by tests-e2e/build.spec.ts.
+  await page.waitForTimeout(500);
 
   // export, other trip types, dialogs
   await tap('summary:has-text("Export")');

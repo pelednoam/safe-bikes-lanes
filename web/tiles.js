@@ -239,23 +239,22 @@ export class NetworkTiles {
      * anything further out.
      */
     loadedStreets() {
-        const byName = new Map();
+        // One entry per segment, NOT one per name. Grouping by name merged the four
+        // Elm Streets in this region into a single candidate holding all their points,
+        // so "the nearest Elm Street" could not be offered — the whole point of
+        // searching streets locally. Segments of one street are within a few hundred
+        // metres of each other and the ranking's own dedupe collapses them; two Elm
+        // Streets a mile apart stay two answers.
+        const out = [];
         for (const feats of this.loaded.values()) {
             for (const f of feats) {
                 const name = f.properties?.["name"];
                 if (typeof name !== "string" || name === "")
                     continue;
-                const coords = f.geometry.coordinates;
-                const seen = byName.get(name);
-                // one entry per name per tile-set, carrying all its points: a street is
-                // long, and which end of it is nearest depends on where you are
-                if (seen)
-                    seen.push(...coords);
-                else
-                    byName.set(name, [...coords]);
+                out.push({ name, coords: f.geometry.coordinates });
             }
         }
-        return [...byName].map(([name, coords]) => ({ name, coords }));
+        return out;
     }
     async visibleFeatures(box, margin = 1) {
         if (!this.grid)
