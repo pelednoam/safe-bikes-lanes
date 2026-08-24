@@ -12,8 +12,9 @@ import json
 import math
 import os
 import pickle
+import time
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from typing import Any, Final
 
@@ -339,6 +340,43 @@ FOOT_FILTER: Final[str] = (
 )
 
 
+# Public Overpass instances time out under load, and the graph download is the one
+# fetch the whole refresh cannot proceed without. On 2026-08-17 a single connect
+# timeout to overpass-api.de ended that week's refresh outright: no snapshot was
+# published, the site kept serving data from the week before, and the only reason
+# anyone noticed was the daily check on the live site's build date.
+OVERPASS_MIRRORS: Final[list[str]] = [
+    "https://overpass-api.de/api",
+    "https://overpass.kumi.systems/api",
+    "https://lz4.overpass-api.de/api",
+]
+
+
+def with_overpass_retry(what: str, fetch: Callable[[], nx.MultiDiGraph]) -> nx.MultiDiGraph:
+    """Try each Overpass mirror, twice round, backing off between attempts.
+
+    Two passes rather than one: a mirror that is briefly overloaded is often fine a
+    minute later, and rotating away from all three permanently would trade a
+    transient failure for a certain one.
+    """
+    last: Exception | None = None
+    attempts = [(i, url) for i in range(2) for url in OVERPASS_MIRRORS]
+    for attempt, (round_no, url) in enumerate(attempts):
+        ox.settings.overpass_url = url
+        try:
+            return fetch()
+        except Exception as exc:
+            last = exc
+            remaining = len(attempts) - attempt - 1
+            print(f"  {what}: {url} failed ({type(exc).__name__}: {exc})")
+            if remaining == 0:
+                break
+            pause = 10 * (round_no + 1)
+            print(f"  retrying in {pause}s ({remaining} attempts left)")
+            time.sleep(pause)
+    raise RuntimeError(f"{what}: every Overpass mirror failed — last error: {last}")
+
+
 def acquire_osm(bbox: tuple[float, float, float, float]) -> nx.MultiDiGraph:
     """Whole-area bike network + bike-permitted footpaths.
 
@@ -348,14 +386,24 @@ def acquire_osm(bbox: tuple[float, float, float, float]) -> nx.MultiDiGraph:
     So this keeps the correct whole-area download but merges footpaths IN PLACE
     (bike attributes win, matching the old nx.compose(foot, bike)) rather than
     building a third full graph — that copy was pure transient overhead."""
-    G: nx.MultiDiGraph = ox.graph_from_bbox(
-        bbox, network_type="bike", simplify=True, truncate_by_edge=True
+    G: nx.MultiDiGraph = with_overpass_retry(
+        "bike network",
+        lambda: ox.graph_from_bbox(
+            bbox, network_type="bike", simplify=True, truncate_by_edge=True
+        ),
     )
     print(f"  bike graph: {len(G.nodes)} nodes, {len(G.edges)} edges")
     mem("after bike download")
     try:
-        gf = ox.graph_from_bbox(
-            bbox, custom_filter=FOOT_FILTER, simplify=True, retain_all=True, truncate_by_edge=True
+        gf = with_overpass_retry(
+            "footpaths",
+            lambda: ox.graph_from_bbox(
+                bbox,
+                custom_filter=FOOT_FILTER,
+                simplify=True,
+                retain_all=True,
+                truncate_by_edge=True,
+            ),
         )
     except Exception as e:  # footpath layer optional
         print(f"  footpath layer failed ({e}) — bike graph only")

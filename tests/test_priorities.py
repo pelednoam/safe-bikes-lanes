@@ -11,6 +11,7 @@ import json
 import math
 import pickle
 import tempfile
+import time
 from pathlib import Path
 from typing import NamedTuple
 
@@ -18,6 +19,7 @@ import build_graph
 import config
 import networkx as nx
 import numpy as np
+import osmnx
 import priorities
 import pytest
 
@@ -942,6 +944,70 @@ def test_meta_publishes_the_weighting_the_score_was_computed_with(tmp_path: Path
     # the page's opening order would silently differ from the exported score
     for key, value in weights.items():
         assert abs(value * 100 - round(value * 100)) < 1e-9, f"{key} is not a whole percent"
+
+
+def test_the_osm_download_survives_one_overpass_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One connect timeout used to end the whole week's refresh.
+
+    On 2026-08-17 overpass-api.de timed out during the graph download. There was no
+    retry, the refresh aborted, no snapshot was published, and the site served the
+    previous week's data — noticed only because a daily check reads the live build
+    date. The POI fetch had mirrors and retry all along; the graph download, the one
+    fetch nothing else can proceed without, had neither.
+    """
+    # Patched on the modules themselves rather than through build_graph's imports:
+    # both names refer to the same objects, and reaching into another module's
+    # imports is a dependency on how it happens to be written.
+    tried: list[str] = []
+    monkeypatch.setattr(time, "sleep", lambda _s: None)
+
+    # fails on the first mirror, succeeds on the second
+    def flaky() -> str:
+        tried.append(str(osmnx.settings.overpass_url))
+        if len(tried) == 1:
+            raise TimeoutError("[Errno 110] Connection timed out")
+        return "graph"
+
+    assert build_graph.with_overpass_retry("test", flaky) == "graph"
+    assert len(tried) == 2
+    assert tried[0] != tried[1], "retried the same endpoint instead of another mirror"
+
+    # and when every mirror is down it says so, rather than returning nothing usable
+    tried.clear()
+
+    def always_fails() -> str:
+        tried.append(str(osmnx.settings.overpass_url))
+        raise TimeoutError("[Errno 110] Connection timed out")
+
+    with pytest.raises(RuntimeError, match="every Overpass mirror failed"):
+        build_graph.with_overpass_retry("test", always_fails)
+    # every mirror, twice: a mirror that is briefly overloaded is often fine a
+    # minute later, so rotating away permanently would trade a transient failure
+    # for a certain one
+    assert len(tried) == 2 * len(build_graph.OVERPASS_MIRRORS)
+    assert set(tried) == set(build_graph.OVERPASS_MIRRORS)
+
+    # And the graph download actually goes through it. Testing the helper alone
+    # left the call site free to stop using it: removing the wrapper from
+    # acquire_osm passed this test until this half existed.
+    attempts = {"n": 0}
+    b = GraphBuilder()
+    b.node(0, 0)
+    b.node(1, 200)
+    b.edge(0, 1, 200, "quiet_street", "A St")
+
+    def flaky_download(*_args: object, **_kwargs: object) -> nx.MultiDiGraph:
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise TimeoutError("[Errno 110] Connection timed out")
+        return b.g
+
+    monkeypatch.setattr(osmnx, "graph_from_bbox", flaky_download)
+    graph = build_graph.acquire_osm((-71.2, 42.3, -71.0, 42.5))
+    assert graph.number_of_nodes() > 0
+    assert attempts["n"] >= 2, "the first timeout was not retried"
 
 
 def test_the_stale_graph_guard_reads_a_stamp_the_builder_actually_writes() -> None:
