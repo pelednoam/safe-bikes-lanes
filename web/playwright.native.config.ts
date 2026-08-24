@@ -13,7 +13,7 @@ export default defineConfig({
     viewport: { width: 390, height: 844 },
   },
   webServer: {
-    command: "bash scripts/assemble.sh && python3 -m http.server 8322 --bind 127.0.0.1 -d dist",
+    command: "bash scripts/assemble.sh && python3 scripts/testserver.py 8322 dist",
     url: "http://127.0.0.1:8322",
     reuseExistingServer: true,
     timeout: 180_000,

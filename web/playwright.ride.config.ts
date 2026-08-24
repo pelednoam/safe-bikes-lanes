@@ -21,7 +21,7 @@ export default defineConfig({
     viewport: { width: 390, height: 844 },
   },
   webServer: {
-    command: "python3 -m http.server 8323 --bind 127.0.0.1",
+    command: "python3 scripts/testserver.py 8323",
     url: "http://127.0.0.1:8323",
     reuseExistingServer: true,
   },
