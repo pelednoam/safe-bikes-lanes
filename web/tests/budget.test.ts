@@ -10,6 +10,8 @@
 // running the suite on their own machine.
 import { afterEach, describe, expect, it } from "vitest";
 
+import { budget } from "../tests-e2e/budget.js";
+
 const saved = process.env["CI"];
 
 afterEach(() => {
@@ -18,17 +20,19 @@ afterEach(() => {
 });
 
 describe("the wait budget", () => {
-  it("is the identity off CI, so a local run behaves exactly as it did", async () => {
+  it("is the identity off CI, so a local run behaves exactly as it did", () => {
+    // No cache-busting import: budget() reads the environment when it is called,
+    // not when the module loads, so one import serves both cases. The query-string
+    // version typechecked nowhere and broke the build — caught by CI, because I ran
+    // the test after adding it and not the type-check beside it.
     delete process.env["CI"];
-    const { budget } = await import("../tests-e2e/budget.js?local");
     expect(budget(45_000)).toBe(45_000);
     expect(budget(3_000)).toBe(3_000);
     expect(budget(1)).toBe(1);
   });
 
-  it("gives a slower machine room, without changing what is being waited for", async () => {
+  it("gives a slower machine room, without changing what is being waited for", () => {
     process.env["CI"] = "true";
-    const { budget } = await import("../tests-e2e/budget.js?ci");
     expect(budget(45_000)).toBeGreaterThan(45_000);
     // enough for a runner a few times slower, and bounded so a genuinely stuck
     // test still fails inside the 300 s test timeout rather than hanging
