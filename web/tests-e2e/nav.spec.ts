@@ -3,6 +3,8 @@
 // motion layer: the dot snapping to the route, the follow camera, the trip
 // readout, ridden-progress dimming, and letting the rider keep their own zoom.
 import { expect, test } from "@playwright/test";
+
+import { budget } from "./budget.js";
 import type { Map as MLMap } from "maplibre-gl";
 
 declare global {
@@ -22,9 +24,9 @@ test.use({ permissions: ["geolocation"], geolocation: { latitude: 42.396748, lon
 async function startNav(page: Page): Promise<void> {
   await page.goto(`/${ROUTE}`);
   await page.waitForFunction(() => window._map !== undefined && window._map.loaded(), null, {
-    timeout: 45_000,
+    timeout: budget(45_000),
   });
-  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: budget(30_000) });
   // speechSynthesis isn't available in headless chromium; stub so nav doesn't throw
   await page.evaluate(() => {
     // @ts-expect-error test stub
@@ -92,7 +94,7 @@ test("the position dot is snapped onto the route, not raw GPS", async ({ page, c
   // times slower than a dev machine, and a fixed sleep read it before the first
   // fix had been drawn — a null dot, not a wrongly placed one
   await expect
-    .poll(async () => (await dotLngLat(page)) !== null, { timeout: 30_000 })
+    .poll(async () => (await dotLngLat(page)) !== null, { timeout: budget(30_000) })
     .toBe(true);
 
   const drawn = await dotLngLat(page);

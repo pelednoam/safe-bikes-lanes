@@ -10,7 +10,13 @@ export default defineConfig({
   // suite takes 2.7 min here and 10.8 min there — so tests that load an overlay
   // or run a camera animation sit near the limit and fail on time, not on
   // behaviour. The wall-clock budget is the runner's, not the assertion's.
-  timeout: process.env["CI"] === undefined ? 60_000 : 150_000,
+  // CI gets five minutes a test, not two and a half. The waits inside the tests are
+  // scaled by tests-e2e/budget.ts for the same reason — a runner that got 33% slower
+  // between two runs of the same commit failed nine tests, all of them on map and
+  // route waits, all of which passed locally against the identical data. The test
+  // timeout has to leave room for the scaled waits inside it, or it becomes the
+  // thing that fires first and the scaling achieves nothing.
+  timeout: process.env["CI"] === undefined ? 60_000 : 300_000,
   use: {
     baseURL: "http://127.0.0.1:8321",
     viewport: { width: 1200, height: 800 },

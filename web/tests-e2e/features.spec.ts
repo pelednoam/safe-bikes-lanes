@@ -1,5 +1,7 @@
 // E2E coverage of the major user journeys, on the real app + real graph.
 import { expect, test } from "@playwright/test";
+
+import { budget } from "./budget.js";
 import type { Map as MLMap } from "maplibre-gl";
 
 declare global {
@@ -13,7 +15,7 @@ type Page = import("@playwright/test").Page;
 async function boot(page: Page, hash = ""): Promise<void> {
   await page.goto(`/${hash}`);
   await page.waitForFunction(() => window._map !== undefined && window._map.loaded(), null, {
-    timeout: 45_000,
+    timeout: budget(45_000),
   });
 }
 
@@ -58,7 +60,7 @@ async function streetPointsOnScreen(page: Page): Promise<{ x: number; y: number 
         });
         return pts.length;
       },
-      { timeout: 30_000 },
+      { timeout: budget(30_000) },
     )
     .toBeGreaterThan(0);
   return pts;
@@ -68,7 +70,7 @@ const DAVIS_KENDALL = "#s=-71.122258,42.396748&e=-71.086705,42.362552&m=young_ki
 
 test("avoid lane types shapes the route and the explanation", async ({ page }) => {
   await boot(page, `${DAVIS_KENDALL}&x=lane,sharrow`);
-  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: budget(30_000) });
   await expect(page.locator("#avoid-lane")).toBeChecked();
   await expect(page.locator("#avoid-summary")).toContainText("avoiding 2");
   await expect(page.locator("#why-list")).toContainText(/Avoiding lane, sharrow/);
@@ -76,10 +78,10 @@ test("avoid lane types shapes the route and the explanation", async ({ page }) =
 
 test("walk budget selector persists into the permalink", async ({ page }) => {
   await boot(page, DAVIS_KENDALL);
-  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: budget(30_000) });
   await openSection(page, "Preferences");
   await page.locator("#walk-max").selectOption("500");
-  await expect.poll(() => page.url(), { timeout: 30_000 }).toContain("wk=500");
+  await expect.poll(() => page.url(), { timeout: budget(30_000) }).toContain("wk=500");
 });
 
 test("dark mode, aerial view, and 3D toggles drive the map", async ({ page }) => {
@@ -210,7 +212,7 @@ test("save a place via right-click and use it as start", async ({ page }) => {
 
 test("recent routes appear and replan on tap", async ({ page }) => {
   await boot(page, DAVIS_KENDALL);
-  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: budget(30_000) });
   // recent routes are collapsed by default — the section appears once there is history
   await expect(page.locator("#recent-box")).toBeVisible();
   await openSection(page, "Recent routes");
@@ -218,7 +220,7 @@ test("recent routes appear and replan on tap", async ({ page }) => {
   await page.locator("#reset").click();
   await openSection(page, "Recent routes");
   await page.locator("#recent-list span").first().click();
-  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: budget(30_000) });
 });
 
 // Coverage reaches the next ring of towns (app-v32). These routes sit entirely
@@ -243,7 +245,7 @@ for (const [name, hash] of [
     // route; that is seconds locally but well past the default on CI
     test.slow();
     await boot(page, hash);
-    await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 90_000 });
+    await expect(page.locator(".option-card").first()).toBeVisible({ timeout: budget(90_000) });
     // a real drawn route, not just an empty card
     const coords = await page.evaluate(
       () => (window._map?.getSource("route") as { _data?: GeoJSON.FeatureCollection })._data,
@@ -258,7 +260,7 @@ test("loop planner builds a round trip from a start point", async ({ page }) => 
   await page.locator("#loop-btn").click();
   // several loops are offered now, so take the one that leads
   await expect(page.locator(".option-card", { hasText: "Loop via" }).first()).toBeVisible({
-    timeout: 30_000,
+    timeout: budget(30_000),
   });
   await expect(page.locator("#s-dist")).toContainText("mi");
 });
@@ -268,7 +270,7 @@ test("reach map floods from a clicked point", async ({ page }) => {
   await openSection(page, "Other trip types");
   await page.locator("#shed-btn").click();
   await page.mouse.click(700, 400);
-  await expect(page.locator("#shed-info")).toContainText(/reachable/, { timeout: 30_000 });
+  await expect(page.locator("#shed-info")).toContainText(/reachable/, { timeout: budget(30_000) });
   await expect
     .poll(
       () =>
@@ -278,7 +280,7 @@ test("reach map floods from a clicked point", async ({ page }) => {
               ? window._map.querySourceFeatures("shed").length
               : 0,
         ),
-      { timeout: 30_000 },
+      { timeout: budget(30_000) },
     )
     .toBeGreaterThan(10);
 });
@@ -304,7 +306,7 @@ test("hovering a street shows the safety card with a grade", async ({ page }) =>
 
 test("GPX download produces a track file", async ({ page }) => {
   await boot(page, DAVIS_KENDALL);
-  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: budget(30_000) });
   await openSection(page, "Export");
   const downloadP = page.waitForEvent("download");
   await page.locator("#gpx").click();
@@ -337,7 +339,7 @@ test("the bottom sheet can be dragged down to give the map the screen", async ({
   await page.setViewportSize({ width: 390, height: 844 });
   await boot(page, DAVIS_KENDALL);
   // a computed route opens the sheet to half
-  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: budget(30_000) });
   await expect(page.locator("#panel")).toHaveClass(/half/);
 
   const handle = page.locator("#sheet-handle");
@@ -373,7 +375,7 @@ test.describe("system theme is dark", () => {
     // following the phone's theme turned dark mode on for riders who never
     // asked for it; it's opt-in and remembered instead
     await page.goto("/");
-    await page.waitForFunction(() => window._map !== undefined, null, { timeout: 45_000 });
+    await page.waitForFunction(() => window._map !== undefined, null, { timeout: budget(45_000) });
     await expect(page.locator("body")).not.toHaveClass(/dark/);
     await expect(page.locator("#dark-mode")).not.toBeChecked();
   });
@@ -401,7 +403,7 @@ test("a route can be planned by typing both ends, not just tapping the map", asy
   await page.locator("#search").fill("Kendall");
   await page.locator("#search-results .search-row button", { hasText: "go" }).first().click();
 
-  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: budget(30_000) });
   await expect(page.locator("#s-dist")).toContainText("mi");
 
   // the pin button hands the origin back to the current location
@@ -420,13 +422,13 @@ test("saved places survive a wipe via backup and restore", async ({ page }) => {
     );
   });
   await page.reload();
-  await page.waitForFunction(() => window._map !== undefined, null, { timeout: 45_000 });
+  await page.waitForFunction(() => window._map !== undefined, null, { timeout: budget(45_000) });
   await openSection(page, "Preferences");
   await expect(page.locator("#places-list")).toContainText("Home");
 
   // arm the listener before the click; racing them means the click can win and
   // the download is lost
-  const downloadPromise = page.waitForEvent("download", { timeout: 30_000 });
+  const downloadPromise = page.waitForEvent("download", { timeout: budget(30_000) });
   await page.locator("#backup-save").click();
   const file = await (await downloadPromise).path();
   expect(file).not.toBeNull();
@@ -435,7 +437,7 @@ test("saved places survive a wipe via backup and restore", async ({ page }) => {
   // the device gets wiped
   await page.evaluate(() => localStorage.clear());
   await page.reload();
-  await page.waitForFunction(() => window._map !== undefined, null, { timeout: 45_000 });
+  await page.waitForFunction(() => window._map !== undefined, null, { timeout: budget(45_000) });
   await openSection(page, "Preferences");
   await expect(page.locator("#places-list")).not.toContainText("Home");
 
@@ -449,7 +451,7 @@ test("a shared route link brings the route into view", async ({ page }) => {
   // a link is how routes are shared; the recipient of a long route used to get
   // the default view of Somerville with ~2% of the route on screen
   await boot(page, "#s=-71.293,42.296&e=-71.012,42.408&m=solo");
-  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 90_000 });
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: budget(90_000) });
   await expect
     .poll(
       () =>
@@ -468,7 +470,7 @@ test("a shared route link brings the route into view", async ({ page }) => {
           );
           return Math.round((100 * inside.length) / coords.length);
         }),
-      { timeout: 30_000 },
+      { timeout: budget(30_000) },
     )
     .toBeGreaterThan(80);
 });
@@ -589,7 +591,7 @@ test("the planner layers point at the workspace they belong to", async ({ page }
   await link.click();
   await page.waitForURL(/\/build\/$/);
   await expect(page.locator("#rank-panel h1")).toBeVisible();
-  await expect(page.locator(".row").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".row").first()).toBeVisible({ timeout: budget(30_000) });
 });
 
 test("the info box says which build you are looking at", async ({ page }) => {

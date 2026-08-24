@@ -1,5 +1,7 @@
 // E2E: the app boots without errors and the map layers respond to toggles.
 import { expect, test } from "@playwright/test";
+
+import { budget } from "./budget.js";
 import type { Map as MLMap } from "maplibre-gl";
 
 declare global {
@@ -16,7 +18,7 @@ async function boot(page: import("@playwright/test").Page): Promise<string[]> {
   });
   await page.goto("/");
   await page.waitForFunction(() => window._map !== undefined && window._map.loaded(), null, {
-    timeout: 45_000,
+    timeout: budget(45_000),
   });
   return errors;
 }
@@ -51,7 +53,7 @@ test("boots cleanly and network layers render", async ({ page }) => {
               ? window._map.querySourceFeatures("network").length
               : 0,
         ),
-      { timeout: 30_000 },
+      { timeout: budget(30_000) },
     )
     .toBeGreaterThan(50);
 });
@@ -74,7 +76,7 @@ test("safety network toggle hides and restores the layers", async ({ page }) => 
               ? window._map.querySourceFeatures("network").length
               : 0,
         ),
-      { timeout: 30_000 },
+      { timeout: budget(30_000) },
     )
     .toBeGreaterThan(50);
   expect(errors).toEqual([]);
@@ -95,9 +97,9 @@ test("route planning end to end on the real graph", async ({ page }) => {
   // Davis Sq -> Kendall via a fresh permalink load (the app reads the hash at boot)
   await page.goto("/#s=-71.122258,42.396748&e=-71.086705,42.362552&m=young_kids");
   await page.waitForFunction(() => window._map !== undefined && window._map.loaded(), null, {
-    timeout: 45_000,
+    timeout: budget(45_000),
   });
-  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: budget(30_000) });
   const cards = await page.locator(".option-card").count();
   expect(cards).toBeGreaterThanOrEqual(2);
   await expect(page.locator(".opt-chip").first()).toBeVisible();

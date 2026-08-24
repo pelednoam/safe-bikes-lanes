@@ -4,6 +4,8 @@
 // for each end, dragging a marker to nudge it, hovering streets to judge them,
 // and comparing the options against each other.
 import { expect, test } from "@playwright/test";
+
+import { budget } from "./budget.js";
 import type { Map as MLMap } from "maplibre-gl";
 
 declare global {
@@ -22,11 +24,11 @@ const DAVIS_KENDALL = "#s=-71.122258,42.396748&e=-71.086705,42.362552&m=young_ki
 async function boot(page: Page, hash = ""): Promise<void> {
   await page.goto(`/${hash}`);
   await page.waitForFunction(() => window._map !== undefined && window._map.loaded(), null, {
-    timeout: 45_000,
+    timeout: budget(45_000),
   });
   // wait for the network layer, so map clicks land on real geometry
   await page.waitForFunction(() => window._map?.isSourceLoaded("network") === true, null, {
-    timeout: 30_000,
+    timeout: budget(30_000),
   });
 }
 
@@ -50,7 +52,7 @@ async function streetPointsOnScreen(page: Page): Promise<{ x: number; y: number 
           () =>
             window._map?.queryRenderedFeatures(undefined, { layers: ["network-hit"] }).length ?? 0,
         ),
-      { timeout: 30_000 },
+      { timeout: budget(30_000) },
     )
     .toBeGreaterThan(0);
   return page.evaluate(() => {
@@ -96,7 +98,7 @@ test("plan a ride entirely with the mouse: pick a start, then a destination", as
   const kendall = await at(page, -71.0867, 42.3626);
   await page.mouse.click(kendall.x, kendall.y);
 
-  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: budget(30_000) });
   await expect(page.locator("#s-dist")).toContainText("mi");
   await expect(page.locator("#s-prot")).toContainText("%");
   // the fingerprint and the reasoning are the point of this app
@@ -112,7 +114,7 @@ test("plan a ride entirely with the mouse: pick a start, then a destination", as
 test("compare the options: hovering previews, clicking commits", async ({ page }) => {
   await boot(page, "#s=-71.122258,42.396748&e=-71.086705,42.362552&m=young_kids");
   const cards = page.locator(".option-card");
-  await expect(cards.first()).toBeVisible({ timeout: 30_000 });
+  await expect(cards.first()).toBeVisible({ timeout: budget(30_000) });
   const count = await cards.count();
   expect(count).toBeGreaterThan(1);
 
@@ -148,7 +150,7 @@ test("compare the options: hovering previews, clicking commits", async ({ page }
 
 test("nudge an endpoint by dragging its marker", async ({ page }) => {
   await boot(page, "#s=-71.122258,42.396748&e=-71.086705,42.362552&m=young_kids");
-  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: budget(30_000) });
   const before = await routeMeters(page);
 
   // drag the destination marker a few hundred metres and expect a new plan
@@ -166,18 +168,18 @@ test("nudge an endpoint by dragging its marker", async ({ page }) => {
   }
   await page.mouse.up();
 
-  await expect.poll(async () => routeMeters(page), { timeout: 30_000 }).not.toBe(before);
+  await expect.poll(async () => routeMeters(page), { timeout: budget(30_000) }).not.toBe(before);
   await expect(page.locator(".option-card").first()).toBeVisible();
 });
 
 test("swap the ends and get the reverse trip", async ({ page }) => {
   await boot(page, "#s=-71.122258,42.396748&e=-71.086705,42.362552&m=young_kids");
-  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: budget(30_000) });
   await page.locator("#swap").click();
   await expect
-    .poll(() => page.url(), { timeout: 30_000 })
+    .poll(() => page.url(), { timeout: budget(30_000) })
     .toMatch(/s=-71\.0867|s=-71\.086705/);
-  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: budget(30_000) });
   await expect(page.locator("#s-dist")).toContainText("mi");
 });
 
@@ -191,7 +193,7 @@ test("hover a street to judge it before committing to the route", async ({ page 
         page.evaluate(
           () => window._map?.queryRenderedFeatures(undefined, { layers: ["network-hit"] }).length ?? 0,
         ),
-      { timeout: 30_000 },
+      { timeout: budget(30_000) },
     )
     .toBeGreaterThan(0);
   const pts = await page.evaluate(() => {
@@ -231,7 +233,7 @@ test("hover a street to judge it before committing to the route", async ({ page 
 
 test("preferences reshape the plan and survive a reload", async ({ page }) => {
   await boot(page, "#s=-71.122258,42.396748&e=-71.086705,42.362552&m=young_kids");
-  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: budget(30_000) });
   const before = await routeMeters(page);
 
   const prefs = page.locator("summary", { hasText: "Preferences" }).first();
@@ -251,7 +253,7 @@ test("preferences reshape the plan and survive a reload", async ({ page }) => {
 
   // the choices come back on a reload, which is what a planner expects
   await page.reload();
-  await page.waitForFunction(() => window._map !== undefined, null, { timeout: 45_000 });
+  await page.waitForFunction(() => window._map !== undefined, null, { timeout: budget(45_000) });
   await page.locator("summary", { hasText: "Preferences" }).first().click();
   await expect(page.locator("#avoid-busy_street")).toBeChecked();
   await expect(page.locator("#avoid-sharrow")).toBeChecked();
@@ -259,14 +261,14 @@ test("preferences reshape the plan and survive a reload", async ({ page }) => {
 
 test("switch rider mode and watch the route get gentler", async ({ page }) => {
   await boot(page, "#s=-71.122258,42.396748&e=-71.086705,42.362552&m=solo");
-  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: budget(30_000) });
   const soloProtected = parseFloat((await page.locator("#s-prot").textContent()) ?? "0");
 
   // the segmented control, not a radio dot
   await page.locator("#modes label", { hasText: "young kids" }).click();
   await expect(page.locator('#modes input[value="young_kids"]')).toBeChecked();
-  await expect.poll(() => page.url(), { timeout: 30_000 }).toMatch(/m=young_kids/);
-  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
+  await expect.poll(() => page.url(), { timeout: budget(30_000) }).toMatch(/m=young_kids/);
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: budget(30_000) });
 
   const kidsProtected = parseFloat((await page.locator("#s-prot").textContent()) ?? "0");
   // riding with kids should not be less protected than riding alone
@@ -276,11 +278,11 @@ test("switch rider mode and watch the route get gentler", async ({ page }) => {
 test("a planned trip can be exported and reopened from its link", async ({ page, context }) => {
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   await boot(page, "#s=-71.122258,42.396748&e=-71.086705,42.362552&m=young_kids");
-  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: budget(30_000) });
 
   await page.locator("summary", { hasText: "Export" }).first().click();
   // GPX for a bike computer
-  const dl = page.waitForEvent("download", { timeout: 30_000 });
+  const dl = page.waitForEvent("download", { timeout: budget(30_000) });
   await page.locator("#gpx").click();
   const gpx = await dl;
   expect(await gpx.path()).not.toBeNull();
@@ -292,14 +294,14 @@ test("a planned trip can be exported and reopened from its link", async ({ page,
   expect(link).toMatch(/s=.*e=/);
   const planned = await routeMeters(page);
   await page.goto(link);
-  await page.waitForFunction(() => window._map !== undefined, null, { timeout: 45_000 });
-  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
+  await page.waitForFunction(() => window._map !== undefined, null, { timeout: budget(45_000) });
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: budget(30_000) });
   expect(await routeMeters(page)).toBe(planned);
 });
 
 test("reset clears the plan when not navigating", async ({ page }) => {
   await boot(page, "#s=-71.122258,42.396748&e=-71.086705,42.362552&m=young_kids");
-  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: budget(30_000) });
   await page.keyboard.press("Escape");
   await expect(page.locator(".option-card")).toHaveCount(0);
   await expect(page.locator(".maplibregl-marker:not(.opt-chip)")).toHaveCount(0);
@@ -328,14 +330,14 @@ test("the route line is on the map by the time the numbers are", async ({ page }
   // Switching options is where riders saw the gap anyway.
   await boot(page, "#s=-71.122258,42.396748&e=-71.086705,42.362552&m=young_kids");
   const cards = page.locator(".option-card");
-  await expect(cards.first()).toBeVisible({ timeout: 30_000 });
+  await expect(cards.first()).toBeVisible({ timeout: budget(30_000) });
   await expect
     .poll(
       () =>
         page.evaluate(
           () => window._map?.queryRenderedFeatures(undefined, { layers: ["route"] }).length ?? 0,
         ),
-      { timeout: 30_000 },
+      { timeout: budget(30_000) },
     )
     .toBeGreaterThan(0);
 
@@ -383,7 +385,7 @@ test("a destination set from a link gets a name, and a typed one is left alone",
     });
   });
   await boot(page, "#s=-71.122258,42.396748&e=-71.086705,42.362552&m=young_kids");
-  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: budget(30_000) });
   // it used to open with an empty field and a route to nowhere named
   await expect(page.locator("#search")).toHaveValue("Kendall/MIT", { timeout: 15_000 });
 
@@ -443,7 +445,7 @@ test("the planner asks nothing of OpenStreetMap's donated tile servers", async (
     if (r.url().includes("tile.openstreetmap.org")) tiles.push(r.url());
   });
   await boot(page, "#s=-71.122258,42.396748&e=-71.086705,42.362552&m=young_kids");
-  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: budget(30_000) });
   expect(tiles, "basemap tiles must not come from OSM's servers").toHaveLength(0);
 });
 
@@ -453,7 +455,7 @@ test("the wait is narrated, and something moves while it waits", async ({ page }
   // reads as a frozen app rather than a busy one.
   const seen: string[] = [];
   await page.goto("/#s=-71.122258,42.396748&e=-71.086705,42.362552&m=young_kids");
-  await page.waitForFunction(() => window._map !== undefined, null, { timeout: 60_000 });
+  await page.waitForFunction(() => window._map !== undefined, null, { timeout: budget(60_000) });
   const poll = setInterval(() => {
     void page
       .locator("#loading")
@@ -464,7 +466,7 @@ test("the wait is narrated, and something moves while it waits", async ({ page }
       })
       .catch(() => undefined);
   }, 90);
-  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 60_000 });
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: budget(60_000) });
   clearInterval(poll);
 
   // it said what it was doing, and the count moved while it did it
@@ -486,7 +488,7 @@ test("naming a pin on a mapped street costs no call to OSM's geocoder", async ({
     if (r.url().includes("nominatim")) geocodes.push(r.url());
   });
   await boot(page, "#s=-71.122258,42.396748&e=-71.086705,42.362552&m=young_kids");
-  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: budget(30_000) });
   // count only calls for the point we are about to drop, so an unrelated pin
   // being geocoded can't decide this test
   const asked = (lon: number): number =>
@@ -508,7 +510,7 @@ test("a rider who already allowed location gets their start without asking", asy
   await context.grantPermissions(["geolocation"]);
   await context.setGeolocation({ latitude: 42.3875, longitude: -71.0995 });
   await page.goto("/");
-  await page.waitForFunction(() => window._map !== undefined, null, { timeout: 60_000 });
+  await page.waitForFunction(() => window._map !== undefined, null, { timeout: budget(60_000) });
   // the start marker appears on its own, with no interaction at all
   await expect
     .poll(() => page.locator(".maplibregl-marker").count(), { timeout: 20_000 })
@@ -523,7 +525,7 @@ test("a round trip can be planned without hunting for it", async ({ page, contex
   await context.grantPermissions(["geolocation"]);
   await context.setGeolocation({ latitude: 42.3875, longitude: -71.0995 });
   await page.goto("/");
-  await page.waitForFunction(() => window._map !== undefined, null, { timeout: 60_000 });
+  await page.waitForFunction(() => window._map !== undefined, null, { timeout: budget(60_000) });
 
   const loop = page.locator("#loop-btn");
   await expect(loop, "the round-trip button must be visible without opening anything").toBeVisible();
@@ -546,7 +548,7 @@ test("a round trip can be planned without hunting for it", async ({ page, contex
       return (s?._data?.features ?? []).length > 0;
     },
     null,
-    { timeout: 60_000 },
+    { timeout: budget(60_000) },
   );
   await expect(page.locator("#error")).not.toBeVisible();
 
@@ -574,7 +576,7 @@ test("a round trip can have no stop at all", async ({ page, context }) => {
   await context.grantPermissions(["geolocation"]);
   await context.setGeolocation({ latitude: 42.3875, longitude: -71.0995 });
   await page.goto("/");
-  await page.waitForFunction(() => window._map !== undefined, null, { timeout: 60_000 });
+  await page.waitForFunction(() => window._map !== undefined, null, { timeout: budget(60_000) });
 
   await expect(page.locator("#loop-stop option[value='none']")).toHaveCount(1);
   await page.locator("#loop-stop").selectOption("none");
@@ -585,7 +587,7 @@ test("a round trip can have no stop at all", async ({ page, context }) => {
       return (s?._data?.features ?? []).length > 0;
     },
     null,
-    { timeout: 60_000 },
+    { timeout: budget(60_000) },
   );
   // no stop marker, and the explanation doesn't promise one
   const markers = await page.evaluate(
@@ -613,7 +615,7 @@ test("a round trip is asked for in miles, typed freely, and answered with a choi
   await context.grantPermissions(["geolocation"]);
   await context.setGeolocation({ latitude: 42.3875, longitude: -71.0995 });
   await page.goto("/");
-  await page.waitForFunction(() => window._map !== undefined, null, { timeout: 60_000 });
+  await page.waitForFunction(() => window._map !== undefined, null, { timeout: budget(60_000) });
 
   // miles, because this is eastern Massachusetts
   await expect(page.locator("#loop-unit")).toHaveText("mi");
@@ -630,7 +632,7 @@ test("a round trip is asked for in miles, typed freely, and answered with a choi
       return (s?._data?.features ?? []).length > 0;
     },
     null,
-    { timeout: 60_000 },
+    { timeout: budget(60_000) },
   );
   await expect.poll(() => page.locator(".option-card").count(), { timeout: 20_000 }).toBeGreaterThan(1);
 
@@ -660,15 +662,15 @@ test("search results say how safe the way there is, before you commit", async ({
   await context.grantPermissions(["geolocation"]);
   await context.setGeolocation({ latitude: 42.3875, longitude: -71.0995 });
   await page.goto("/");
-  await page.waitForFunction(() => window._map !== undefined, null, { timeout: 60_000 });
+  await page.waitForFunction(() => window._map !== undefined, null, { timeout: budget(60_000) });
   await page.waitForTimeout(2500);
 
   await page.locator("#search").fill("danehy");
-  await expect(page.locator(".search-row").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".search-row").first()).toBeVisible({ timeout: budget(30_000) });
 
   // a real grade, from a real route — it arrives after the routing, so poll
   const badge = page.locator(".search-row").first().locator(".search-grade");
-  await expect.poll(async () => (await badge.innerText()).trim(), { timeout: 60_000 }).toMatch(
+  await expect.poll(async () => (await badge.innerText()).trim(), { timeout: budget(60_000) }).toMatch(
     /^[ABCDF]$/,
   );
   // Coloured on the same scale the route cards use, so an A means one thing
@@ -698,13 +700,13 @@ test("a grade is never shown for a route that wasn't computed", async ({ page })
   // from, so there is nothing honest to say — and inventing a start would be a
   // claim about a route nobody asked for.
   await page.goto("/");
-  await page.waitForFunction(() => window._map !== undefined, null, { timeout: 60_000 });
+  await page.waitForFunction(() => window._map !== undefined, null, { timeout: budget(60_000) });
   await page.waitForTimeout(2000);
   const hasStart = await page.evaluate(() => document.querySelectorAll(".maplibregl-marker").length);
   expect(hasStart, "this test needs no start marker to be meaningful").toBe(0);
 
   await page.locator("#search").fill("danehy");
-  await expect(page.locator(".search-row").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".search-row").first()).toBeVisible({ timeout: budget(30_000) });
   await page.waitForTimeout(4000);
   // hidden rather than removed — taking them out re-flowed the rows under the
   // finger reaching for one — so this asks what a rider can see
@@ -720,11 +722,11 @@ test("typing again abandons the grades for the list that's gone", async ({ page,
   await context.grantPermissions(["geolocation"]);
   await context.setGeolocation({ latitude: 42.3875, longitude: -71.0995 });
   await page.goto("/");
-  await page.waitForFunction(() => window._map !== undefined, null, { timeout: 60_000 });
+  await page.waitForFunction(() => window._map !== undefined, null, { timeout: budget(60_000) });
   await page.waitForTimeout(2500);
 
   await page.locator("#search").fill("danehy");
-  await expect(page.locator(".search-row").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".search-row").first()).toBeVisible({ timeout: budget(30_000) });
   await page.locator("#search").fill("porter");
   // wait for the list to actually change hands — the old rows are still on
   // screen until the debounced search returns, so "a row is visible" proves
@@ -741,7 +743,7 @@ test("typing again abandons the grades for the list that's gone", async ({ page,
   await expect
     .poll(
       async () => (await page.locator(".search-row").first().locator(".search-sub").innerText()).trim(),
-      { timeout: 60_000 },
+      { timeout: budget(60_000) },
     )
     .not.toContain("checking");
 });
@@ -762,10 +764,10 @@ test("a destination the router can't reach gets no grade at all", async ({ page,
     }),
   );
   await page.goto("/");
-  await page.waitForFunction(() => window._map !== undefined, null, { timeout: 60_000 });
+  await page.waitForFunction(() => window._map !== undefined, null, { timeout: budget(60_000) });
   await page.waitForTimeout(2500);
   await page.locator("#search").fill("nowhere");
-  await expect(page.locator(".search-row").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".search-row").first()).toBeVisible({ timeout: budget(30_000) });
   // there IS a start, so a missing grade here means "no route", not "nowhere to
   // route from" — the two branches look identical on screen
   expect(
@@ -806,13 +808,13 @@ test("changing a routing setting withdraws the letters it invalidated", async ({
   await context.grantPermissions(["geolocation"]);
   await context.setGeolocation({ latitude: 42.3875, longitude: -71.0995 });
   await page.goto("/");
-  await page.waitForFunction(() => window._map !== undefined, null, { timeout: 60_000 });
+  await page.waitForFunction(() => window._map !== undefined, null, { timeout: budget(60_000) });
   await page.waitForTimeout(2500);
 
   await page.locator("#search").fill("danehy");
-  await expect(page.locator(".search-row").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".search-row").first()).toBeVisible({ timeout: budget(30_000) });
   const badge = page.locator(".search-row").first().locator(".search-grade");
-  await expect.poll(async () => (await badge.innerText()).trim(), { timeout: 60_000 }).toMatch(
+  await expect.poll(async () => (await badge.innerText()).trim(), { timeout: budget(60_000) }).toMatch(
     /^[ABCDF]$/,
   );
 
@@ -839,11 +841,11 @@ test("changing a routing setting withdraws the letters it invalidated", async ({
   await expect
     .poll(
       () => page.evaluate(() => (window as unknown as { __seen: string[] }).__seen ?? []),
-      { timeout: 60_000 },
+      { timeout: budget(60_000) },
     )
     .toContain("·");
   // and it comes back: withdrawing is not the same as deleting
-  await expect.poll(async () => (await badge.innerText()).trim(), { timeout: 60_000 }).toMatch(
+  await expect.poll(async () => (await badge.innerText()).trim(), { timeout: budget(60_000) }).toMatch(
     /^[ABCDF]$/,
   );
 });
@@ -855,11 +857,11 @@ test("picking a start doesn't get graded as if it were a destination", async ({ 
   await context.grantPermissions(["geolocation"]);
   await context.setGeolocation({ latitude: 42.3875, longitude: -71.0995 });
   await page.goto("/");
-  await page.waitForFunction(() => window._map !== undefined, null, { timeout: 60_000 });
+  await page.waitForFunction(() => window._map !== undefined, null, { timeout: budget(60_000) });
   await page.waitForTimeout(2500);
 
   await page.locator("#from-field").fill("danehy");
-  await expect(page.locator(".search-row").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".search-row").first()).toBeVisible({ timeout: budget(30_000) });
   await page.waitForTimeout(6000);
   const shownGrades = await page
     .locator(".search-grade")
@@ -892,11 +894,11 @@ test("searching before setting a start still gets grades once there is one", asy
   // sequence — look for somewhere to go, then say where you are — left the
   // whole list permanently blank.
   await page.goto("/");
-  await page.waitForFunction(() => window._map !== undefined, null, { timeout: 60_000 });
+  await page.waitForFunction(() => window._map !== undefined, null, { timeout: budget(60_000) });
   await page.waitForTimeout(2000);
 
   await page.locator("#search").fill("danehy");
-  await expect(page.locator(".search-row").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".search-row").first()).toBeVisible({ timeout: budget(30_000) });
   await page.waitForTimeout(3000);
   const badge = page.locator(".search-row").first().locator(".search-grade");
   expect(await badge.evaluate((b) => getComputedStyle(b).visibility)).toBe("hidden");
@@ -907,10 +909,10 @@ test("searching before setting a start still gets grades once there is one", asy
   const spot = await at(page, -71.0995, 42.3875);
   await page.mouse.click(spot.x, spot.y);
   await expect
-    .poll(() => page.locator(".maplibregl-marker").count(), { timeout: 30_000 })
+    .poll(() => page.locator(".maplibregl-marker").count(), { timeout: budget(30_000) })
     .toBeGreaterThan(0);
 
-  await expect.poll(async () => (await badge.innerText()).trim(), { timeout: 60_000 }).toMatch(
+  await expect.poll(async () => (await badge.innerText()).trim(), { timeout: budget(60_000) }).toMatch(
     /^[ABCDF]$/,
   );
   expect(await badge.evaluate((b) => getComputedStyle(b).visibility)).toBe("visible");
@@ -927,12 +929,12 @@ test("changing rider takes down the letters computed for the last one", async ({
   await context.grantPermissions(["geolocation"]);
   await context.setGeolocation({ latitude: 42.3875, longitude: -71.0995 });
   await page.goto("/");
-  await page.waitForFunction(() => window._map !== undefined, null, { timeout: 60_000 });
+  await page.waitForFunction(() => window._map !== undefined, null, { timeout: budget(60_000) });
   await page.waitForTimeout(2500);
   await page.locator("#search").fill("danehy");
-  await expect(page.locator(".search-row").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".search-row").first()).toBeVisible({ timeout: budget(30_000) });
   const badge = page.locator(".search-row").first().locator(".search-grade");
-  await expect.poll(async () => (await badge.innerText()).trim(), { timeout: 60_000 }).toMatch(
+  await expect.poll(async () => (await badge.innerText()).trim(), { timeout: budget(60_000) }).toMatch(
     /^[ABCDF]$/,
   );
 
@@ -949,7 +951,7 @@ test("changing rider takes down the letters computed for the last one", async ({
 
   await expect
     .poll(() => page.evaluate(() => (window as unknown as { __seen2: string[] }).__seen2 ?? []), {
-      timeout: 60_000,
+      timeout: budget(60_000),
     })
     .toContain("·");
   // The tooltip and the label must go with it — a stale letter left in either is
@@ -964,7 +966,7 @@ test("changing rider takes down the letters computed for the last one", async ({
     expect(labelWhileWithdrawn, "a withdrawn badge still announced its old grade").toBe("");
   }
   // and once it settles it announces the new one
-  await expect.poll(async () => (await badge.innerText()).trim(), { timeout: 60_000 }).toMatch(
+  await expect.poll(async () => (await badge.innerText()).trim(), { timeout: budget(60_000) }).toMatch(
     /^[ABCDF]$/,
   );
   const settled = await badge.getAttribute("aria-label");
@@ -1278,7 +1280,7 @@ test("your own places and the trips you took come first", async ({ page, context
   });
   await page.reload();
   await page.waitForFunction(() => window._map !== undefined && window._map.loaded(), null, {
-    timeout: 60_000,
+    timeout: budget(60_000),
   });
   await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 40_000 });
 
@@ -1321,7 +1323,7 @@ test("with no start set, the search orders by what you are looking at", async ({
   await context.grantPermissions(["geolocation"]);
   await page.goto("/#c=-71.1223,42.3968,14"); // a view, no start and no destination
   await page.waitForFunction(() => window._map !== undefined && window._map.loaded(), null, {
-    timeout: 60_000,
+    timeout: budget(60_000),
   });
   await page.waitForTimeout(2_500);
 
@@ -1416,7 +1418,7 @@ test("a build with no recorded weighting still opens a usable list", async ({ pa
   });
   await boot(page, HOME_VIEW);
   await page.locator("#build-box > summary").click();
-  await expect(page.locator(".build-row").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".build-row").first()).toBeVisible({ timeout: budget(30_000) });
 
   // Asserted on the ranking, not on the slider values: a range input silently
   // rejects "NaN" and keeps whatever it had, so the sliders look fine either way.

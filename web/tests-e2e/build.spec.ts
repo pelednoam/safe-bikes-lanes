@@ -2,6 +2,8 @@
 // Everything here was measured offline by pipeline/priorities.py; these tests
 // cover that the panel filters, re-sorts and explains it without overstating it.
 import { expect, test } from "@playwright/test";
+
+import { budget } from "./budget.js";
 import type { Map as MLMap } from "maplibre-gl";
 
 declare global {
@@ -15,10 +17,10 @@ type Page = import("@playwright/test").Page;
 async function openBuild(page: Page): Promise<void> {
   await page.goto("/");
   await page.waitForFunction(() => window._map !== undefined && window._map.loaded(), null, {
-    timeout: 45_000,
+    timeout: budget(45_000),
   });
   // the section only exists when the data build has a ranking in it
-  await expect(page.locator("#build-box")).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator("#build-box")).toBeVisible({ timeout: budget(30_000) });
   await page.locator("#build-box > summary").click();
 }
 
@@ -114,7 +116,7 @@ test("the layer toggles draw the projects and the coverage backdrop", async ({ p
               window._map?.queryRenderedFeatures(undefined, { layers: [id] }).length ?? 0,
             layer,
           ),
-        { timeout: 30_000 },
+        { timeout: budget(30_000) },
       )
       .toBeGreaterThan(0);
   }
@@ -136,7 +138,7 @@ test("the CSV download is the whole ranking", async ({ page }) => {
   await openBuild(page);
   await expect(page.locator(".build-row").first()).toBeVisible({ timeout: 20_000 });
   // arm before the click: the download races the handler otherwise
-  const dl = page.waitForEvent("download", { timeout: 30_000 });
+  const dl = page.waitForEvent("download", { timeout: budget(30_000) });
   await page.locator("#build-csv").click();
   const file = await dl;
   expect(file.suggestedFilename()).toMatch(/\.csv$/);
@@ -158,7 +160,7 @@ test("clicking a project inspects it and does not re-route", async ({ page }) =>
         page.evaluate(
           () => window._map?.queryRenderedFeatures(undefined, { layers: ["build"] }).length ?? 0,
         ),
-      { timeout: 30_000 },
+      { timeout: budget(30_000) },
     )
     .toBeGreaterThan(0);
 
@@ -234,7 +236,7 @@ test.describe("data availability", () => {
     await page.route("**/priorities.geojson", (route) => route.fulfill({ status: 404, body: "" }));
     await page.goto("/");
     await page.waitForFunction(() => window._map !== undefined && window._map.loaded(), null, {
-      timeout: 45_000,
+      timeout: budget(45_000),
     });
     await expect(page.locator(".option-card, #panel")).not.toHaveCount(0); // app still fine
     await expect(page.locator("#build-box")).toBeHidden();
@@ -249,9 +251,9 @@ test.describe("data availability", () => {
     await page.route("**/priorities.geojson", (route) => route.fulfill({ status: 500, body: "" }));
     await page.goto("/");
     await page.waitForFunction(() => window._map !== undefined && window._map.loaded(), null, {
-      timeout: 45_000,
+      timeout: budget(45_000),
     });
-    await expect(page.locator("#build-box")).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator("#build-box")).toBeVisible({ timeout: budget(30_000) });
     await page.locator("#build-box > summary").click();
     await expect(page.locator("#build-list")).toContainText(/couldn't load/i, { timeout: 20_000 });
     await expect(page.locator("#build-list")).not.toContainText(/loading projects/);
@@ -266,14 +268,14 @@ test.describe("data availability", () => {
     });
     await page.goto("/");
     await page.waitForFunction(() => window._map !== undefined && window._map.loaded(), null, {
-      timeout: 45_000,
+      timeout: budget(45_000),
     });
-    await expect(page.locator("#build-box")).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator("#build-box")).toBeVisible({ timeout: budget(30_000) });
     await page.waitForTimeout(1500);
     expect(fetched).toBe(0);
 
     await page.locator("#build-box > summary").click();
-    await expect(page.locator(".build-row").first()).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator(".build-row").first()).toBeVisible({ timeout: budget(30_000) });
     expect(fetched).toBe(1);
   });
 });
@@ -292,7 +294,7 @@ test("re-weighting repaints the map, so it can't contradict the list", async ({ 
         page.evaluate(
           () => window._map?.queryRenderedFeatures(undefined, { layers: ["build"] }).length ?? 0,
         ),
-      { timeout: 30_000 },
+      { timeout: budget(30_000) },
     )
     .toBeGreaterThan(0);
 
@@ -358,7 +360,7 @@ test("spot fixes are drawn as points and read as one location, not a street", as
           () =>
             window._map?.queryRenderedFeatures(undefined, { layers: ["crossings"] }).length ?? 0,
         ),
-      { timeout: 30_000 },
+      { timeout: budget(30_000) },
     )
     .toBeGreaterThan(0);
 
@@ -390,20 +392,20 @@ test("what-if re-costs your own trip, and undoes cleanly", async ({ page }) => {
   // checks that against a trip they actually take.
   await page.goto("/#s=-71.122258,42.396748&e=-71.086705,42.362552&m=young_kids");
   await page.waitForFunction(() => window._map !== undefined && window._map.loaded(), null, {
-    timeout: 45_000,
+    timeout: budget(45_000),
   });
-  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: budget(30_000) });
   const distanceBefore = (await page.locator("#s-dist").textContent()) ?? "";
   const protectedBefore = (await page.locator("#s-prot").textContent()) ?? "";
 
-  await expect(page.locator("#build-box")).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator("#build-box")).toBeVisible({ timeout: budget(30_000) });
   await page.locator("#build-box > summary").click();
-  await expect(page.locator(".build-row").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".build-row").first()).toBeVisible({ timeout: budget(30_000) });
   await page.locator(".build-row").first().click();
   await expect(page.locator("#whatif")).toBeVisible();
 
   await page.locator("#whatif-run").click();
-  await expect(page.locator("#whatif-result")).not.toBeEmpty({ timeout: 30_000 });
+  await expect(page.locator("#whatif-result")).not.toBeEmpty({ timeout: budget(30_000) });
   const answer = (await page.locator("#whatif-result").textContent()) ?? "";
   // it always says how much it modelled, so the phrasing can't imply more
   expect(answer).toMatch(/rebuilt segment/);
@@ -413,7 +415,7 @@ test("what-if re-costs your own trip, and undoes cleanly", async ({ page }) => {
 
   // undo restores the real trip: this is a question, not a setting
   await page.locator("#whatif-clear").click();
-  await expect.poll(async () => page.locator("#s-dist").textContent(), { timeout: 30_000 })
+  await expect.poll(async () => page.locator("#s-dist").textContent(), { timeout: budget(30_000) })
     .toBe(distanceBefore);
   expect(await page.locator("#s-prot").textContent()).toBe(protectedBefore);
   await expect(page.locator("#whatif-clear")).toBeHidden();
@@ -422,16 +424,16 @@ test("what-if re-costs your own trip, and undoes cleanly", async ({ page }) => {
 test("with no trip planned, what-if answers with reach instead", async ({ page }) => {
   await page.goto("/#c=-71.105,42.383,13");
   await page.waitForFunction(() => window._map !== undefined && window._map.loaded(), null, {
-    timeout: 45_000,
+    timeout: budget(45_000),
   });
-  await expect(page.locator("#build-box")).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator("#build-box")).toBeVisible({ timeout: budget(30_000) });
   await page.locator("#build-box > summary").click();
-  await expect(page.locator(".build-row").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".build-row").first()).toBeVisible({ timeout: budget(30_000) });
   await page.locator(".build-row").first().click();
   await page.locator("#whatif-run").click();
   // no start and no destination: say what's missing rather than nothing
   await expect(page.locator("#whatif-result")).toContainText(/plan a trip|set a start|in reach/i, {
-    timeout: 30_000,
+    timeout: budget(30_000),
   });
 });
 
@@ -442,7 +444,7 @@ test("the one-pager stands alone: numbers, provenance, and caveats", async ({ pa
   await expect(page.locator(".build-row").first()).toBeVisible({ timeout: 20_000 });
   await page.locator(".build-row").first().click();
 
-  const opened = context.waitForEvent("page", { timeout: 30_000 });
+  const opened = context.waitForEvent("page", { timeout: budget(30_000) });
   await page.locator("#build-print").click();
   const sheet = await opened;
   await sheet.waitForLoadState("domcontentloaded");
@@ -507,7 +509,7 @@ test("the app's own ranking opens on the weighting the pipeline published", asyn
   // with — or a city gets two answers to "which project first?". They used to
   // agree only because four literals happened to match the config.
   await openBuild(page);
-  await expect(page.locator(".build-row").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".build-row").first()).toBeVisible({ timeout: budget(30_000) });
 
   const check = await page.evaluate(async () => {
     const meta = (await (await fetch("data/priorities_meta.json")).json()) as {

@@ -6,6 +6,8 @@
 // filter must never attribute a project to a town it isn't in. Everything else
 // here is the ordinary "does it render and respond" floor.
 import { expect, test } from "@playwright/test";
+
+import { budget } from "./budget.js";
 import type { Map as MLMap } from "maplibre-gl";
 
 declare global {
@@ -33,8 +35,8 @@ async function open(
   });
   await page.setViewportSize({ width, height: 860 });
   await page.goto("/build/");
-  await page.waitForFunction(() => window._map !== undefined, null, { timeout: 60_000 });
-  await expect(page.locator(".row").first()).toBeVisible({ timeout: 30_000 });
+  await page.waitForFunction(() => window._map !== undefined, null, { timeout: budget(60_000) });
+  await expect(page.locator(".row").first()).toBeVisible({ timeout: budget(30_000) });
   const rows = await page.locator(".row").count();
   const towns = await page.locator("#town option").evaluateAll((os) =>
     os.map((o) => (o as HTMLOptionElement).value),
@@ -556,7 +558,7 @@ test("a headcount is only called people when it was counted", async ({ page }) =
   // With the real meta, the same projects do say residents.
   await page.unroute("**/priorities_meta.json");
   await page.reload();
-  await expect(page.locator(".row").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".row").first()).toBeVisible({ timeout: budget(30_000) });
   const counted: string[] = [];
   for (let i = 0; i < 12; i++) {
     await page.locator(".row").nth(i).click();
@@ -695,7 +697,7 @@ test("a crash count is quoted when there is one and never invented", async ({ pa
       await route.fulfill({ response: res, json: fc });
     });
     await page.goto("/build/");
-    await expect(page.locator(".row").first()).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator(".row").first()).toBeVisible({ timeout: budget(30_000) });
     await page.locator(".row").first().click();
     const rows = (await page.locator("#d-rows").textContent()) ?? "";
     expect(rows, `crashes=${String(value)} should say "${label}"`).toContain(label);
@@ -720,7 +722,7 @@ test("a crash count is quoted when there is one and never invented", async ({ pa
     await route.fulfill({ response: res, json: fc });
   });
   await page.reload();
-  await expect(page.locator(".row").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".row").first()).toBeVisible({ timeout: budget(30_000) });
   await page.locator(".row").first().click();
   const flipped = await page.locator(".figure .l").allTextContents();
   if (known === null) {
@@ -740,7 +742,7 @@ test("a crash count is quoted when there is one and never invented", async ({ pa
     await route.fulfill({ response: res, json: fc });
   });
   await page.reload();
-  await expect(page.locator(".row").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".row").first()).toBeVisible({ timeout: budget(30_000) });
   await page.locator(".row").first().click();
   const withCounts = await page.locator(".figure .l").allTextContents();
   // the period is the pipeline's to state; this snapshot predates the field, so
@@ -934,7 +936,7 @@ test("an empty ranking leaves nothing drawn on the map", async ({ page }) => {
   await open(page);
   // the list renders before the map's load event adds the layers
   await page.waitForFunction(() => window._map?.getLayer("projects") !== undefined, null, {
-    timeout: 45_000,
+    timeout: budget(45_000),
   });
   const before = await page.evaluate(() =>
     JSON.stringify(window._map?.getPaintProperty("projects", "line-opacity")),
@@ -990,7 +992,7 @@ test("a density estimate is not called a headcount by the slider either", async 
 
   await page.unroute("**/priorities_meta.json");
   await page.reload();
-  await expect(page.locator(".row").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".row").first()).toBeVisible({ timeout: budget(30_000) });
   await expect(page.locator('label[for="w-cov"]')).toHaveText("Residents gaining access");
 });
 
@@ -1078,7 +1080,7 @@ test("a city page hands the workspace its own town", async ({ page }) => {
   await expect(link).toHaveAttribute("href", "../build/?town=Somerville");
   await link.click();
   await page.waitForURL(/\/build\/\?town=Somerville$/);
-  await expect(page.locator(".row").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".row").first()).toBeVisible({ timeout: budget(30_000) });
   await expect(page.locator("#town")).toHaveValue("Somerville");
 
   // and the ranking really is that town's
@@ -1105,7 +1107,7 @@ test("a town in the URL that does not exist is ignored, not shown as empty", asy
   // The reader did not type this; a stale link did. An empty list would read as
   // "nothing to build here".
   await page.goto("/build/?town=Atlantis");
-  await expect(page.locator(".row").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".row").first()).toBeVisible({ timeout: budget(30_000) });
   await expect(page.locator("#town")).toHaveValue("");
   await expect(page.locator("#empty")).toBeHidden();
   expect(await page.locator(".row").count()).toBeGreaterThan(200);
@@ -1117,7 +1119,7 @@ test("a town in the URL that does not exist is ignored, not shown as empty", asy
   // arbitrary prose on a page cities read as ours.
   const long = "L".repeat(300);
   await page.goto(`/build/?town=${long}`);
-  await expect(page.locator(".row").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".row").first()).toBeVisible({ timeout: budget(30_000) });
   const shown = (await page.locator(".stale-link").textContent()) ?? "";
   expect(shown.length).toBeLessThan(160);
   expect(shown).toContain("\u2026");
@@ -1130,7 +1132,7 @@ test("a town in the URL that does not exist is ignored, not shown as empty", asy
 
   // A real town gets no such note.
   await page.goto("/build/?town=Somerville");
-  await expect(page.locator(".row").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".row").first()).toBeVisible({ timeout: budget(30_000) });
   await expect(page.locator(".stale-link")).toHaveCount(0);
 });
 
@@ -1260,7 +1262,7 @@ test("the what-if is only as specific as the data supports", async ({ page }) =>
       await route.fulfill({ response: res, json: fc });
     });
     await page.goto("/build/");
-    await expect(page.locator(".row").first()).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator(".row").first()).toBeVisible({ timeout: budget(30_000) });
     await page.locator(".row").first().click();
     return (await page.locator("#d-whatif").textContent()) ?? "";
   };
@@ -1337,7 +1339,7 @@ test("the town in the URL follows the town on the screen", async ({ page }) => {
   // and reloading that URL lands on the same ranking
   const first = await page.locator(".row .what").first().textContent();
   await page.reload();
-  await expect(page.locator(".row").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".row").first()).toBeVisible({ timeout: budget(30_000) });
   await expect(page.locator("#town")).toHaveValue("Somerville");
   await expect(page.locator(".row .what").first()).toHaveText(first ?? "");
 
@@ -1394,7 +1396,7 @@ test("the crash period comes from the data, not from a literal", async ({ page }
     await route.fulfill({ response: res, json: meta });
   });
   await page.reload();
-  await expect(page.locator(".row").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".row").first()).toBeVisible({ timeout: budget(30_000) });
   await page.locator(".row").first().click();
   const bare = await page.locator(".figure .l").allTextContents();
   expect(bare).toContain("bike crashes here on record");

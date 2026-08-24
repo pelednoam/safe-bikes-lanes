@@ -2,6 +2,8 @@
 // it has to load a map, say one true thing prominently, and let someone see why
 // it's true. Tested separately from the app because it shares no code with it.
 import { expect, test } from "@playwright/test";
+
+import { budget } from "./budget.js";
 import type { Map as MLMap } from "maplibre-gl";
 
 declare global {
@@ -25,7 +27,7 @@ const asMiles = (km: number): string => {
 async function openCity(page: Page, slug = "somerville"): Promise<void> {
   await page.goto(`/${slug}/`);
   await page.waitForFunction(() => window._map !== undefined && window._map.loaded(), null, {
-    timeout: 45_000,
+    timeout: budget(45_000),
   });
 }
 
@@ -110,7 +112,7 @@ test("the map draws the archipelago: pockets in their own colours", async ({ pag
         page.evaluate(
           () => window._map?.queryRenderedFeatures(undefined, { layers: ["islands"] }).length ?? 0,
         ),
-      { timeout: 30_000 },
+      { timeout: budget(30_000) },
     )
     .toBeGreaterThan(0);
 
@@ -184,12 +186,12 @@ test("it says how it was worked out and what it doesn't mean", async ({ page }) 
 
 test("a city we haven't generated says so instead of breaking", async ({ page }) => {
   await page.goto("/somerville/");
-  await page.waitForFunction(() => window._map !== undefined, null, { timeout: 45_000 });
+  await page.waitForFunction(() => window._map !== undefined, null, { timeout: budget(45_000) });
   // same page, a slug with no data behind it
   await page.route("**/data/cities/*.json", (route) => route.fulfill({ status: 404, body: "" }));
   await page.reload();
   await expect(page.locator("body")).toContainText(/No page for that city yet/i, {
-    timeout: 30_000,
+    timeout: budget(30_000),
   });
   await expect(page.locator("a[href='../']")).toBeVisible();
 });
@@ -221,7 +223,7 @@ test("tapping a piece of the network says what it is, without a mouse", async ({
         page.evaluate(
           () => window._map?.queryRenderedFeatures(undefined, { layers: ["islands"] }).length ?? 0,
         ),
-      { timeout: 30_000 },
+      { timeout: budget(30_000) },
     )
     .toBeGreaterThan(0);
   const pt = await page.evaluate(() => {
@@ -338,7 +340,7 @@ test("a street on the city page explains itself the way the planner does", async
         page.evaluate(
           () => window._map?.queryRenderedFeatures(undefined, { layers: ["barriers"] }).length ?? 0,
         ),
-      { timeout: 30_000 },
+      { timeout: budget(30_000) },
     )
     .toBeGreaterThan(0);
   const pt = await page.evaluate(() => {
@@ -372,7 +374,7 @@ test("moving off a street takes its card away", async ({ page }) => {
         page.evaluate(
           () => window._map?.queryRenderedFeatures(undefined, { layers: ["islands"] }).length ?? 0,
         ),
-      { timeout: 30_000 },
+      { timeout: budget(30_000) },
     )
     .toBeGreaterThan(0);
   const pt = await page.evaluate(() => {
@@ -420,7 +422,7 @@ test("a photo that has arrived survives the pointer moving on the same street", 
         page.evaluate(
           () => window._map?.queryRenderedFeatures(undefined, { layers: ["islands"] }).length ?? 0,
         ),
-      { timeout: 30_000 },
+      { timeout: budget(30_000) },
     )
     .toBeGreaterThan(0);
   const pt = await page.evaluate(() => {
