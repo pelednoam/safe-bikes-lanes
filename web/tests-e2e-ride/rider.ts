@@ -60,7 +60,14 @@ export async function installRider(page: Page): Promise<void> {
       speed?: number | null;
       heading?: number | null;
     }
-    const watchers = new Map<number, { cb: PositionCallback; err?: PositionErrorCallback }>();
+    // err is explicitly `| undefined` rather than merely optional: watchPosition
+    // is free to be called without an error callback, and under
+    // exactOptionalPropertyTypes passing that absent argument through is not
+    // the same as omitting the property.
+    const watchers = new Map<
+      number,
+      { cb: PositionCallback; err?: PositionErrorCallback | undefined }
+    >();
     let nextId = 1;
     let last: RiderFix | null = null;
 

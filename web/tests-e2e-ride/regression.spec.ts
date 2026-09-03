@@ -934,7 +934,7 @@ test("marking a street mid-ride doesn't stall guidance to refresh a hidden list"
     (p) => {
       window.__rider.setFix({ lon: p[0], lat: p[1], accuracy: 8, speed: 4, heading: 90 });
     },
-    [-71.1223, 42.3968],
+    [-71.1223, 42.3968] as [number, number],
   );
 
   // Counted, because by the time you are riding the grading works on rows the

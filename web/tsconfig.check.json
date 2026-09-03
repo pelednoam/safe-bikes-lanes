@@ -4,5 +4,11 @@
     "noEmit": true,
     "rootDir": "."
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts", "tests-e2e/**/*.ts"]
+  "include": [
+    "src/**/*.ts",
+    "tests/**/*.ts",
+    "tests-e2e/**/*.ts",
+    "tests-e2e-ride/**/*.ts",
+    "tests-e2e-native/**/*.ts"
+  ]
 }

@@ -1,6 +1,4 @@
 // Emulates the Capacitor WebView app-layer against the shipped dist/ bundle.
-import { readFileSync } from "node:fs";
-
 import { expect, test } from "@playwright/test";
 import type { Map as MLMap } from "maplibre-gl";
 
@@ -27,7 +25,7 @@ async function nativeShim(page: Page): Promise<void> {
         }
         return {};
       },
-    } as unknown as Window["Capacitor"];
+    } as unknown as NonNullable<Window["Capacitor"]>;
     window.__swRegistered = false;
     if (navigator.serviceWorker) {
       const orig = navigator.serviceWorker.register.bind(navigator.serviceWorker);
@@ -234,7 +232,7 @@ async function mutePhone(page: Page): Promise<void> {
         }
         return {};
       },
-    } as unknown as Window["Capacitor"];
+    } as unknown as NonNullable<Window["Capacitor"]>;
     // Android's WebView: the API is there, the voices are not
     Object.defineProperty(window, "speechSynthesis", {
       configurable: true,
