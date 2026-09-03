@@ -10,6 +10,13 @@ import type {
   Popup,
 } from "maplibre-gl";
 
+import {
+  type BasemapTheme,
+  CARTO_ATTRIBUTION,
+  CARTO_MAXZOOM,
+  CARTO_TILEJSON,
+  createBasemap,
+} from "./basemap.js";
 import type { NativeFix } from "./native.js";
 import {
   isNativeApp,
@@ -210,22 +217,30 @@ const map: MLMap = new maplibregl.Map({
   style: {
     version: 8,
     sources: {
-      osm: {
-        type: "raster",
-        // Carto, not tile.openstreetmap.org. OSM's tile servers are donated
-        // infrastructure and their usage policy rules out building a public
-        // product on them — they block by referrer, and when that happens the
-        // map breaks for every user at once. Carto renders the same OSM data
-        // and is already the source for this app's other basemap styles.
-        tiles: ["https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"],
-        tileSize: 256,
-        attribution: "© OpenStreetMap contributors © CARTO",
+      // Carto, not tile.openstreetmap.org. OSM's tile servers are donated
+      // infrastructure and their usage policy rules out building a public
+      // product on them — they block by referrer, and when that happens the
+      // map breaks for every user at once. Carto renders the same OSM data.
+      //
+      // Vector rather than raster, because Carto now stamps "API KEY REQUIRED"
+      // across their raster tiles — see basemap.ts. This one source feeds all
+      // four basemap modes; the layers that paint it are injected below, once
+      // a GL style has been fetched. The id has to be "carto": it is what
+      // those styles' own layers name as their source.
+      carto: {
+        type: "vector",
+        url: CARTO_TILEJSON,
+        attribution: CARTO_ATTRIBUTION,
       },
     },
     // vendored SDF glyph ranges (Noto Sans, Latin + Latin-1): the label layer
-    // below needs them, and hosting them ourselves keeps labels working offline
+    // below needs them, and hosting them ourselves keeps labels working
+    // offline. Carto's basemap labels are re-pointed at this same stack rather
+    // than at their glyph server — see basemap.ts.
     glyphs: "fonts/glyphs/{fontstack}/{range}.pbf",
-    layers: [{ id: "osm", type: "raster", source: "osm" }],
+    // Ground to look at while the basemap styles are in flight. Stays at the
+    // bottom of the stack; the fetched layers land on top of it.
+    layers: [{ id: "ground", type: "background", paint: { "background-color": "#e9e6e1" } }],
   },
   center: [-71.105, 42.383],
   zoom: 13,
@@ -246,6 +261,9 @@ map.addControl(new maplibregl.ScaleControl({}), "bottom-left");
 // ---------------------------------------------------------------------------
 
 let router: Router | null = null;
+/** Carto's basemap layers, injected under everything this app draws. A theme's
+ * style is fetched the first time that theme is shown — see applyBasemap. */
+const basemap = createBasemap(map, () => map.getStyle().layers.find((l) => l.id !== "ground")?.id);
 let start: Marker | null = null;
 let end: Marker | null = null;
 // Google-Maps-style flow: origin defaults to the current location; the next
@@ -1990,41 +2008,47 @@ function renderSketchy(): void {
 // ---------------------------------------------------------------------------
 
 
-map.on("load", () => {
-  // dark basemap (CARTO dark matter), toggled with the UI theme
-  map.addSource("carto-dark", {
-    type: "raster",
-    tiles: ["https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"],
-    tileSize: 256,
-    attribution: "© OpenStreetMap contributors © CARTO",
-  });
-  map.addLayer({
-    id: "osm-dark",
-    type: "raster",
-    source: "carto-dark",
-    layout: { visibility: "none" },
-  });
-  // Label-free basemaps, used while navigating. Raster tiles rotate as
-  // pictures, so with the map turned to the heading the baked-in labels ride
-  // upside-down and slide off their own streets — riders read them as noise.
-  // The names come back as a real symbol layer (see "street-labels"), which
-  // MapLibre keeps upright at any bearing.
-  for (const [id, src, url] of [
-    ["osm-plain", "carto-plain", "https://basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png"],
-    [
-      "osm-dark-plain",
-      "carto-dark-plain",
-      "https://basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png",
-    ],
-  ] as const) {
-    map.addSource(src, {
-      type: "raster",
-      tiles: [url],
-      tileSize: 256,
-      attribution: "© OpenStreetMap contributors © CARTO",
-    });
-    map.addLayer({ id, type: "raster", source: src, layout: { visibility: "none" } });
+/**
+ * Run `fn` once the browser is idle, or after `timeout` regardless.
+ *
+ * requestIdleCallback is missing on iOS Safari, which is exactly where this app
+ * runs as an installed PWA, so the fallback is not academic: without it the
+ * basemap would simply never appear on an iPhone.
+ */
+function whenIdle(fn: () => void, timeout = 3000): void {
+  if (typeof window.requestIdleCallback === "function") {
+    window.requestIdleCallback(fn, { timeout });
+  } else {
+    window.setTimeout(fn, 1200);
   }
+}
+
+map.on("load", () => {
+  // The basemap: Carto's positron and dark-matter, as vector layers, injected
+  // once per theme and thereafter toggled by visibility (see basemap.ts and
+  // applyBasemap). This replaces four raster layers — light_all, dark_all and
+  // the two _nolabels — which Carto now serves with "API KEY REQUIRED" stamped
+  // across the image.
+  //
+  // Label-free is no longer a separate tile set but the same layers with the
+  // label ones hidden, which is what ride mode wants: raster tiles rotate as
+  // pictures, so with the map turned to the heading the baked-in labels ride
+  // upside-down and slide off their own streets. The names come back as a real
+  // symbol layer (see "street-labels"), which MapLibre keeps upright at any
+  // bearing.
+  //
+  // Only the theme in use is fetched; applyBasemap asks for the other the
+  // first time someone switches. The insert point is resolved after that fetch,
+  // by which time everything added below is on the map — so the basemap lands
+  // under it rather than over the route.
+  //
+  // Deferred to the browser's first idle moment rather than run inline. The
+  // basemap is decoration and the safety network is the product, so the ninety
+  // vector layers wait their turn behind the app's own tiles. It is worth about
+  // two tenths of a second on time-to-usable here — small, but free, and the
+  // right way round. requestIdleCallback's own timeout is what guarantees it
+  // still happens on a busy phone.
+  whenIdle(() => applyBasemap());
   // MassGIS 2023 15-cm orthoimagery (free tile service)
   map.addSource("massgis-aerial", {
     type: "raster",
@@ -5018,22 +5042,30 @@ function tileXY(lon: number, lat: number, z: number): [number, number] {
 }
 
 function routeTileUrls(track: Track): string[] {
-  const dark = document.body.classList.contains("dark");
-  // the label-free tiles, because those are the ones a ride displays; caching
-  // the labelled set left the map blank exactly when it was needed offline
-  const template = dark
-    ? "https://basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png"
-    : "https://basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png";
+  // One vector tile set serves every basemap mode, so unlike the old raster
+  // pair there is no light/dark choice to make here — and nothing to get wrong
+  // when a rider flips theme halfway through an offline ride.
+  //
+  // Carto serves these from tiles-a…d and MapLibre picks a subdomain per tile,
+  // so these are written against tiles-a and the service worker canonicalises
+  // every sibling host onto it. Caching whichever host we happened to name
+  // would leave three quarters of a ride uncached.
+  //
+  // Vector tiles stop at z14 (CARTO_MAXZOOM) and MapLibre overzooms them for
+  // closer views, so z13-14 covers the z13-16 a ride actually displays — far
+  // fewer requests than the four raster zooms this used to pull.
+  const template =
+    "https://tiles-a.basemaps.cartocdn.com/vectortiles/carto.streets/v1/{z}/{x}/{y}.mvt";
   const urls = new Set<string>();
-  for (const z of [13, 14, 15, 16]) {
+  for (const z of [13, CARTO_MAXZOOM]) {
     // sample the track densely enough that no tile is skipped at this zoom
-    const stepM = z >= 16 ? 150 : 400;
+    const stepM = z >= CARTO_MAXZOOM ? 250 : 400;
     let nextAt = 0;
     track.coords.forEach((c, i) => {
       if ((track.cumM[i] ?? 0) < nextAt && i !== track.coords.length - 1) return;
       nextAt = (track.cumM[i] ?? 0) + stepM;
       const [x, y] = tileXY(c[0], c[1], z);
-      const spread = z >= 15 ? 1 : 0; // 3x3 corridor at high zooms
+      const spread = z >= CARTO_MAXZOOM ? 1 : 0; // 3x3 corridor at the deepest zoom
       for (let dx = -spread; dx <= spread; dx++) {
         for (let dy = -spread; dy <= spread; dy++) {
           urls.add(
@@ -5067,8 +5099,12 @@ el<HTMLButtonElement>("offline-btn").addEventListener("click", () => {
           if (url === undefined) return;
           try {
             if ((await cache.match(url)) === undefined) {
-              const resp = await fetch(url, { mode: "no-cors" });
-              await cache.put(url, resp);
+              // A real CORS fetch, not mode:"no-cors". MapLibre has to read
+              // these tiles as bytes, and an opaque response stores a body it
+              // can never parse — the ride would report itself cached and still
+              // come up blank. Carto answers with access-control-allow-origin:*.
+              const resp = await fetch(url);
+              if (resp.ok) await cache.put(url, resp);
             }
           } catch {
             // offline mid-download or a missing tile: skip
@@ -5110,10 +5146,25 @@ function applyBasemap(): void {
       }
     };
     vis("aerial", aerial);
-    vis("osm-dark", !aerial && dark && !plain);
-    vis("osm", !aerial && !dark && !plain);
-    vis("osm-dark-plain", !aerial && dark && plain);
-    vis("osm-plain", !aerial && !dark && plain);
+    // One theme at a time, its label layers dropped while riding, and the whole
+    // basemap off under the aerial view. show() is instant for a theme already
+    // installed; ensure() covers the first use of one, then shows it.
+    const wanted = {
+      theme: (dark ? "dark" : "light") as BasemapTheme,
+      labels: !plain,
+      on: !aerial,
+    };
+    basemap.show(wanted);
+    void basemap
+      .ensure(wanted.theme)
+      .then(() => basemap.show(wanted))
+      .catch((err: unknown) => {
+        // No basemap is a degraded map, not a broken app: the route, the
+        // network and the aerial view all still draw, over the ground colour.
+        // But say so — "the basemap is quietly missing" is a failure this app
+        // has shipped before, and it looks identical to a slow network.
+        console.warn("basemap failed to load", err);
+      });
     // not gated on the network toggle: with the basemap's labels gone, hiding
     // the network would leave a map with no names on it at all
     vis("street-labels", plain);
@@ -5148,8 +5199,15 @@ function applyBasemap(): void {
   };
   // map.loaded() is false whenever tiles are streaming, and "load" fires only
   // once per map — gate on layer existence instead, or toggles made while
-  // tiles load would be silently dropped
-  if (map.getLayer("osm-dark") !== undefined) setVis();
+  // tiles load would be silently dropped.
+  //
+  // "aerial" is the first layer the load handler adds, so its presence means
+  // the others are there too. It used to be "osm-dark", one of the raster
+  // basemaps; when those gave way to the vector basemap the id stopped
+  // existing, this test went permanently false, and every call queued itself
+  // behind a "load" event that had already fired — leaving the basemap added
+  // but invisible, with nothing logged.
+  if (map.getLayer("aerial") !== undefined) setVis();
   else map.once("load", setVis);
 }
 

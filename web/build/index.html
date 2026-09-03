@@ -12,7 +12,7 @@
      opens a marker under this policy, and refuses an injected <style>.
      data:/blob: in img-src are MapLibre's own (canvas and marker images);
      removing them breaks the map, which the suite checks. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob: https://basemaps.cartocdn.com; connect-src 'self' https://basemaps.cartocdn.com; worker-src 'self' blob:; frame-src 'none'; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob: https://basemaps.cartocdn.com; connect-src 'self' https://basemaps.cartocdn.com https://*.basemaps.cartocdn.com; worker-src 'self' blob:; frame-src 'none'; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Where to build — safe bike lanes</title>
 <meta name="description" content="Which new bike infrastructure would open up the most for families riding with children: candidate projects ranked on the kid-safe streets they would connect in, reach to schools and parks, crash history and residents' access.">

@@ -595,18 +595,11 @@ async function start() {
     }
     const map = new window.maplibregl.Map({
         container: "map",
-        style: {
-            version: 8,
-            sources: {
-                base: {
-                    type: "raster",
-                    tiles: ["https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"],
-                    tileSize: 256,
-                    attribution: "© OpenStreetMap contributors © CARTO",
-                },
-            },
-            layers: [{ id: "base", type: "raster", source: "base" }],
-        },
+        // Carto's vector positron rather than their raster light_all, which now
+        // comes back with "API KEY REQUIRED" stamped across the image (see
+        // basemap.ts). This page's own layers are added on load and still land
+        // above it.
+        style: "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
         center: [-71.1, 42.38],
         zoom: 11,
     });

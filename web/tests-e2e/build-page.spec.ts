@@ -518,9 +518,19 @@ test("the page loads no third-party code and reports no CSP refusals", async ({ 
   await page.locator(".row").first().click();
   await page.waitForTimeout(2500);
 
-  // Only this origin and the basemap's tiles. Any other host would mean a
+  // Only this origin and Carto's basemap. Any other host would mean a
   // planner's session is being seen by someone we didn't name.
-  expect([...hosts].sort()).toEqual(["127.0.0.1:8321", "basemaps.cartocdn.com"]);
+  //
+  // Matched against a set rather than a fixed list: the vector basemap fetches
+  // its style from basemaps.cartocdn.com and its TileJSON, glyphs and tiles
+  // from tiles(-a…d).basemaps.cartocdn.com, and MapLibre picks the sibling per
+  // tile — so which of them show up depends on where the viewport lands.
+  const allowed = (h: string): boolean =>
+    h === "127.0.0.1:8321" || /^(tiles(-[a-d])?\.)?basemaps\.cartocdn\.com$/.test(h);
+  expect([...hosts].filter((h) => !allowed(h)).sort()).toEqual([]);
+  // ...and the basemap did load, rather than the page quietly requesting no
+  // tiles at all and passing the check above by doing nothing.
+  expect([...hosts].some((h) => h.endsWith("basemaps.cartocdn.com"))).toBe(true);
 
   // No script from anywhere but here.
   const srcs = await page.locator("script[src]").evaluateAll((ss) =>

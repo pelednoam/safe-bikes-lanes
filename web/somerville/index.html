@@ -9,7 +9,7 @@
      compromise. Pages can't set headers, so it goes in a meta tag — which is
      also why there's no frame-ancestors here: it is ignored unless delivered
      as a header, and leaving it in only logs a warning on every load. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://basemaps.cartocdn.com https://tiles.arcgis.com https://*.fbcdn.net; connect-src 'self' https://basemaps.cartocdn.com https://tiles.arcgis.com https://graph.mapillary.com; worker-src 'self' blob:; frame-src 'none'; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://basemaps.cartocdn.com https://tiles.arcgis.com https://*.fbcdn.net; connect-src 'self' https://basemaps.cartocdn.com https://*.basemaps.cartocdn.com https://tiles.arcgis.com https://graph.mapillary.com; worker-src 'self' blob:; frame-src 'none'; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="description" content="Where new bike infrastructure would do the most good in Somerville: the streets a child can actually use, the barriers that cut them apart, and the projects that would join them up.">
 <link rel="stylesheet" href="../maplibre-gl.css">

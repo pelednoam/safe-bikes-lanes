@@ -542,20 +542,15 @@ async function start() {
     summarise(city);
     const map = new window.maplibregl.Map({
         container: "map",
-        style: {
-            version: 8,
-            sources: {
-                base: {
-                    type: "raster",
-                    // label-free: the city's own streets are the subject, and the
-                    // basemap's labels compete with them
-                    tiles: ["https://basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png"],
-                    tileSize: 256,
-                    attribution: "© OpenStreetMap contributors © CARTO",
-                },
-            },
-            layers: [{ id: "base", type: "raster", source: "base" }],
-        },
+        // Label-free: the city's own streets are the subject, and the basemap's
+        // labels compete with them.
+        //
+        // Carto's vector positron rather than their raster light_nolabels, which
+        // now comes back with "API KEY REQUIRED" stamped across the image (see
+        // basemap.ts). The nolabels style has no symbol layers at all, so this is
+        // more thoroughly label-free than the raster tiles ever were. Everything
+        // this page draws is added on load and so still lands above it.
+        style: "https://basemaps.cartocdn.com/gl/positron-nolabels-gl-style/style.json",
         bounds: [
             [city.bbox[0], city.bbox[1]],
             [city.bbox[2], city.bbox[3]],

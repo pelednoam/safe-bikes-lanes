@@ -25,6 +25,7 @@ const ASSETS = [
   // further out. A test now reads index.html rather than trusting this list.
   "maplibre-gl.js",
   "maplibre-gl.css",
+  "basemap.js",
   "data.js",
   "hazards.js",
   "native.js",
@@ -75,8 +76,35 @@ self.addEventListener("activate", (event) => {
 
 const TILE_CACHE = "bike-tiles-v1";
 // tile.openstreetmap.org stays listed only so basemap tiles cached by an older
-// build still serve offline; nothing requests it any more.
-const TILE_HOSTS = ["tile.openstreetmap.org", "basemaps.cartocdn.com", "tiles.arcgis.com"];
+// build still serve offline; nothing requests it any more. basemaps.cartocdn.com
+// is now the vector *styles* rather than raster tiles — Carto stamps "API KEY
+// REQUIRED" across those — while tiles(-a…d).basemaps.cartocdn.com serve the
+// TileJSON and the .mvt tiles themselves.
+const TILE_HOSTS = [
+  "tile.openstreetmap.org",
+  "basemaps.cartocdn.com",
+  "tiles.basemaps.cartocdn.com",
+  "tiles-a.basemaps.cartocdn.com",
+  "tiles-b.basemaps.cartocdn.com",
+  "tiles-c.basemaps.cartocdn.com",
+  "tiles-d.basemaps.cartocdn.com",
+  "tiles.arcgis.com",
+];
+
+/**
+ * One cache key per tile, whichever of Carto's four hosts served it.
+ *
+ * MapLibre spreads vector tiles across tiles-a…d by tile coordinate, so the
+ * host for a given tile is not ours to predict. Keying on the URL as requested
+ * would store up to four copies of the same tile and, worse, let a route
+ * pre-cached against one host miss on all the others — an offline ride with
+ * most of its map absent while the download had reported success.
+ */
+function tileKey(requestUrl) {
+  const url = new URL(requestUrl);
+  url.hostname = url.hostname.replace(/^tiles-[a-d]\./, "tiles-a.");
+  return url.toString();
+}
 
 /** The app shell must never be served stale: bypass the HTTP cache so the
  * SW's network fetch can't return a CDN-cached old app.js/index.html. */
@@ -113,13 +141,19 @@ self.addEventListener("fetch", (event) => {
   // basemap tiles: cache-first (pre-cached along a route by the app, or
   // opportunistically as you browse), so the map works offline
   if (TILE_HOSTS.includes(url.hostname)) {
+    const key = tileKey(event.request.url);
     event.respondWith(
       caches.open(TILE_CACHE).then((cache) =>
-        cache.match(event.request).then(
+        cache.match(key).then(
           (cached) =>
             cached ??
             fetch(event.request).then((resp) => {
-              void cache.put(event.request, resp.clone());
+              // Don't cache a refusal as if it were a tile: a 403 or a 500
+              // stored here is served from disk for as long as the cache lives,
+              // so one bad minute becomes a permanently broken patch of map.
+              // Opaque responses (status 0) are how no-cors image tiles come
+              // back and are still worth keeping.
+              if (resp.ok || resp.type === "opaque") void cache.put(key, resp.clone());
               return resp;
             }),
         ),
