@@ -478,14 +478,22 @@ test("street names stay upright: the basemap's own labels are off while riding",
   await ride(page, path, { speedKmh: 12, timeScale: 30, untilM: 200 });
   const vis = await page.evaluate(() => {
     const m = window._map;
-    const v = (id: string): string =>
-      (m?.getLayoutProperty(id, "visibility") as string | undefined) ?? "visible";
-    return { osm: v("osm"), plain: v("osm-plain"), labels: v("street-labels") };
+    const shown = (id: string): boolean =>
+      ((m?.getLayoutProperty(id, "visibility") as string | undefined) ?? "visible") === "visible";
+    const basemap = (m?.getStyle().layers ?? []).filter((l) => l.id.startsWith("bm-"));
+    return {
+      body: basemap.filter((l) => l.type !== "symbol").filter((l) => shown(l.id)).length,
+      labels: basemap.filter((l) => l.type === "symbol").filter((l) => shown(l.id)).length,
+      ours: shown("street-labels"),
+    };
   });
-  // raster tiles rotate as pictures, so their labels rode upside-down
-  expect(vis.osm).toBe("none");
-  expect(vis.plain).toBe("visible");
-  expect(vis.labels).toBe("visible");
+  // The basemap used to be raster, and raster tiles rotate as pictures, so
+  // their labels rode upside-down; ride mode swapped in a label-free tile set.
+  // It is vector now, so "label-free" is the same layers with the symbol ones
+  // hidden — the ground and the streets must still be drawn.
+  expect(vis.body).toBeGreaterThan(0);
+  expect(vis.labels).toBe(0);
+  expect(vis.ours).toBe(true);
   // and ours are really drawn — the glyphs resolve and text is placed. Another
   // resource wait: a glyph fetch plus symbol placement, on a machine running
   // four of these at once, where a 16 s test stretches past a minute.
@@ -506,11 +514,19 @@ test("street names stay upright: the basemap's own labels are off while riding",
   await page.locator("#nav-ask-yes").click();
   await expect
     .poll(() =>
-      page.evaluate(
-        () => (window._map?.getLayoutProperty("osm", "visibility") as string) ?? "visible",
-      ),
+      page.evaluate(() => {
+        const m = window._map;
+        const labels = (m?.getStyle().layers ?? []).filter(
+          (l) => l.id.startsWith("bm-") && l.type === "symbol",
+        );
+        return labels.filter(
+          (l) =>
+            ((m?.getLayoutProperty(l.id, "visibility") as string | undefined) ?? "visible") ===
+            "visible",
+        ).length;
+      }),
     )
-    .toBe("visible");
+    .toBeGreaterThan(0);
 });
 
 test("the street name reads as part of the instruction, not a caption", async ({ page }) => {

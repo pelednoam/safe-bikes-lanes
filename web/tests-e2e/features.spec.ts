@@ -26,6 +26,30 @@ function vis(page: Page, layer: string): Promise<string> {
   );
 }
 
+/** Which basemap themes are actually showing, as "light"/"dark".
+ *
+ * The basemap is Carto's vector styles now — one layer set per theme
+ * (bm-light-*, bm-dark-*) toggled by visibility — so there is no single "osm"
+ * or "osm-dark" layer left to ask about. Asking for one by name was worse than
+ * useless: vis() reports a layer that does not exist as "visible", so the
+ * assertion here went on passing no matter what the map was doing.
+ */
+function shownThemes(page: Page): Promise<string[]> {
+  return page.evaluate(() => {
+    const m = window._map;
+    if (!m) return [];
+    const on = new Set<string>();
+    for (const layer of m.getStyle().layers) {
+      const theme = /^bm-(light|dark)-/.exec(layer.id)?.[1];
+      const visible =
+        ((m.getLayoutProperty(layer.id, "visibility") as string | undefined) ?? "visible") ===
+        "visible";
+      if (theme !== undefined && visible) on.add(theme);
+    }
+    return [...on];
+  });
+}
+
 async function openSection(page: Page, label: string): Promise<void> {
   const sum = page.locator("summary", { hasText: label }).first();
   const isOpen = await sum.evaluate((el) => (el.parentElement as HTMLDetailsElement).open);
@@ -89,9 +113,14 @@ test("dark mode, aerial view, and 3D toggles drive the map", async ({ page }) =>
   await openSection(page, "Map layers");
   await page.locator("#dark-mode").check();
   await expect(page.locator("body")).toHaveClass(/dark/);
-  expect(await vis(page, "osm-dark")).toBe("visible");
+  // dark-matter, and only dark-matter: two themes shown at once would stack
+  // two basemaps. Polled, because a theme's style is fetched the first time it
+  // is asked for.
+  await expect.poll(() => shownThemes(page), { timeout: budget(30_000) }).toEqual(["dark"]);
   await page.locator("#show-aerial").check();
   expect(await vis(page, "aerial")).toBe("visible");
+  // the aerial view replaces the basemap rather than covering it
+  await expect.poll(() => shownThemes(page), { timeout: budget(30_000) }).toEqual([]);
   expect(await vis(page, "network-casing")).toBe("visible"); // contrast halo
   await page.locator("#show-heat").check();
   await page.locator("#show-3d").check();
