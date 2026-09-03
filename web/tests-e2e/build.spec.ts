@@ -171,7 +171,9 @@ test("clicking a project inspects it and does not re-route", async ({ page }) =>
     if (!hit) return null;
     const coords =
       hit.geometry.type === "MultiLineString"
-        ? hit.geometry.coordinates[0]
+        ? // a MultiLineString with no lines in it is not a click target; the
+          // caller already treats "no midpoint" as nothing to click
+          (hit.geometry.coordinates[0] ?? [])
         : hit.geometry.type === "LineString"
           ? hit.geometry.coordinates
           : [];
