@@ -10,6 +10,13 @@
 // evidence would be the most misleading thing on the page.
 import type { Map as MLMap, Marker } from "maplibre-gl";
 
+import {
+  CARTO_ATTRIBUTION,
+  CARTO_GLYPHS,
+  CARTO_MAXZOOM,
+  CARTO_TILES,
+  createBasemap,
+} from "./basemap.js";
 import { fmtDist } from "./units.js";
 
 declare global {
@@ -690,10 +697,27 @@ async function start(): Promise<void> {
   const map = new window.maplibregl.Map({
     container: "map",
     // Carto's vector positron rather than their raster light_all, which now
-    // comes back with "API KEY REQUIRED" stamped across the image (see
-    // basemap.ts). This page's own layers are added on load and still land
-    // above it.
-    style: "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
+    // comes back with "API KEY REQUIRED" stamped across the image.
+    // A local style, so this page's own layers exist the moment the map loads.
+    // Pointing `style` straight at Carto's URL made map.on("load") wait on a
+    // ~100 KB fetch, and everything below runs in that handler — so on a slow
+    // network the page sat empty, and anything that touched a layer before the
+    // fetch landed threw. The basemap is fetched separately and slotted in
+    // underneath (see basemap.ts).
+    style: {
+      version: 8,
+      sources: {
+      carto: {
+        type: "vector",
+        tiles: CARTO_TILES,
+        minzoom: 0,
+        maxzoom: CARTO_MAXZOOM,
+        attribution: CARTO_ATTRIBUTION,
+      },
+      },
+      glyphs: CARTO_GLYPHS,
+      layers: [{ id: "ground", type: "background", paint: { "background-color": "#e9e6e1" } }],
+    },
     center: [-71.1, 42.38],
     zoom: 11,
   });
@@ -702,6 +726,11 @@ async function start(): Promise<void> {
 
   map.on("load", () => {
     map.addSource("projects", { type: "geojson", data: fc });
+    const basemap = createBasemap(map, () => map.getStyle().layers.find((l) => l.id !== "ground")?.id);
+    void basemap
+      .ensure("light")
+      .then(() => basemap.show({ theme: "light", labels: true, on: true }))
+      .catch((err: unknown) => console.warn("basemap failed to load", err));
     map.addLayer({
       id: "project-hi",
       type: "line",

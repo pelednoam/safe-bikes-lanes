@@ -280,8 +280,13 @@ test("the rider's own zoom is kept (no snapping back), recenter restores follow"
     Math.abs(zoomed - CRUISE),
     "the zoom gesture didn't move the camera, so there is nothing to come back from",
   ).toBeGreaterThan(1);
+  // budget(), like every other wait in this file — this poll was the one left
+  // on a raw number. It matters more than most: the follow camera closes 6% of
+  // the remaining zoom gap per animation frame (navAnimate), so how long this
+  // takes is a frame count, not a duration. Half a second at 60 fps, half a
+  // minute on a runner rendering the basemap through software GL at ~1 fps.
   await expect
-    .poll(() => page.evaluate(() => window._map?.getZoom() ?? 0), { timeout: 25_000 })
+    .poll(() => page.evaluate(() => window._map?.getZoom() ?? 0), { timeout: budget(25_000) })
     .toBeCloseTo(CRUISE, 0);
 });
 

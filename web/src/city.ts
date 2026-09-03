@@ -9,6 +9,14 @@
 // Deliberately not part of the app bundle: no router, no tiles, no navigation.
 // A page a councillor opens should load a map and a paragraph, not a trip
 // planner.
+import {
+  CARTO_ATTRIBUTION,
+  CARTO_GLYPHS,
+  CARTO_MAXZOOM,
+  CARTO_TILES,
+  createBasemap,
+  NOLABEL_STYLE_URL,
+} from "./basemap.js";
 import { fillSegmentPhoto, segmentHtml } from "./segment.js";
 import type { SegmentProps } from "./segment.js";
 import type * as maplibregl from "maplibre-gl";
@@ -621,14 +629,30 @@ async function start(): Promise<void> {
   const map = new window.maplibregl.Map({
     container: "map",
     // Label-free: the city's own streets are the subject, and the basemap's
-    // labels compete with them.
-    //
-    // Carto's vector positron rather than their raster light_nolabels, which
-    // now comes back with "API KEY REQUIRED" stamped across the image (see
-    // basemap.ts). The nolabels style has no symbol layers at all, so this is
-    // more thoroughly label-free than the raster tiles ever were. Everything
-    // this page draws is added on load and so still lands above it.
-    style: "https://basemaps.cartocdn.com/gl/positron-nolabels-gl-style/style.json",
+    // labels compete with them. Carto's vector positron-nolabels rather than
+    // their raster light_nolabels, which now comes back with "API KEY REQUIRED"
+    // stamped across the image; the nolabels style has no symbol layers at all,
+    // so it is more thoroughly label-free than the raster tiles ever were.
+    // A local style, so this page's own layers exist the moment the map loads.
+    // Pointing `style` straight at Carto's URL made map.on("load") wait on a
+    // ~100 KB fetch, and everything below runs in that handler — so on a slow
+    // network the page sat empty, and anything that touched a layer before the
+    // fetch landed threw. The basemap is fetched separately and slotted in
+    // underneath (see basemap.ts).
+    style: {
+      version: 8,
+      sources: {
+      carto: {
+        type: "vector",
+        tiles: CARTO_TILES,
+        minzoom: 0,
+        maxzoom: CARTO_MAXZOOM,
+        attribution: CARTO_ATTRIBUTION,
+      },
+      },
+      glyphs: CARTO_GLYPHS,
+      layers: [{ id: "ground", type: "background", paint: { "background-color": "#e9e6e1" } }],
+    },
     bounds: [
       [city.bbox[0], city.bbox[1]],
       [city.bbox[2], city.bbox[3]],
@@ -643,6 +667,15 @@ async function start(): Promise<void> {
 
   map.on("load", () => {
     addLayers(map, city);
+    // Underneath everything this page draws, and after it: the basemap is
+    // context, the city's own network is the subject.
+    const basemap = createBasemap(map, () => map.getStyle().layers.find((l) => l.id !== "ground")?.id, {
+      styles: NOLABEL_STYLE_URL,
+    });
+    void basemap
+      .ensure("light")
+      .then(() => basemap.show({ theme: "light", labels: false, on: true }))
+      .catch((err: unknown) => console.warn("basemap failed to load", err));
     wireLayerToggles(map);
     renderProjects(city, map);
 

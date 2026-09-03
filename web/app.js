@@ -1,4 +1,4 @@
-import { CARTO_ATTRIBUTION, CARTO_MAXZOOM, CARTO_TILEJSON, createBasemap, } from "./basemap.js";
+import { CARTO_ATTRIBUTION, CARTO_MAXZOOM, CARTO_TILES, createBasemap, VENDORED_FONT_STACK, } from "./basemap.js";
 import { isNativeApp, isNewerAppVersion, lastNativeSpeechError, nativeSpeak, startDownload, startBackgroundWatcher, stopBackgroundWatcher, webVoiceCount, } from "./native.js";
 import { GEOCODE_DEBOUNCE_MS, geocodeDelayMs, matchScore, metresBetween, rank as rankSearch, describe as describeRow, worthGeocoding, } from "./search.js";
 import { CLASS_LABELS, cautionsHtml, clearPhotoCache, esc, FACILITY_CLASSES, nearestMapillary, fillSegmentPhoto as fillPhotoSlot, GRADE_COLORS, segmentHtml, } from "./segment.js";
@@ -97,7 +97,9 @@ const map = new maplibregl.Map({
             // those styles' own layers name as their source.
             carto: {
                 type: "vector",
-                url: CARTO_TILEJSON,
+                tiles: CARTO_TILES,
+                minzoom: 0,
+                maxzoom: CARTO_MAXZOOM,
                 attribution: CARTO_ATTRIBUTION,
             },
         },
@@ -126,7 +128,11 @@ map.addControl(new maplibregl.ScaleControl({}), "bottom-left");
 let router = null;
 /** Carto's basemap layers, injected under everything this app draws. A theme's
  * style is fetched the first time that theme is shown — see applyBasemap. */
-const basemap = createBasemap(map, () => map.getStyle().layers.find((l) => l.id !== "ground")?.id);
+const basemap = createBasemap(map, () => map.getStyle().layers.find((l) => l.id !== "ground")?.id, {
+    // this app serves its own glyphs, so Carto's label layers have to be pointed
+    // at the one stack it vendors
+    textFont: VENDORED_FONT_STACK,
+});
 let start = null;
 let end = null;
 // Google-Maps-style flow: origin defaults to the current location; the next

@@ -24,18 +24,47 @@ import type { LayerSpecification, Map as MLMap, StyleSpecification } from "mapli
 
 export type BasemapTheme = "light" | "dark";
 
-/** The vector tileset behind every Carto GL style (OpenMapTiles schema). */
-export const CARTO_TILEJSON =
-  "https://tiles.basemaps.cartocdn.com/vector/carto.streets/v1/tiles.json";
+/**
+ * The vector tiles behind every Carto GL style (OpenMapTiles schema), named
+ * directly rather than through their TileJSON.
+ *
+ * Declaring the source with `url` costs a round trip, and worse, makes the
+ * whole style — and so map.on("load"), and so every layer a page adds in that
+ * handler — wait on Carto answering. A page's own map is not Carto's to hold
+ * up: named inline, those layers exist immediately and still exist if Carto
+ * never answers at all.
+ *
+ * Carto serves these from four hosts and MapLibre picks one per tile; the
+ * service worker folds them back into a single cache key (see tileKey in
+ * sw.js), so an offline route cached against one host is found whichever host
+ * is asked for next.
+ */
+export const CARTO_TILES = [
+  "https://tiles-a.basemaps.cartocdn.com/vectortiles/carto.streets/v1/{z}/{x}/{y}.mvt",
+  "https://tiles-b.basemaps.cartocdn.com/vectortiles/carto.streets/v1/{z}/{x}/{y}.mvt",
+  "https://tiles-c.basemaps.cartocdn.com/vectortiles/carto.streets/v1/{z}/{x}/{y}.mvt",
+  "https://tiles-d.basemaps.cartocdn.com/vectortiles/carto.streets/v1/{z}/{x}/{y}.mvt",
+];
 export const CARTO_ATTRIBUTION = "© OpenStreetMap contributors © CARTO";
 
 /** Vector tiles stop here; MapLibre overzooms them for closer views. Caching
  * for offline use only needs to go this deep — see routeTileUrls. */
 export const CARTO_MAXZOOM = 14;
 
+/** Carto's own glyph server, for pages that do not vendor their glyphs. See
+ * VENDORED_FONT_STACK for why the planner cannot use it. */
+export const CARTO_GLYPHS = "https://tiles.basemaps.cartocdn.com/fonts/{fontstack}/{range}.pbf";
+
 const STYLE_URL: Record<BasemapTheme, string> = {
   light: "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
   dark: "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
+};
+
+/** The same basemaps with no symbol layers at all, for a page whose subject is
+ * its own streets and whose basemap should stay quiet under them. */
+export const NOLABEL_STYLE_URL: Record<BasemapTheme, string> = {
+  light: "https://basemaps.cartocdn.com/gl/positron-nolabels-gl-style/style.json",
+  dark: "https://basemaps.cartocdn.com/gl/dark-matter-nolabels-gl-style/style.json",
 };
 
 /**
@@ -55,7 +84,7 @@ const STYLE_URL: Record<BasemapTheme, string> = {
  * pointing them straight at it is the same typeface they intended, served
  * locally.
  */
-const VENDORED_FONT_STACK = ["Noto Sans Regular"];
+export const VENDORED_FONT_STACK = ["Noto Sans Regular"];
 
 /** Layers drawing an icon out of Carto's sprite. They are the low-zoom city
  * dots (z<8), invisible at any zoom this app opens at, and dropping them means
@@ -65,7 +94,11 @@ const SPRITE_LAYERS = /_dot_/;
 const layerId = (theme: BasemapTheme, id: string): string => `bm-${theme}-${id}`;
 
 /** Re-identify, re-font and hide one theme's layers. */
-function themeLayers(theme: BasemapTheme, style: StyleSpecification): LayerSpecification[] {
+function themeLayers(
+  theme: BasemapTheme,
+  style: StyleSpecification,
+  textFont: string[] | undefined,
+): LayerSpecification[] {
   const out: LayerSpecification[] = [];
   for (const src of style.layers) {
     if (SPRITE_LAYERS.test(src.id)) continue;
@@ -74,7 +107,9 @@ function themeLayers(theme: BasemapTheme, style: StyleSpecification): LayerSpeci
     const layer = { ...src, id: layerId(theme, src.id) } as LayerSpecification;
     const layout: Record<string, unknown> = { ...(layer.layout as object | undefined) };
     layout["visibility"] = "none";
-    if (layout["text-font"] !== undefined) layout["text-font"] = VENDORED_FONT_STACK;
+    if (textFont !== undefined && layout["text-font"] !== undefined) {
+      layout["text-font"] = textFont;
+    }
     out.push({ ...layer, layout } as LayerSpecification);
   }
   return out;
@@ -124,11 +159,24 @@ export interface Basemap {
  * loads, so at construction there is nothing yet to sit beneath. Resolving it
  * late is what keeps the basemap under the route instead of painted over it.
  */
+export interface BasemapOptions {
+  /** Style per theme. Defaults to positron / dark-matter. */
+  styles?: Record<BasemapTheme, string>;
+  /** Rewrite every label's font to this stack. Omit to keep the style's own,
+   * which is right for any page serving glyphs from Carto rather than
+   * vendoring them — see VENDORED_FONT_STACK. */
+  textFont?: string[];
+  fetchJson?: (url: string) => Promise<StyleSpecification>;
+}
+
 export function createBasemap(
   map: MLMap,
   anchor: () => string | undefined,
-  fetchJson: (url: string) => Promise<StyleSpecification> = fetchStyle,
+  options: BasemapOptions = {},
 ): Basemap {
+  const styleUrl = options.styles ?? STYLE_URL;
+  const textFont = options.textFont;
+  const fetchJson = options.fetchJson ?? fetchStyle;
   const installed = new Map<BasemapTheme, { all: string[]; labels: Set<string> }>();
   const inflight = new Map<BasemapTheme, Promise<void>>();
   /** The most recent show() request, re-applied when the label layers land. */
@@ -138,7 +186,7 @@ export function createBasemap(
     const pending = inflight.get(theme);
     if (pending) return pending;
     const job = (async (): Promise<void> => {
-      const style = await fetchJson(STYLE_URL[theme]);
+      const style = await fetchJson(styleUrl[theme]);
       const group = { all: [] as string[], labels: new Set<string>() };
       installed.set(theme, group);
       const beforeId = anchor();
@@ -154,7 +202,7 @@ export function createBasemap(
       // tile against the whole layer list whenever that list changes, so
       // splitting this in two — lines first, labels once the map settled —
       // bought nothing and paid for a second full pass over every tile.
-      for (const layer of themeLayers(theme, style)) add(layer);
+      for (const layer of themeLayers(theme, style, textFont)) add(layer);
 
       // Visibility has to match whatever was asked for while the style was
       // still on its way, or the basemap arrives stuck hidden — or, worse,

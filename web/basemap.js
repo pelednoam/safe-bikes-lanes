@@ -19,15 +19,43 @@
 // this app puts on top — the route, the network, the overlays — on each flip.
 // Label-free mode is the same layers with the symbol ones hidden.
 // ---------------------------------------------------------------------------
-/** The vector tileset behind every Carto GL style (OpenMapTiles schema). */
-export const CARTO_TILEJSON = "https://tiles.basemaps.cartocdn.com/vector/carto.streets/v1/tiles.json";
+/**
+ * The vector tiles behind every Carto GL style (OpenMapTiles schema), named
+ * directly rather than through their TileJSON.
+ *
+ * Declaring the source with `url` costs a round trip, and worse, makes the
+ * whole style — and so map.on("load"), and so every layer a page adds in that
+ * handler — wait on Carto answering. A page's own map is not Carto's to hold
+ * up: named inline, those layers exist immediately and still exist if Carto
+ * never answers at all.
+ *
+ * Carto serves these from four hosts and MapLibre picks one per tile; the
+ * service worker folds them back into a single cache key (see tileKey in
+ * sw.js), so an offline route cached against one host is found whichever host
+ * is asked for next.
+ */
+export const CARTO_TILES = [
+    "https://tiles-a.basemaps.cartocdn.com/vectortiles/carto.streets/v1/{z}/{x}/{y}.mvt",
+    "https://tiles-b.basemaps.cartocdn.com/vectortiles/carto.streets/v1/{z}/{x}/{y}.mvt",
+    "https://tiles-c.basemaps.cartocdn.com/vectortiles/carto.streets/v1/{z}/{x}/{y}.mvt",
+    "https://tiles-d.basemaps.cartocdn.com/vectortiles/carto.streets/v1/{z}/{x}/{y}.mvt",
+];
 export const CARTO_ATTRIBUTION = "© OpenStreetMap contributors © CARTO";
 /** Vector tiles stop here; MapLibre overzooms them for closer views. Caching
  * for offline use only needs to go this deep — see routeTileUrls. */
 export const CARTO_MAXZOOM = 14;
+/** Carto's own glyph server, for pages that do not vendor their glyphs. See
+ * VENDORED_FONT_STACK for why the planner cannot use it. */
+export const CARTO_GLYPHS = "https://tiles.basemaps.cartocdn.com/fonts/{fontstack}/{range}.pbf";
 const STYLE_URL = {
     light: "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
     dark: "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
+};
+/** The same basemaps with no symbol layers at all, for a page whose subject is
+ * its own streets and whose basemap should stay quiet under them. */
+export const NOLABEL_STYLE_URL = {
+    light: "https://basemaps.cartocdn.com/gl/positron-nolabels-gl-style/style.json",
+    dark: "https://basemaps.cartocdn.com/gl/dark-matter-nolabels-gl-style/style.json",
 };
 /**
  * The one glyph stack this app ships (web/fonts/glyphs, Noto Sans, Latin +
@@ -46,14 +74,14 @@ const STYLE_URL = {
  * pointing them straight at it is the same typeface they intended, served
  * locally.
  */
-const VENDORED_FONT_STACK = ["Noto Sans Regular"];
+export const VENDORED_FONT_STACK = ["Noto Sans Regular"];
 /** Layers drawing an icon out of Carto's sprite. They are the low-zoom city
  * dots (z<8), invisible at any zoom this app opens at, and dropping them means
  * the style needs no sprite — one fewer external URL to allow and to cache. */
 const SPRITE_LAYERS = /_dot_/;
 const layerId = (theme, id) => `bm-${theme}-${id}`;
 /** Re-identify, re-font and hide one theme's layers. */
-function themeLayers(theme, style) {
+function themeLayers(theme, style, textFont) {
     const out = [];
     for (const src of style.layers) {
         if (SPRITE_LAYERS.test(src.id))
@@ -63,8 +91,9 @@ function themeLayers(theme, style) {
         const layer = { ...src, id: layerId(theme, src.id) };
         const layout = { ...layer.layout };
         layout["visibility"] = "none";
-        if (layout["text-font"] !== undefined)
-            layout["text-font"] = VENDORED_FONT_STACK;
+        if (textFont !== undefined && layout["text-font"] !== undefined) {
+            layout["text-font"] = textFont;
+        }
         out.push({ ...layer, layout });
     }
     return out;
@@ -75,16 +104,10 @@ async function fetchStyle(url) {
         throw new Error(`carto style ${resp.status}`);
     return (await resp.json());
 }
-/**
- * Manage Carto's basemap layers on `map`, inserting them beneath the layer that
- * `anchor` names.
- *
- * `anchor` is a callback rather than an id because it is only answerable after
- * the style fetch: the caller adds its own layers synchronously while the map
- * loads, so at construction there is nothing yet to sit beneath. Resolving it
- * late is what keeps the basemap under the route instead of painted over it.
- */
-export function createBasemap(map, anchor, fetchJson = fetchStyle) {
+export function createBasemap(map, anchor, options = {}) {
+    const styleUrl = options.styles ?? STYLE_URL;
+    const textFont = options.textFont;
+    const fetchJson = options.fetchJson ?? fetchStyle;
     const installed = new Map();
     const inflight = new Map();
     /** The most recent show() request, re-applied when the label layers land. */
@@ -94,7 +117,7 @@ export function createBasemap(map, anchor, fetchJson = fetchStyle) {
         if (pending)
             return pending;
         const job = (async () => {
-            const style = await fetchJson(STYLE_URL[theme]);
+            const style = await fetchJson(styleUrl[theme]);
             const group = { all: [], labels: new Set() };
             installed.set(theme, group);
             const beforeId = anchor();
@@ -110,7 +133,7 @@ export function createBasemap(map, anchor, fetchJson = fetchStyle) {
             // tile against the whole layer list whenever that list changes, so
             // splitting this in two — lines first, labels once the map settled —
             // bought nothing and paid for a second full pass over every tile.
-            for (const layer of themeLayers(theme, style))
+            for (const layer of themeLayers(theme, style, textFont))
                 add(layer);
             // Visibility has to match whatever was asked for while the style was
             // still on its way, or the basemap arrives stuck hidden — or, worse,

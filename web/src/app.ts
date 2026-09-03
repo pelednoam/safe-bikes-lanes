@@ -14,8 +14,9 @@ import {
   type BasemapTheme,
   CARTO_ATTRIBUTION,
   CARTO_MAXZOOM,
-  CARTO_TILEJSON,
+  CARTO_TILES,
   createBasemap,
+  VENDORED_FONT_STACK,
 } from "./basemap.js";
 import type { NativeFix } from "./native.js";
 import {
@@ -229,7 +230,9 @@ const map: MLMap = new maplibregl.Map({
       // those styles' own layers name as their source.
       carto: {
         type: "vector",
-        url: CARTO_TILEJSON,
+        tiles: CARTO_TILES,
+        minzoom: 0,
+        maxzoom: CARTO_MAXZOOM,
         attribution: CARTO_ATTRIBUTION,
       },
     },
@@ -263,7 +266,11 @@ map.addControl(new maplibregl.ScaleControl({}), "bottom-left");
 let router: Router | null = null;
 /** Carto's basemap layers, injected under everything this app draws. A theme's
  * style is fetched the first time that theme is shown — see applyBasemap. */
-const basemap = createBasemap(map, () => map.getStyle().layers.find((l) => l.id !== "ground")?.id);
+const basemap = createBasemap(map, () => map.getStyle().layers.find((l) => l.id !== "ground")?.id, {
+  // this app serves its own glyphs, so Carto's label layers have to be pointed
+  // at the one stack it vendors
+  textFont: VENDORED_FONT_STACK,
+});
 let start: Marker | null = null;
 let end: Marker | null = null;
 // Google-Maps-style flow: origin defaults to the current location; the next

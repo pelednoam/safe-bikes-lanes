@@ -10,7 +10,7 @@
 // vendor and simply draws nothing.
 import { describe, expect, it } from "vitest";
 
-import { createBasemap } from "../src/basemap.js";
+import { createBasemap, VENDORED_FONT_STACK } from "../src/basemap.js";
 
 /** A style with the shape that matters: a background, some lines, some labels. */
 function style(): unknown {
@@ -92,7 +92,10 @@ function fakeMap(): {
 
 const load = async (): Promise<ReturnType<typeof fakeMap> & { bm: ReturnType<typeof createBasemap> }> => {
   const f = fakeMap();
-  const bm = createBasemap(f.map, () => "aerial", async () => style() as never);
+  const bm = createBasemap(f.map, () => "aerial", {
+    fetchJson: async () => style() as never,
+    textFont: VENDORED_FONT_STACK,
+  });
   await bm.ensure("light");
   return { ...f, bm };
 };
@@ -109,6 +112,19 @@ describe("Carto vector basemap", () => {
       .map((l) => l.layout?.["text-font"]);
     expect(fonts.length).toBeGreaterThan(0);
     for (const font of fonts) expect(font).toEqual(["Noto Sans Regular"]);
+  });
+
+  it("leaves the style's own fonts alone when no stack is named", async () => {
+    // The city and build pages serve glyphs from Carto rather than vendoring
+    // them, so rewriting the font would point their labels at a stack that
+    // server does not have.
+    const f = fakeMap();
+    const bm = createBasemap(f.map, () => undefined, { fetchJson: async () => style() as never });
+    await bm.ensure("light");
+    const fontOf = (id: string): unknown => f.layers.find((l) => l.id === id)?.layout?.["text-font"];
+    // each keeps the stack the style gave it, rather than all collapsing to one
+    expect(fontOf("bm-light-roadname_major")).toEqual(["Montserrat Medium", "Open Sans Bold"]);
+    expect(fontOf("bm-light-place_town")).toEqual(["Montserrat Regular", "Open Sans Regular"]);
   });
 
   it("drops the layers that would need a sprite", async () => {
@@ -155,7 +171,7 @@ describe("Carto vector basemap", () => {
 
   it("shows one theme at a time, so two basemaps never stack", async () => {
     const f = fakeMap();
-    const bm = createBasemap(f.map, () => undefined, async () => style() as never);
+    const bm = createBasemap(f.map, () => undefined, { fetchJson: async () => style() as never });
     await bm.ensure("light");
     await bm.ensure("dark");
     bm.show({ theme: "dark", labels: true, on: true });
@@ -169,9 +185,11 @@ describe("Carto vector basemap", () => {
   it("fetches a theme once, however often it is asked for", async () => {
     const f = fakeMap();
     let fetches = 0;
-    const bm = createBasemap(f.map, () => undefined, async () => {
-      fetches++;
-      return style() as never;
+    const bm = createBasemap(f.map, () => undefined, {
+      fetchJson: async () => {
+        fetches++;
+        return style() as never;
+      },
     });
     await Promise.all([bm.ensure("light"), bm.ensure("light")]);
     await bm.ensure("light");
@@ -183,10 +201,12 @@ describe("Carto vector basemap", () => {
     // the session, with nothing to retry it.
     const f = fakeMap();
     let calls = 0;
-    const bm = createBasemap(f.map, () => undefined, async () => {
-      calls++;
-      if (calls === 1) throw new Error("offline");
-      return style() as never;
+    const bm = createBasemap(f.map, () => undefined, {
+      fetchJson: async () => {
+        calls++;
+        if (calls === 1) throw new Error("offline");
+        return style() as never;
+      },
     });
     await expect(bm.ensure("light")).rejects.toThrow("offline");
     await bm.ensure("light");
@@ -197,7 +217,7 @@ describe("Carto vector basemap", () => {
     // applyBasemap runs long before the fetch lands, so a ride that starts in
     // that window has to survive the layers arriving late.
     const f = fakeMap();
-    const bm = createBasemap(f.map, () => undefined, async () => style() as never);
+    const bm = createBasemap(f.map, () => undefined, { fetchJson: async () => style() as never });
     bm.show({ theme: "light", labels: false, on: true });
     await bm.ensure("light");
     expect(f.vis("bm-light-roads")).toBe("visible");
