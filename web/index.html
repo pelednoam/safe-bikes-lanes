@@ -263,7 +263,19 @@
   /* The wait here is mostly the map downloading — about 90 tiles for an
      ordinary trip — and a motionless line of text through all of it read as a
      frozen app. Something has to be moving. */
-  #loop-row { display:flex; align-items:center; gap:6px; margin-top:7px; flex-wrap:wrap; }
+  /* A block you can see, rather than a row floating at panel level.
+     This is the one control here that is not live: every other input in this
+     panel reroutes the moment you touch it, while a round trip is composed —
+     how far, what to stop at — and then asked for, so it alone needs a button.
+     Unbounded, that button drifted: the row wraps on a narrow panel, dropping
+     it onto its own line under "Where to?", where the only green button on
+     screen reads as the panel's action rather than this row's. Inside a
+     bounded block the wrap stays contained and the button keeps its subject. */
+  #loop-row {
+    display:flex; align-items:center; gap:6px; flex-wrap:wrap;
+    margin-top:8px; padding:8px 10px;
+    background:var(--field); border:1px solid var(--line); border-radius:var(--r-md);
+  }
   #loop-row .or { color:var(--muted); font-size:12.5px; }
   /* not full width, even when it wraps onto its own line: a round trip is an
      alternative to "where to", not the headline action of the panel */
