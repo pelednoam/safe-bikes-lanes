@@ -690,8 +690,14 @@
         <option value="library">📚 library</option>
         <option value="any">any stop</option>
       </select>
+      <!-- Names its own action rather than saying "Start". This row wraps on a
+           narrow panel, which leaves the button sitting on its own line under
+           "Where to?" — and as the only primary button here (the A-to-B flow
+           routes as soon as you pick a destination, with no button at all) it
+           read as the panel's go button rather than this row's. Repeating "round
+           trip" is the point: the label has to survive being read alone. -->
       <button id="loop-btn" type="button" class="primary"
-              title="Plan a ride that comes back to where it started">↻ Start</button>
+              title="Plan a ride that comes back to where it started">↻ Plan round trip</button>
     </div>
   </div>
   <div id="search-results"></div>
