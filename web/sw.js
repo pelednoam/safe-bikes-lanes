@@ -102,7 +102,13 @@ const TILE_HOSTS = [
  */
 function tileKey(requestUrl) {
   const url = new URL(requestUrl);
-  url.hostname = url.hostname.replace(/^tiles-[a-d]\./, "tiles-a.");
+  // Anchored to Carto's own hosts, not to anything merely beginning
+  // "tiles-b.": this is only ever called for hosts in TILE_HOSTS today, but a
+  // rule that rewrites somebody else's host is a trap for whoever adds one.
+  url.hostname = url.hostname.replace(
+    /^tiles-[a-d]\.basemaps\.cartocdn\.com$/,
+    "tiles-a.basemaps.cartocdn.com",
+  );
   return url.toString();
 }
 
