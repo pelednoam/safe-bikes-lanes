@@ -1719,6 +1719,10 @@ function renderSearchResults(rows, target = "end") {
             syncOD();
             map.flyTo({ center: lngLat, zoom: 15 });
             box.innerHTML = "";
+            // Close the keyboard and give the map back: the place just chosen, and the
+            // route about to be drawn to it, are what the rider wants to see now.
+            field.blur();
+            leaveSearchMode(true);
         };
         text.style.cursor = "pointer";
         text.addEventListener("click", choose);
@@ -2709,6 +2713,8 @@ for (const evt of ["touchend", "touchmove", "touchcancel"]) {
 }
 // draggable bottom-sheet (mobile): peek / half / full snap states
 const SHEET_STATES = ["peek", "half", "full"];
+/** The layout where the panel is a bottom sheet — the same query the CSS uses. */
+const sheetLayout = window.matchMedia("(max-width: 760px), (max-height: 500px)");
 function setSheet(state) {
     const panel = el("panel");
     panel.style.maxHeight = "";
@@ -2724,7 +2730,7 @@ function currentSheet() {
     const handle = el("sheet-handle");
     // start collapsed: the map is the point, and a route expands the sheet
     // to "half" on its own (revealSheet)
-    if (window.matchMedia("(max-width: 760px), (max-height: 500px)").matches)
+    if (sheetLayout.matches)
         setSheet("peek");
     let dragging = false;
     let startY = 0;
@@ -2778,6 +2784,58 @@ function currentSheet() {
 function revealSheet() {
     if (currentSheet() === "peek")
         setSheet("half");
+}
+// ---------------------------------------------------------------------------
+// Searching on a phone
+//
+// The sheet starts collapsed at the bottom of the screen, which is exactly
+// where the keyboard opens. Measured on a 390x820 phone: tap "Where to?", type
+// "Davis", and the field sat at y=760-800 under a keyboard starting around 480,
+// while five results rendered at y=932 — below the screen, and clipped anyway
+// by the collapsed sheet's overflow. People were typing into a field they could
+// not see and getting answers they could not reach.
+//
+// It is worst in the Android app. Targeting SDK 35+ forces edge-to-edge, where
+// the keyboard overlays the WebView instead of resizing it, so nothing on the
+// page even learns the keyboard is there. Rather than depend on that — it
+// differs by Android version, WebView, and browser — searching moves the field
+// to the top of the screen, where no keyboard reaches, and puts the answers
+// directly under it.
+// ---------------------------------------------------------------------------
+/** Where the sheet was before a search took it over, to put it back. */
+let sheetBeforeSearch = null;
+function enterSearchMode(field) {
+    if (!sheetLayout.matches)
+        return;
+    if (sheetBeforeSearch === null)
+        sheetBeforeSearch = currentSheet();
+    document.body.classList.add("searching");
+    setSheet("full");
+    // Field to the top of the sheet. Measured as a difference of two rects so it
+    // holds while the sheet is still animating open: both move together.
+    const panel = el("panel");
+    const lift = () => {
+        const gap = field.getBoundingClientRect().top - panel.getBoundingClientRect().top;
+        panel.scrollTop += gap - 8;
+    };
+    lift();
+    // and again once the height transition has settled, since content that was
+    // clipped a moment ago is only now scrollable
+    window.setTimeout(lift, 250);
+}
+/** Leave search mode. `chose` means a place was picked, so the sheet should
+ * show the route that is about to appear rather than go back to how it was. */
+function leaveSearchMode(chose) {
+    if (!document.body.classList.contains("searching"))
+        return;
+    document.body.classList.remove("searching");
+    const before = sheetBeforeSearch ?? "half";
+    sheetBeforeSearch = null;
+    el("panel").scrollTop = 0;
+    // A chosen place gets the map back, with the route options under it — "half",
+    // the state a computed route asks for anyway (revealSheet). A search walked
+    // away from goes back to where it started.
+    setSheet(chose ? (before === "full" ? "full" : "half") : before);
 }
 el("from-locate").addEventListener("click", () => {
     // back to riding from wherever you are
@@ -3047,6 +3105,21 @@ function attachSearch(input, target) {
         // never leave it pointing at whatever row inherited the position
         highlight(rowsNow().some((r) => r.dataset["key"] === activeKey) ? activeKey : null);
     };
+    input.addEventListener("focus", () => enterSearchMode(input));
+    input.addEventListener("blur", () => {
+        // Walked away without choosing. Only let the sheet go if nothing is left to
+        // tap: blur arrives on touchstart and the click only on touchend, so shrinking
+        // the sheet while a list is up would slide the row out from under the finger
+        // that was reaching for it. Deferred a tick so focus hopping to the other
+        // search field counts as still searching.
+        window.setTimeout(() => {
+            const active = document.activeElement;
+            if (active === el("search") || active === el("from-field"))
+                return;
+            if (el("search-results").childElementCount === 0)
+                leaveSearchMode(false);
+        }, 0);
+    });
     input.addEventListener("input", () => {
         window.clearTimeout(timer);
         searchOwner = input;

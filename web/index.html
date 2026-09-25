@@ -561,6 +561,12 @@
     #panel.peek { max-height:168px; overflow:hidden; }
     #panel.half { max-height:52%; }
     #panel.full { max-height:88%; }
+    /* While searching (see enterSearchMode), the answers go directly under the
+       field. The results list is rendered after the whole origin/destination
+       block, so the round-trip block sat between "Where to?" and its own
+       answers — pushing them down toward the keyboard, and reading as if they
+       were round trips. It is not what anyone typing an address is after. */
+    body.searching #loop-row { display:none; }
     /* The grabber is a thin bar, but the TARGET is the full width of the
        sheet top — a 4px-tall hit area is close to undraggable with a thumb. */
     #sheet-handle {
