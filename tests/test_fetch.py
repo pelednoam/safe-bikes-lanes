@@ -128,25 +128,78 @@ def test_population_trims_to_people_and_outer_rings(monkeypatch: pytest.MonkeyPa
     assert fc["features"][1]["properties"]["pop"] == 0
 
 
-def test_arcgis_query_pages_until_short_and_raises_on_error(
+class FakeArcGIS:
+    """Just enough of an ArcGIS layer: its info, a count, and pages of at most
+    its own maxRecordCount, in OBJECTID order."""
+
+    def __init__(
+        self,
+        n: int,
+        max_records: int,
+        flag: bool = True,
+        truncate_at: int | None = None,
+        ignore_offset: bool = False,
+    ) -> None:
+        self.rows = [{"type": "Feature", "id": i, "properties": {"OBJECTID": i}} for i in range(n)]
+        self.max_records = max_records
+        self.flag = flag
+        self.truncate_at = truncate_at
+        self.ignore_offset = ignore_offset
+        self.calls: list[dict[str, str]] = []
+
+    def __call__(self, url: str, *_a: Any, **_k: Any) -> bytes:
+        import urllib.parse
+
+        parsed = urllib.parse.urlparse(url)
+        q = dict(urllib.parse.parse_qsl(parsed.query))
+        self.calls.append(q)
+        if not parsed.path.endswith("/query"):
+            info = {"objectIdField": "OBJECTID", "maxRecordCount": self.max_records}
+            return json.dumps(info).encode()
+        if q.get("returnCountOnly") == "true":
+            return json.dumps({"count": len(self.rows)}).encode()
+        assert q["orderByFields"] == "OBJECTID", "pages of an unordered query can skip rows"
+        offset = 0 if self.ignore_offset else int(q["resultOffset"])
+        size = min(int(q["resultRecordCount"]), self.max_records)
+        end = len(self.rows) if self.truncate_at is None else self.truncate_at
+        batch = self.rows[offset : min(offset + size, end)]
+        page: dict[str, Any] = {"type": "FeatureCollection", "features": batch}
+        if self.flag:
+            page["properties"] = {"exceededTransferLimit": offset + size < end}
+        return json.dumps(page).encode()
+
+
+def test_arcgis_paging_follows_the_servers_own_page_size(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    pages = [
-        {"features": [{"id": i} for i in range(1000)]},
-        {"features": [{"id": 1000}]},
-    ]
-    calls: list[str] = []
-
-    def fake_get(url: str, *_a: Any, **_k: Any) -> bytes:
-        calls.append(url)
-        return json.dumps(pages[len(calls) - 1]).encode()
-
-    monkeypatch.setattr(fetch, "_get", fake_get)
+    """A layer capped at 500 per page returned its first 500 and stopped: the
+    loop ended on any page shorter than 1,000."""
+    server = FakeArcGIS(n=1234, max_records=500)
+    monkeypatch.setattr(fetch, "_get", server)
     fc = fetch.arcgis_query("https://example.test/layer/0")
-    assert len(fc["features"]) == 1001
-    assert len(calls) == 2
-    assert "resultOffset=1000" in calls[1]
+    assert len(fc["features"]) == 1234
+    assert [f["id"] for f in fc["features"]] == list(range(1234))
 
+
+def test_arcgis_paging_without_a_transfer_limit_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    server = FakeArcGIS(n=2001, max_records=1000, flag=False)
+    monkeypatch.setattr(fetch, "_get", server)
+    assert len(fetch.arcgis_query("https://example.test/layer/0")["features"]) == 2001
+
+
+def test_a_short_arcgis_answer_is_an_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fewer features than the server's own count is a failed fetch, not a
+    smaller layer."""
+    monkeypatch.setattr(fetch, "_get", FakeArcGIS(n=1500, max_records=1000, truncate_at=1000))
+    with pytest.raises(RuntimeError, match="got 1000 features but the server counts 1500"):
+        fetch.arcgis_query("https://example.test/layer/0")
+    # a server that ignores resultOffset would otherwise loop on page one forever
+    monkeypatch.setattr(fetch, "_get", FakeArcGIS(n=1500, max_records=1000, ignore_offset=True))
+    with pytest.raises(RuntimeError, match="server counts 1500"):
+        fetch.arcgis_query("https://example.test/layer/0")
+
+
+def test_arcgis_query_raises_on_error(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         fetch, "_get", lambda *_a, **_k: json.dumps({"error": {"message": "nope"}}).encode()
     )
@@ -202,6 +255,22 @@ def test_cambridge_permits_become_dated_points(monkeypatch: pytest.MonkeyPatch) 
     assert props["start"] == "2026-08-01"
     assert props["end"] == "2026-09-01"
     assert fc["features"][0]["geometry"]["coordinates"] == [-71.1, 42.38]
+
+
+def test_cambridge_permits_are_paged_past_five_thousand(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One request with $limit=5000 ended the list at 5,000 without a word."""
+    import urllib.parse
+
+    rows = [{"longitude": "-71.1", "latitude": "42.38", "permit_type": "X"}] * 6200
+
+    def socrata(url: str, *_a: Any, **_k: Any) -> bytes:
+        q = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(url).query))
+        assert q["$order"] == ":id"
+        offset, limit = int(q.get("$offset", 0)), int(q["$limit"])
+        return json.dumps(rows[offset : offset + min(limit, 50_000)]).encode()
+
+    monkeypatch.setattr(fetch, "_get", socrata)
+    assert len(fetch.fetch_cambridge_permits()["features"]) == 6200
 
 
 def test_workzones_say_how_to_enable_them_when_unconfigured(

@@ -47,44 +47,96 @@ def _save(name: str, data: GeoJSON, source: str) -> None:
     print(f"  {name}: {meta['features']} features")
 
 
+ARCGIS_PAGE: Final[int] = 1000
+
+
+def _arcgis_json(layer_url: str, path: str, params: dict[str, str | int]) -> Any:
+    url = layer_url + path + "?" + urllib.parse.urlencode(params)
+    data = json.loads(_get(url))
+    if isinstance(data, dict) and "error" in data:
+        raise RuntimeError(f"{layer_url}: {data['error']}")
+    return data
+
+
 def arcgis_query(layer_url: str, where: str = "1=1", bbox: bool = True) -> GeoJSON:
     """Query an ArcGIS FeatureServer/MapServer layer, paging until exhausted.
 
     Returns a GeoJSON FeatureCollection (f=geojson is supported on all the
     servers we use; verified 2026-07).
+
+    Paging used to stop at the first page shorter than 1,000 — but a server's
+    page is its own maxRecordCount, so a layer capped at 500 returned 500
+    features and stopped as if that were all of them. It now asks the layer
+    for its object-id field and page size, orders by the object id (paging an
+    unordered query can skip and repeat rows), follows exceededTransferLimit,
+    and at the end checks what it got against the server's own count, so a
+    short answer is an error rather than a smaller layer.
     """
+    info = _arcgis_json(layer_url, "", {"f": "json"})
+    oid = str(info.get("objectIdField") or "")
+    if not oid:
+        oid = next(
+            (f["name"] for f in info.get("fields") or [] if f.get("type") == "esriFieldTypeOID"),
+            "OBJECTID",
+        )
+    page_size = min(ARCGIS_PAGE, int(info.get("maxRecordCount") or ARCGIS_PAGE))
+
+    base: dict[str, str | int] = {"where": where}
+    if bbox:
+        base.update(
+            {
+                "geometry": (
+                    f"{config.BBOX_WEST},{config.BBOX_SOUTH},"
+                    f"{config.BBOX_EAST},{config.BBOX_NORTH}"
+                ),
+                "geometryType": "esriGeometryEnvelope",
+                "inSR": 4326,
+                "spatialRel": "esriSpatialRelIntersects",
+            }
+        )
+    expected = int(
+        _arcgis_json(layer_url, "/query", {**base, "returnCountOnly": "true", "f": "json"})[
+            "count"
+        ]
+    )
+
     features: list[dict[str, Any]] = []
+    seen: set[Any] = set()
     offset = 0
-    while True:
-        params: dict[str, str | int] = {
-            "where": where,
-            "outFields": "*",
-            "outSR": 4326,
-            "f": "geojson",
-            "resultOffset": offset,
-            "resultRecordCount": 1000,
-        }
-        if bbox:
-            params.update(
-                {
-                    "geometry": (
-                        f"{config.BBOX_WEST},{config.BBOX_SOUTH},"
-                        f"{config.BBOX_EAST},{config.BBOX_NORTH}"
-                    ),
-                    "geometryType": "esriGeometryEnvelope",
-                    "inSR": 4326,
-                    "spatialRel": "esriSpatialRelIntersects",
-                }
-            )
-        url = layer_url + "/query?" + urllib.parse.urlencode(params)
-        page: GeoJSON = json.loads(_get(url))
-        if "error" in page:
-            raise RuntimeError(f"{layer_url}: {page['error']}")
+    while len(features) < expected:
+        page: GeoJSON = _arcgis_json(
+            layer_url,
+            "/query",
+            {
+                **base,
+                "outFields": "*",
+                "outSR": 4326,
+                "f": "geojson",
+                "orderByFields": oid,
+                "resultOffset": offset,
+                "resultRecordCount": page_size,
+            },
+        )
         batch: list[dict[str, Any]] = page.get("features", [])
-        features.extend(batch)
-        if len(batch) < 1000:
+        fresh = 0
+        for feat in batch:
+            fid = (feat.get("properties") or {}).get(oid, feat.get("id"))
+            if fid is not None and fid in seen:
+                continue
+            seen.add(fid)
+            features.append(feat)
+            fresh += 1
+        more = page.get("exceededTransferLimit")
+        if more is None:
+            more = (page.get("properties") or {}).get("exceededTransferLimit")
+        if not batch or fresh == 0 or more is False:
             break
         offset += len(batch)
+    if len(features) != expected:
+        raise RuntimeError(
+            f"{layer_url}: got {len(features)} features but the server counts {expected} "
+            "— paging stopped early or the server ignored resultOffset"
+        )
     return {"type": "FeatureCollection", "features": features}
 
 
@@ -219,16 +271,24 @@ def fetch_population() -> GeoJSON:
     return {"type": "FeatureCollection", "features": out}
 
 
+SOCRATA_PAGE: Final[int] = 1000
+
+
 def fetch_cambridge_permits() -> GeoJSON:
     """Active Cambridge street/excavation permits (geocoded, with end dates)."""
     today = datetime.date.today().isoformat()
     where = f"status='Active' AND end_date>='{today}T00:00:00.000'"
-    url = (
-        config.CAMBRIDGE_PERMITS_URL
-        + "?"
-        + urllib.parse.urlencode({"$where": where, "$limit": 5000})
-    )
-    rows: list[dict[str, Any]] = json.loads(_get(url))
+    # Paged, and in a fixed order: one request with $limit=5000 silently ended
+    # the list at 5,000, and Socrata pages without $order can skip and repeat.
+    rows: list[dict[str, Any]] = []
+    while True:
+        query = {"$where": where, "$order": ":id", "$limit": SOCRATA_PAGE, "$offset": len(rows)}
+        page: list[dict[str, Any]] = json.loads(
+            _get(config.CAMBRIDGE_PERMITS_URL + "?" + urllib.parse.urlencode(query))
+        )
+        rows.extend(page)
+        if len(page) < SOCRATA_PAGE:
+            break
     features: list[dict[str, Any]] = []
     for row in rows:
         try:
