@@ -86,15 +86,75 @@ def safer(a: str | None, b: str | None) -> str | None:
     return a if mult(a) <= mult(b) else b
 
 
+KMH_PER_MPH: Final[float] = 1.609344
+
+
 def parse_maxspeed_mph(v: Any) -> float | None:
+    """The highest posted limit on an edge, in mph.
+
+    Highest, not first: a simplified edge that merges ways with different limits
+    is as stressful as its fastest part, which is what classify_osm's "worst
+    part" rule promises. And units as OSM defines them — "25 mph" is mph, a
+    bare number is km/h — so a way tagged "50" (31 mph) is not read as 50 mph,
+    nor a "40" (25 mph) as a 40 mph road. Words ("walk", "none", "signals")
+    and values like "US:urban" say nothing numeric and are skipped.
+    """
+    best: float | None = None
     for item in listy(v):
         if not item:
             continue
-        try:
-            return float(str(item).split()[0])
-        except ValueError:
-            continue
-    return None
+        for part in str(item).split(";"):
+            words = part.strip().lower().split()
+            if not words:
+                continue
+            number, unit = words[0], " ".join(words[1:])
+            if number.endswith("mph"):
+                number, unit = number[: -len("mph")], "mph"
+            try:
+                value = float(number)
+            except ValueError:
+                continue
+            if unit == "mph":
+                mph = value
+            elif unit in ("", "km/h", "kmh", "kph"):
+                mph = value / KMH_PER_MPH
+            else:  # knots and anything unforeseen: not a road speed we can read
+                continue
+            best = mph if best is None else max(best, mph)
+    return best
+
+
+def parse_lanes(v: Any) -> int | None:
+    """The most motor-traffic lanes any part of an edge has."""
+    best: int | None = None
+    for item in listy(v):
+        for part in str(item).split(";"):
+            try:
+                n = int(float(part.strip()))
+            except ValueError:
+                continue
+            best = n if best is None else max(best, n)
+    return best
+
+
+MULTILANE_MIN_LANES: Final[int] = 3
+
+
+def multilane(tags: Mapping[str, Any]) -> bool:
+    """A road built to move traffic, whatever its highway tag says: three or
+    more motor lanes, i.e. two in at least one direction (or two plus a turn
+    lane).
+
+    Deliberately not "two on a one-way street", though that is also two in a
+    direction. In this region the tag does not mean that: 4,689 one-way
+    residential edges (412 km) carry lanes=2, and the ones checked by name —
+    Dacia St, Bodwell St, Sagamore St in Dorchester — are narrow one-lane
+    streets with parking, the parking lane counted as a lane. Escalating them
+    would move 412 km of quiet streets to 8x cost on the strength of a tagging
+    habit; lanes >= 3 is where the tag and the street agree.
+    """
+    n = parse_lanes(tags.get("lanes"))
+    return n is not None and n >= MULTILANE_MIN_LANES
 
 
 def classify_osm(tags: Mapping[str, Any]) -> tuple[str, bool]:
@@ -137,6 +197,8 @@ def classify_osm(tags: Mapping[str, Any]) -> tuple[str, bool]:
         return "service", False
     ms = parse_maxspeed_mph(tags.get("maxspeed"))
     if ms is not None and ms > 30:
+        return "moderate_street", False
+    if multilane(tags):
         return "moderate_street", False
     return "quiet_street", False
 
