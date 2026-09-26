@@ -114,7 +114,14 @@ def classify_osm(tags: Mapping[str, Any]) -> tuple[str, bool]:
     for key in ("cycleway", "cycleway:left", "cycleway:right", "cycleway:both"):
         cw.update(v for v in listy(tags.get(key)) if v)
     busy = hw_in(ROAD_BUSY)
-    if {"track", "separate", "separated"} & cw:
+    # `track` is a protected lane on this carriageway. `separate` is the
+    # opposite claim: the bike facility is mapped as its own way beside the
+    # road, and the road carries none — that way gets its own edge and its own
+    # class, and the road is classified as the road it is. Reading `separate`
+    # as protection put 1,033 edge-directions (57 km) in the best class, 638 of
+    # them (35 km) bare arterial.
+    # `separated` is not an OSM value at all; it gets no benefit of the doubt.
+    if "track" in cw:
         return "separated", busy
     if "buffered_lane" in cw:
         return "buffered", busy

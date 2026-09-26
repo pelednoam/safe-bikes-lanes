@@ -27,6 +27,28 @@ def test_classify_cycleway() -> None:
     assert classify_osm({"highway": "tertiary"}) == ("moderate_street", False)
 
 
+def test_a_separately_mapped_cycleway_does_not_protect_the_road() -> None:
+    """`cycleway=separate` says the bike facility is its own way nearby; the
+    carriageway itself has none, so it must cost what the bare road costs."""
+    assert classify_osm({"highway": "primary", "cycleway:right": "separate"}) == (
+        "busy_street",
+        True,
+    )
+    assert classify_osm({"highway": "residential", "cycleway:both": "separate"}) == (
+        "quiet_street",
+        False,
+    )
+    # not an OSM value; it must not earn protection either
+    assert classify_osm({"highway": "secondary", "cycleway": "separated"}) == (
+        "busy_street",
+        True,
+    )
+    # a painted lane on the other side still counts for what it is
+    assert classify_osm(
+        {"highway": "secondary", "cycleway:right": "separate", "cycleway:left": "lane"}
+    ) == ("lane", True)
+
+
 def test_classify_list_tags() -> None:
     # simplified edges can carry lists; a busy component governs the road flag
     cls, busy = classify_osm({"highway": ["residential", "secondary"]})
