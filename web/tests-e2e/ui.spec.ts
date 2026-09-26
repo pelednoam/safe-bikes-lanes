@@ -380,6 +380,38 @@ test.describe("at night", () => {
   });
 });
 
+test.describe("a first visit on a phone", () => {
+  test.use({ viewport: PHONE, isMobile: true, hasTouch: true });
+
+  test("says what the app is for, what the lines mean, and asks who is riding", async ({
+    page,
+  }) => {
+    // the title and blurb are off screen on a phone, the legend is folded away
+    // and the rider switch is below the fold: a first visit explained nothing
+    await boot(page);
+    const card = page.getByRole("region", { name: /safe bike routes/i });
+    await expect(card).toBeVisible();
+    await expect(card.locator(".fr-key li")).toHaveCount(4);
+    await expect(card.locator(".fr-key svg.swatch")).toHaveCount(4);
+
+    await card.getByRole("button", { name: "older kids" }).tap();
+    await expect(page.locator('#modes input[value="older_kids"]')).toBeChecked();
+    await expect(card.getByRole("button", { name: "older kids" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    // the map underneath still takes a tap everywhere but the buttons
+    expect(await card.evaluate((e) => getComputedStyle(e).pointerEvents)).toBe("none");
+
+    await card.getByRole("button", { name: /got it/i }).tap();
+    await expect(card).toBeHidden();
+    await page.reload();
+    await page.waitForFunction(() => window._map !== undefined);
+    await expect(page.locator("#first-run")).toBeHidden();
+  });
+});
+
 test.describe("safety classes without colour", () => {
   test("the confusable classes differ by line, not only by hue", async ({ page }) => {
     // Simulated colour blindness made these pairs the same colour, or nearly:
@@ -499,6 +531,12 @@ test.describe("when something goes wrong", () => {
 });
 
 test.describe("at a desk", () => {
+  test("a desk gets no first-run card: its title and blurb are on screen", async ({ page }) => {
+    await boot(page);
+    await expect(page.locator("#first-run")).toBeHidden();
+    await expect(page.locator("#intro-hint")).toBeVisible();
+  });
+
   test("the data banner is centred over the map, not over the panel", async ({ page }) => {
     await page.setViewportSize({ width: 820, height: 800 });
     await boot(page);

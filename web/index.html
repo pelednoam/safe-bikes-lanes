@@ -422,6 +422,32 @@
   #hazard input, #hazard select, #hazard textarea { min-height:40px; box-sizing:border-box; }
   #hazard input[type="file"] { padding:8px; }
 
+  /* ── First run (phones only; see initFirstRun) ─────────────────────── */
+  #first-run {
+    position:absolute; z-index:4; top:calc(12px + env(safe-area-inset-top));
+    left:calc(12px + env(safe-area-inset-left)); right:calc(68px + env(safe-area-inset-right));
+    background:var(--surface); color:var(--ink);
+    -webkit-backdrop-filter:blur(20px) saturate(1.5); backdrop-filter:blur(20px) saturate(1.5);
+    border:1px solid var(--line); border-radius:var(--r-md); box-shadow:var(--shadow);
+    padding:8px 10px 10px 12px; font-size:13.5px;
+    /* the map stays usable through it: only its buttons take a tap */
+    pointer-events:none;
+  }
+  #first-run[hidden], body.navigating #first-run { display:none; }
+  #first-run button { pointer-events:auto; }
+  #first-run .fr-head { display:flex; align-items:flex-start; justify-content:space-between; gap:6px; }
+  #first-run h2 { font-size:15px; line-height:1.25; margin:4px 0 6px; letter-spacing:-.01em; }
+  #first-run-ok { flex:none; margin:0; width:44px; height:44px; min-height:44px; padding:0;
+    font-size:16px; border-radius:999px; margin:-4px -4px 0 0; }
+  .fr-key { list-style:none; margin:0 0 8px; padding:0; display:grid;
+    grid-template-columns:1fr 1fr; gap:3px 10px; font-size:13px; }
+  .fr-key li { display:flex; align-items:center; gap:6px; white-space:nowrap; }
+  .fr-who { display:flex; align-items:center; gap:5px; flex-wrap:wrap; font-size:13px; }
+  .fr-who > span { width:100%; color:var(--muted); font-weight:600; }
+  .fr-who button { flex:1; margin:0; min-height:44px; padding:0 4px; font-size:13.5px; }
+  .fr-who button[aria-pressed="true"] { border-color:var(--accent); background:var(--accent-soft);
+    box-shadow:inset 0 0 0 1px var(--accent); }
+
   /* ── Floating banners ──────────────────────────────────────────────── */
   #data-update, #update-banner {
     position:absolute; z-index:8; background:var(--surface); color:var(--ink);
@@ -721,6 +747,29 @@
 </head>
 <body>
 <div id="map"></div>
+<!-- First run on a phone. The title and blurb are off screen there, the legend
+     is inside a collapsed section and the rider switch is below the fold, so a
+     first visit explained nothing: coloured lines, a search box and a hundred
+     and seventy symbols. What the app is for, what the colours mean, and who is
+     riding — which changes every route — until it is dismissed, once. -->
+<section id="first-run" aria-labelledby="first-run-title" hidden>
+  <div class="fr-head">
+    <h2 id="first-run-title">Safe bike routes for riding with kids</h2>
+    <button id="first-run-ok" type="button" aria-label="Got it — hide this">✕</button>
+  </div>
+  <ul class="fr-key" aria-label="What the lines mean">
+    <li><span data-swatch="path"></span>protected</li>
+    <li><span data-swatch="quiet_street"></span>quiet</li>
+    <li><span data-swatch="lane"></span>paint only</li>
+    <li><span data-swatch="busy_street"></span>busy — avoid</li>
+  </ul>
+  <div class="fr-who" role="group" aria-label="Who's riding?">
+    <span>Who's riding?</span>
+    <button type="button" data-profile="young_kids">young kids</button>
+    <button type="button" data-profile="older_kids">older kids</button>
+    <button type="button" data-profile="solo">solo</button>
+  </div>
+</section>
 <div id="data-update" style="display:none">⬇ Updating map data…</div>
 <div id="update-banner" style="display:none">
   <span id="update-text"></span>
