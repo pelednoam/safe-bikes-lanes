@@ -58,13 +58,15 @@ def _get(url: str, timeout: int = 120, browser: bool = False, data: bytes | None
     raise AssertionError("unreachable")
 
 
-def _save(name: str, data: GeoJSON, source: str) -> None:
+def _save(name: str, data: GeoJSON, source: str, retrieved: str | None = None) -> None:
+    """Write a source and its sidecar. `retrieved` is when the data was fetched
+    from its publisher, which is now unless it is a kept copy."""
     config.RAW_DIR.mkdir(parents=True, exist_ok=True)
     path = config.RAW_DIR / name
     path.write_text(json.dumps(data))
     meta = {
         "source": source,
-        "retrieved": datetime.datetime.now(datetime.UTC).isoformat(),
+        "retrieved": retrieved or datetime.datetime.now(datetime.UTC).isoformat(),
         "features": len(data.get("features", [])),
     }
     (config.RAW_DIR / (name + ".meta.json")).write_text(json.dumps(meta, indent=2))
@@ -368,10 +370,13 @@ def _use_fallback(name: str, error: Exception) -> bool:
         return False
     meta = json.loads((FALLBACK_DIR / f"{name}.meta.json").read_text())
     copied = str(meta.get("retrieved", "?"))[:10]
+    # The copy's own date, not today's: it is published in the site's meta.json,
+    # and the first run to use this reported a July layer as fetched that day.
     _save(
         name,
         json.loads(path.read_text()),
         f"committed copy of {copied} (live fetch failed: {error})",
+        retrieved=str(meta["retrieved"]),
     )
     # a GitHub Actions annotation, so it shows on the run's page, not only in its log
     print(f"::warning::{name}: live fetch failed ({error}); using the committed copy of {copied}")

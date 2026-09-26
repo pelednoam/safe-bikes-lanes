@@ -470,6 +470,8 @@ def test_a_dead_corridor_server_uses_the_committed_copy(
     assert json.loads(corridors.read_text()) == json.loads(committed.read_text())
     meta = json.loads((tmp_path / "somerville_high_crash_corridors.geojson.meta.json").read_text())
     assert meta["source"].startswith("committed copy of 2026-07-24")
+    # dated when it was fetched, not when it was copied: the site publishes this
+    assert meta["retrieved"].startswith("2026-07-24")
     assert "::warning::somerville_high_crash_corridors.geojson" in capsys.readouterr().out
     # and a source with no copy still fails the run
     assert [name for name, _ in failures] == ["pois.geojson"]
