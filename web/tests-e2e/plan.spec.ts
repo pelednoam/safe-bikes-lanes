@@ -639,10 +639,17 @@ test("a round trip is asked for in miles, typed freely, and answered with a choi
   const cards = await page.locator(".option-card").allInnerTexts();
   const miles = cards.map((c) => Number(/([\d.]+)\s*mi/.exec(c)?.[1] ?? NaN));
   const prot = cards.map((c) => Number(/(\d+)%\s*protected/.exec(c)?.[1] ?? NaN));
-  // every option answers the question that was asked...
+  // The recommended loop answers the question that was asked...
+  expect(miles[0], `recommended a ${miles[0]} mi loop for a 4 mi request`).toBeGreaterThan(2.8);
+  expect(miles[0]).toBeLessThan(5.4);
+  // ...and the alternatives stay in its neighbourhood. Not the same ±35%:
+  // from this start the only loops that close to 4 mi rode a busy road on
+  // sharrows, which the router priced like a quiet street until sharrows on a
+  // busy road were priced as the busy road they are. A family is better
+  // offered a safe 5.6 mi loop than a 4 mi one in traffic.
   for (const mi of miles) {
     expect(mi, `offered a ${mi} mi loop for a 4 mi request`).toBeGreaterThan(2.8);
-    expect(mi).toBeLessThan(5.4);
+    expect(mi).toBeLessThanOrEqual(6.0);
   }
   // ...and the safest of them leads, which distance-only ranking got backwards:
   // it put a 27%-protected loop ahead of a 69%-protected one the same length
