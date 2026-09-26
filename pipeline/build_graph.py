@@ -24,8 +24,10 @@ from typing import Any, Final
 import config
 import geopandas as gpd
 import networkx as nx
+import numpy as np
 import osmnx as ox
 import pandas as pd
+import shapely
 from elevation import ElevationSampler
 from shapely.geometry import LineString, Point
 
@@ -476,6 +478,19 @@ def angle_diff(a: float, b: float) -> float:
     return min(d, 180 - d)
 
 
+def _bearings(lines: Any, at: Any, chord: float = 6.0) -> Any:
+    """bearing_near for arrays: each line's bearing (0-180) around the point on
+    it nearest the matching point in `at`."""
+    d = shapely.line_locate_point(lines, at)
+    length = shapely.length(lines)
+    p1 = shapely.line_interpolate_point(lines, np.maximum(d - chord, 0.0))
+    p2 = shapely.line_interpolate_point(lines, np.minimum(d + chord, length))
+    ang = np.degrees(
+        np.arctan2(shapely.get_y(p2) - shapely.get_y(p1), shapely.get_x(p2) - shapely.get_x(p1))
+    )
+    return np.mod(ang, 180.0)
+
+
 def overlay_match(
     edges: gpd.GeoDataFrame,
     overlay: gpd.GeoDataFrame,
@@ -485,33 +500,53 @@ def overlay_match(
     """For each edge, the overlay feature running along it (None if no match).
 
     `edges` and `overlay` must be in a metric CRS. Overlay rows need columns
-    `geometry` and `cls`. Path-class overlay features only match path-like OSM
-    edges — otherwise an off-street path would upgrade the parallel roadway.
-    Returns a list aligned with edges.index of overlay row positions or None.
+    `geometry` and `cls`. Off-street overlay features (path, unpaved) only match
+    path-like OSM edges — otherwise an off-street path would upgrade the
+    parallel roadway. Returns a list aligned with edges.index of overlay row
+    positions (in the exploded overlay) or None.
+
+    One bulk spatial-index query for all edges, then numpy over the candidate
+    pairs. It was a Python loop with a query and a pandas .iloc per edge, which
+    was tolerable against a 1,000-feature layer and is not against MassDOT's
+    LTS layer at its real size (251,046 features in this bbox; the old paging
+    only ever fetched the first 1,000).
     """
     overlay = overlay.explode(index_parts=False).reset_index(drop=True)
-    sindex = overlay.sindex
-    results: list[int | None] = []
-    for geom, is_path in zip(edges.geometry, edges["is_pathlike"], strict=True):
-        mid = geom.interpolate(0.5, normalized=True)
-        edge_brg = bearing_near(geom, mid)
-        best: int | None = None
-        best_d: float | None = None
-        for pos in sindex.query(mid.buffer(radius)):
-            row = overlay.iloc[pos]
-            if row["cls"] in OFFSTREET and not is_path:
-                continue
-            d = row.geometry.distance(mid)
-            if d > radius:
-                continue
-            # polygons (e.g. corridor areas) match on distance alone
-            if row.geometry.geom_type == "LineString" and (
-                angle_diff(edge_brg, bearing_near(row.geometry, mid)) > max_angle
-            ):
-                continue
-            if best_d is None or d < best_d:
-                best, best_d = pos, d
-        results.append(best)
+    n = len(edges)
+    if n == 0 or len(overlay) == 0:
+        return [None] * n
+    lines = np.asarray(edges.geometry.array, dtype=object)
+    mids = shapely.line_interpolate_point(lines, 0.5, normalized=True)
+    edge_brg = _bearings(lines, mids)
+    is_path = edges["is_pathlike"].to_numpy(dtype=bool)
+    ogeoms = np.asarray(overlay.geometry.array, dtype=object)
+    offstreet = overlay["cls"].isin(OFFSTREET).to_numpy()
+
+    ei, oi = overlay.sindex.query(mids, predicate="dwithin", distance=radius)
+    keep = ~(offstreet[oi] & ~is_path[ei])
+    ei, oi = ei[keep], oi[keep]
+    dist = shapely.distance(ogeoms[oi], mids[ei])
+    keep = dist <= radius
+    ei, oi, dist = ei[keep], oi[keep], dist[keep]
+    # polygons (e.g. corridor areas) match on distance alone; lines must also
+    # run the same way (the bearing gate that rejects cross streets)
+    is_line = shapely.get_type_id(ogeoms[oi]) == 1
+    if is_line.any():
+        lp = np.flatnonzero(is_line)
+        diff = np.abs(edge_brg[ei[lp]] - _bearings(ogeoms[oi[lp]], mids[ei[lp]])) % 180.0
+        bad = lp[np.minimum(diff, 180.0 - diff) > max_angle]
+        keep = np.ones(len(ei), dtype=bool)
+        keep[bad] = False
+        ei, oi, dist = ei[keep], oi[keep], dist[keep]
+
+    # nearest per edge; ties to the lowest overlay position, so it is stable
+    order = np.lexsort((oi, dist, ei))
+    ei, oi = ei[order], oi[order]
+    first = np.ones(len(ei), dtype=bool)
+    first[1:] = ei[1:] != ei[:-1]
+    results: list[int | None] = [None] * n
+    for e, o in zip(ei[first].tolist(), oi[first].tolist(), strict=True):
+        results[e] = o
     return results
 
 
@@ -965,18 +1000,19 @@ def build() -> None:
             continue
         print(f"matching {name} overlay ({len(overlay)} features) ...")
         matches = overlay_match(edges, overlay, radius)
-        exploded = overlay.explode(index_parts=False).reset_index(drop=True)
+        ex_cls = overlay.explode(index_parts=False)["cls"].tolist()
+        rough = edges["rough"].tolist()
         upgraded = 0
         for i, pos in enumerate(matches):
             if pos is None:
                 continue
-            cls = exploded.iloc[pos]["cls"]
+            cls = ex_cls[pos]
             # official path can't upgrade an on-road edge past "separated"
-            cur = edges.iloc[i]["cls"]
+            cur = edges.iat[i, edges.columns.get_loc("cls")]
             # An official "shared-use path" says nothing about its surface, and
             # OSM saying "mud" does: it stays unpaved. (A track with no surface
             # tag is unpaved only by default, and an official path wins there.)
-            if cur == "unpaved" and edges.iloc[i]["rough"]:
+            if cur == "unpaved" and rough[i]:
                 continue
             new = safer(cur, cls)
             if new != cur:
@@ -991,22 +1027,22 @@ def build() -> None:
     if lts is not None and not lts.empty:
         print(f"matching MassDOT LTS ({len(lts)} features) ...")
         matches = overlay_match(edges, lts, radius=15)
-        exploded = lts.explode(index_parts=False).reset_index(drop=True)
+        ex_lts = lts.explode(index_parts=False)["lts"].tolist()
         escalated = 0
         for i, pos in enumerate(matches):
             if pos is None:
                 continue
-            score = int(exploded.iloc[pos]["lts"])
+            score = int(ex_lts[pos])
             edges.iat[i, edges.columns.get_loc("lts")] = score
             if score >= 3:
-                cur = edges.iloc[i]["cls"]
+                cur = edges.iat[i, edges.columns.get_loc("cls")]
                 new = LTS_ESCALATION.get(cur)
                 if new:
                     edges.iat[i, edges.columns.get_loc("cls")] = new
                     escalated += 1
                 # and the street under any paint: a painted lane on a street
                 # MassDOT rates LTS 3 must not be priced as a quiet street
-                road = edges.iloc[i]["road_cls"]
+                road = edges.iat[i, edges.columns.get_loc("road_cls")]
                 if road in LTS_ESCALATION:
                     edges.iat[i, edges.columns.get_loc("road_cls")] = LTS_ESCALATION[road]
         print(f"  escalated {escalated} edges via LTS>=3")

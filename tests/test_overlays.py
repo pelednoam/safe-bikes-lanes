@@ -7,7 +7,10 @@ heatmap, the where-to-build ranking — inherits whatever it gets wrong.
 """
 
 import json
+import math
+import random
 from pathlib import Path
+from typing import Any
 
 import build_graph
 import config
@@ -309,3 +312,74 @@ def test_mem_reports_without_exploding(capsys: pytest.CaptureFixture[str]) -> No
     # a progress helper on an 11 GB build: it must never be the thing that fails
     build_graph.mem("a stage")
     assert "a stage" in capsys.readouterr().out
+
+
+def _reference_match(
+    edges: gpd.GeoDataFrame, overlay: gpd.GeoDataFrame, radius: float, max_angle: float = 30.0
+) -> list[int | None]:
+    """The per-edge loop overlay_match used to be, kept as the specification
+    the bulk version must agree with."""
+    overlay = overlay.explode(index_parts=False).reset_index(drop=True)
+    out: list[int | None] = []
+    for geom, is_path in zip(edges.geometry, edges["is_pathlike"], strict=True):
+        mid = geom.interpolate(0.5, normalized=True)
+        brg = build_graph.bearing_near(geom, mid)
+        best: tuple[float, int] | None = None
+        for pos, (og, cls) in enumerate(zip(overlay.geometry, overlay["cls"], strict=True)):
+            if cls in build_graph.OFFSTREET and not is_path:
+                continue
+            d = og.distance(mid)
+            if d > radius:
+                continue
+            if og.geom_type == "LineString" and (
+                build_graph.angle_diff(brg, build_graph.bearing_near(og, mid)) > max_angle
+            ):
+                continue
+            if best is None or (d, pos) < best:
+                best = (d, pos)
+        out.append(None if best is None else best[1])
+    return out
+
+
+def test_the_bulk_match_agrees_with_the_per_edge_loop() -> None:
+    rng = random.Random(7)
+    streets: list[tuple[LineString, bool]] = []
+    for _ in range(300):
+        x, y = rng.uniform(0, 2000), rng.uniform(0, 2000)
+        ang, length = rng.uniform(0, math.pi), rng.uniform(20, 300)
+        end = (x + length * math.cos(ang), y + length * math.sin(ang))
+        streets.append((LineString([(x, y), end]), rng.random() < 0.3))
+    features: list[tuple[LineString | Polygon, str]] = []
+    for _ in range(200):
+        g, _p = streets[rng.randrange(len(streets))]
+        dx, dy = rng.uniform(-20, 20), rng.uniform(-20, 20)
+        shifted = LineString([(px + dx, py + dy) for px, py in g.coords])
+        features.append((shifted, rng.choice(["lane", "path", "separated", "unpaved"])))
+    features.append((Point(1000, 1000).buffer(200), "corridor"))
+    edges, overlay = edges_frame(streets), overlay_frame(features)
+    got = build_graph.overlay_match(edges, overlay, 18.0)
+    assert got == _reference_match(edges, overlay, 18.0)
+    assert sum(g is not None for g in got) > 50  # the comparison is not vacuous
+
+
+def test_the_match_asks_the_spatial_index_once_not_once_per_edge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A query and a pandas .iloc per edge: 900k edges against MassDOT's LTS
+    layer at its real size (251,046 features here) was the slow half of the
+    build."""
+    import geopandas.sindex
+
+    calls = {"n": 0}
+    original = geopandas.sindex.SpatialIndex.query
+
+    def counting(self: Any, *args: Any, **kwargs: Any) -> Any:
+        calls["n"] += 1
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(geopandas.sindex.SpatialIndex, "query", counting)
+    streets = [(LineString([(0, i * 50), (100, i * 50)]), False) for i in range(40)]
+    facilities = [(LineString([(0, i * 50 + 3), (100, i * 50 + 3)]), "lane") for i in range(40)]
+    got = build_graph.overlay_match(edges_frame(streets), overlay_frame(facilities), 18.0)
+    assert got == list(range(40))
+    assert calls["n"] == 1
