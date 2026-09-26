@@ -28,7 +28,11 @@ TARBALL="/tmp/web-data.tar.gz"
 #
 # So: refuse to publish a snapshot the analysis itself would refuse to read, and
 # say plainly when a local build is about to overwrite CI's.
-if ! python3 - <<'CHECK'
+# python3 -I -S throughout: this script holds GH_TOKEN in CI, and runs after the
+# pipeline's packages were installed into the same interpreter. -S skips
+# site-packages and the .pth files in it, which run code at every start-up;
+# these checks need only the standard library.
+if ! python3 -I -S - <<'CHECK'
 import json, pathlib, sys
 meta = pathlib.Path("web/data/priorities_meta.json")
 if not meta.exists():
@@ -63,7 +67,7 @@ fi
 # And refuse a snapshot much smaller than the one the site is serving: a
 # fetch that failed or came back partial builds and exports cleanly, just
 # smaller. ALLOW_DATA_DROP=1 publishes anyway (see pipeline/sanity_gate.py).
-python3 pipeline/sanity_gate.py web/data/meta.json || {
+python3 -I -S pipeline/sanity_gate.py web/data/meta.json || {
   echo "refusing to publish: the sanity gate stopped it (see above)."
   exit 1
 }

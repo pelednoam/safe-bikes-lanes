@@ -1,0 +1,27 @@
+# What the data pipeline imports, pinned to the versions it is developed and
+# tested against (the project venv). The weekly refresh installs from the
+# hashed lock compiled from this, pipeline/requirements.txt — never from an
+# unpinned `pip install`, because that job publishes the site's data.
+#
+# To change a version: edit it here, then regenerate the lock with
+#   uv pip compile pipeline/requirements.in --generate-hashes \
+#     --python-version 3.12 --python-platform x86_64-manylinux_2_28 \
+#     -o pipeline/requirements.txt
+osmnx==2.1.0
+geopandas==1.1.4
+networkx==3.6.1
+shapely==2.1.2
+scipy==1.18.0
+pillow==12.3.0
+numpy==2.5.1
+pandas==3.0.3
+pyproj==3.7.2
+pyogrio==0.13.0
+requests==2.34.2
+certifi==2026.6.17
+charset-normalizer==3.4.9
+idna==3.18
+packaging==26.2
+urllib3==2.7.0
+python-dateutil==2.9.0.post0
+six==1.17.0

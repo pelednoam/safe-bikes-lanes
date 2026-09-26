@@ -196,3 +196,41 @@ def test_a_failed_fetch_fails_the_refresh() -> None:
     assert fetch_runs, "the refresh no longer fetches"
     for r in fetch_runs:
         assert "|| true" not in r and "continue-on-error" not in r
+
+
+def test_the_refresh_installs_exact_hashed_versions() -> None:
+    """`pip install osmnx geopandas ...` took whatever was newest, in a job that
+    publishes the site's data."""
+    installs = [
+        str(step.get("run", ""))
+        for step in steps(REFRESH_WORKFLOW)
+        if "pip install" in str(step.get("run", ""))
+    ]
+    assert installs, "the refresh no longer installs its dependencies"
+    for run in installs:
+        assert "--require-hashes" in run and "pipeline/requirements.txt" in run, run
+    lock = (ROOT / "pipeline" / "requirements.txt").read_text(encoding="utf-8")
+    pins = [ln for ln in lock.splitlines() if ln and not ln.startswith((" ", "#"))]
+    assert pins and all("==" in p for p in pins), "every requirement pinned exactly"
+    assert lock.count("--hash=sha256:") >= len(pins)
+    for pkg in ("osmnx", "geopandas", "networkx", "shapely", "scipy", "pillow"):
+        assert any(p.startswith(f"{pkg}==") for p in pins), f"{pkg} is not in the lock"
+
+
+def test_the_refresh_does_not_leave_its_token_on_disk() -> None:
+    """With the default persist-credentials, checkout writes the job's token —
+    which can publish releases here — into .git/config for every later step,
+    installed packages included."""
+    checkouts = [s for s in steps(REFRESH_WORKFLOW) if "actions/checkout" in str(s.get("uses"))]
+    assert checkouts
+    for step in checkouts:
+        assert (step.get("with") or {}).get("persist-credentials") is False
+    with_token = [s for s in steps(REFRESH_WORKFLOW) if "GH_TOKEN" in (s.get("env") or {})]
+    assert [s.get("run") for s in with_token] == ["scripts/publish-data.sh"], (
+        "only the publish step should hold a token"
+    )
+    # and that step's own Python does not load the installed packages' .pth hooks
+    publish = PUBLISH.read_text(encoding="utf-8")
+    starts = ("python3", "if ! python3")
+    calls = [ln for ln in publish.splitlines() if ln.lstrip().startswith(starts)]
+    assert calls and all("-I -S" in ln for ln in calls), calls

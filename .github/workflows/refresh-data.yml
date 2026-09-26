@@ -19,11 +19,23 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
+        with:
+          # This job can write releases and start deploys. Checkout would
+          # otherwise leave that token in .git/config for every later step —
+          # including every package pip is about to install. Only the publish
+          # step is given a token, through its own env.
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - name: Install dependencies
-        run: pip install osmnx geopandas networkx shapely scipy pillow
+        # Exact versions and their hashes (pipeline/requirements.txt, compiled
+        # from requirements.in), wheels only: an unpinned install meant a new
+        # release of any of these, or of anything they pull in, ran here with
+        # the week's data publish downstream of it, and a rebuild could not be
+        # reproduced from the commit that made it.
+        run: |
+          pip install --require-hashes --only-binary=:all: -r pipeline/requirements.txt
       - name: Refresh all sources
         working-directory: pipeline
         env:
