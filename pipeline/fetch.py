@@ -9,6 +9,8 @@ import datetime
 import json
 import os
 import sys
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
@@ -27,11 +29,32 @@ BROWSER_UA: Final[dict[str, str]] = {
 }
 
 
-def _get(url: str, timeout: int = 120, browser: bool = False) -> bytes:
-    req = urllib.request.Request(url, headers=BROWSER_UA if browser else UA)
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        data: bytes = r.read()
-    return data
+# One dropped connection used to fail the whole weekly refresh. Three tries,
+# a little apart, rides out a blip; a server that is actually down is still
+# down on the third, and fails the refresh as it should.
+GET_ATTEMPTS: Final[int] = 3
+GET_RETRY_WAIT_S: Final[float] = 10.0
+
+
+def _get(url: str, timeout: int = 120, browser: bool = False, data: bytes | None = None) -> bytes:
+    """GET `url`, or POST `data` to it, retrying what might be transient.
+
+    A 4xx is an answer, not a blip, and is raised at once.
+    """
+    req = urllib.request.Request(url, data=data, headers=BROWSER_UA if browser else UA)
+    for attempt in range(1, GET_ATTEMPTS + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                body: bytes = r.read()
+            return body
+        except urllib.error.HTTPError as e:
+            if e.code < 500 or attempt == GET_ATTEMPTS:
+                raise
+        except OSError:  # refused, reset, timed out
+            if attempt == GET_ATTEMPTS:
+                raise
+        time.sleep(GET_RETRY_WAIT_S * attempt)
+    raise AssertionError("unreachable")
 
 
 def _save(name: str, data: GeoJSON, source: str) -> None:
@@ -50,94 +73,79 @@ def _save(name: str, data: GeoJSON, source: str) -> None:
 ARCGIS_PAGE: Final[int] = 1000
 
 
-def _arcgis_json(layer_url: str, path: str, params: dict[str, str | int]) -> Any:
-    url = layer_url + path + "?" + urllib.parse.urlencode(params)
-    data = json.loads(_get(url))
+def _arcgis_json(
+    layer_url: str, path: str, params: dict[str, str | int], post: bool = False
+) -> Any:
+    """One ArcGIS REST call. POST for long parameters — a page of object ids
+    runs to kilobytes, past what some servers accept in a URL."""
+    body = urllib.parse.urlencode(params)
+    if post:
+        data = json.loads(_get(layer_url + path, data=body.encode()))
+    else:
+        data = json.loads(_get(layer_url + path + "?" + body))
     if isinstance(data, dict) and "error" in data:
         raise RuntimeError(f"{layer_url}: {data['error']}")
     return data
 
 
 def arcgis_query(layer_url: str, where: str = "1=1", bbox: bool = True) -> GeoJSON:
-    """Query an ArcGIS FeatureServer/MapServer layer, paging until exhausted.
+    """Query an ArcGIS FeatureServer/MapServer layer for every matching feature.
 
     Returns a GeoJSON FeatureCollection (f=geojson is supported on all the
     servers we use; verified 2026-07).
 
-    Paging used to stop at the first page shorter than 1,000 — but a server's
-    page is its own maxRecordCount, so a layer capped at 500 returned 500
-    features and stopped as if that were all of them. It now asks the layer
-    for its object-id field and page size, orders by the object id (paging an
-    unordered query can skip and repeat rows), follows exceededTransferLimit,
-    and at the end checks what it got against the server's own count, so a
-    short answer is an error rather than a smaller layer.
+    Asks for the matching object ids first, then for the features by id, a
+    page at a time, and fails if any id does not come back. Paging by offset
+    could not be made to work: MassDOT's layers leave rows out of paged
+    queries, paged by offset or by id range alike, while the count, the id
+    list and a query by id all include them (measured 2026-09: 10 of 14,939
+    Bike Inventory rows short, 971 of 251,046 LTS rows). Offset paging
+    also shifts every later page by each row dropped, repeating some rows
+    and skipping others. Before this the pager also stopped at the first page
+    shorter than 1,000, so a layer capped at 500 came back as 500 features.
     """
     info = _arcgis_json(layer_url, "", {"f": "json"})
-    oid = str(info.get("objectIdField") or "")
-    if not oid:
-        oid = next(
-            (f["name"] for f in info.get("fields") or [] if f.get("type") == "esriFieldTypeOID"),
-            "OBJECTID",
-        )
     page_size = min(ARCGIS_PAGE, int(info.get("maxRecordCount") or ARCGIS_PAGE))
 
-    base: dict[str, str | int] = {"where": where}
+    params: dict[str, str | int] = {"where": where}
     if bbox:
-        base.update(
+        params.update(
             {
                 "geometry": (
-                    f"{config.BBOX_WEST},{config.BBOX_SOUTH},"
-                    f"{config.BBOX_EAST},{config.BBOX_NORTH}"
+                    f"{config.BBOX_WEST},{config.BBOX_SOUTH},{config.BBOX_EAST},{config.BBOX_NORTH}"
                 ),
                 "geometryType": "esriGeometryEnvelope",
                 "inSR": 4326,
                 "spatialRel": "esriSpatialRelIntersects",
             }
         )
-    expected = int(
-        _arcgis_json(layer_url, "/query", {**base, "returnCountOnly": "true", "f": "json"})[
-            "count"
-        ]
-    )
+    answer = _arcgis_json(layer_url, "/query", {**params, "returnIdsOnly": "true", "f": "json"})
+    oid = str(answer.get("objectIdFieldName") or info.get("objectIdField") or "OBJECTID")
+    ids: list[int] = sorted(answer.get("objectIds") or [])
 
-    features: list[dict[str, Any]] = []
-    seen: set[Any] = set()
-    offset = 0
-    while len(features) < expected:
+    by_id: dict[Any, dict[str, Any]] = {}
+    for start in range(0, len(ids), page_size):
+        chunk = ids[start : start + page_size]
         page: GeoJSON = _arcgis_json(
             layer_url,
             "/query",
             {
-                **base,
+                "objectIds": ",".join(map(str, chunk)),
                 "outFields": "*",
                 "outSR": 4326,
                 "f": "geojson",
-                "orderByFields": oid,
-                "resultOffset": offset,
-                "resultRecordCount": page_size,
             },
+            post=True,
         )
-        batch: list[dict[str, Any]] = page.get("features", [])
-        fresh = 0
-        for feat in batch:
-            fid = (feat.get("properties") or {}).get(oid, feat.get("id"))
-            if fid is not None and fid in seen:
-                continue
-            seen.add(fid)
-            features.append(feat)
-            fresh += 1
-        more = page.get("exceededTransferLimit")
-        if more is None:
-            more = (page.get("properties") or {}).get("exceededTransferLimit")
-        if not batch or fresh == 0 or more is False:
-            break
-        offset += len(batch)
-    if len(features) != expected:
+        for feat in page.get("features", []):
+            by_id[(feat.get("properties") or {}).get(oid, feat.get("id"))] = feat
+    missing = [i for i in ids if i not in by_id]
+    if missing:
         raise RuntimeError(
-            f"{layer_url}: got {len(features)} features but the server counts {expected} "
-            "— paging stopped early or the server ignored resultOffset"
+            f"{layer_url}: {len(missing)} of {len(ids)} features did not come back "
+            f"when asked for by id (e.g. {oid} {missing[:5]})"
         )
-    return {"type": "FeatureCollection", "features": features}
+    return {"type": "FeatureCollection", "features": [by_id[i] for i in ids]}
 
 
 def fetch_pois() -> GeoJSON:
@@ -255,9 +263,7 @@ def fetch_population() -> GeoJSON:
         else:
             continue
         rings = [
-            [[round(float(x), 5), round(float(y), 5)] for x, y in poly[0]]
-            for poly in polys
-            if poly
+            [[round(float(x), 5), round(float(y), 5)] for x, y in poly[0]] for poly in polys if poly
         ]
         if not rings:
             continue
@@ -380,12 +386,10 @@ def fetch_all(refresh: bool = False) -> list[tuple[str, str]]:
         print(f"  workzones.geojson: {config.WZDX_KEY_ENV} not set, not configured — skipping")
     for year in config.IMPACT_CRASH_YEARS:
         service_year = config.IMPACT_CRASH_SERVICE_YEAR.get(year, str(year))
-        jobs[f"crashes_{year}.geojson"] = (
-            lambda y=service_year: arcgis_query(  # type: ignore[misc]
-                config.IMPACT_CRASH_URL.format(year=y),
-                where=config.IMPACT_CRASH_WHERE,
-                bbox=False,
-            )
+        jobs[f"crashes_{year}.geojson"] = lambda y=service_year: arcgis_query(  # type: ignore[misc]
+            config.IMPACT_CRASH_URL.format(year=y),
+            where=config.IMPACT_CRASH_WHERE,
+            bbox=False,
         )
 
     failures: list[tuple[str, str]] = []
