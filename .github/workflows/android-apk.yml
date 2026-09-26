@@ -1,24 +1,27 @@
 name: Build Android APK
 
 # Builds the Capacitor-wrapped Android app. Run manually (Actions tab ->
-# "Build Android APK" -> Run workflow) to get a downloadable APK artifact;
-# pushing a tag like app-v1 also attaches the APK to a GitHub release.
+# "Build Android APK" -> Run workflow) to get a downloadable APK artifact — a
+# development build, named for the release it follows (app-v52-dev.1a2b3c4) so
+# it installs over that release and is offered the next one; pushing a tag like
+# app-v53 builds that release and attaches the APK to a GitHub release.
 on:
   workflow_dispatch:
   push:
     tags: ["app-v*"]
 
 permissions:
-  contents: write
-  # the mirror-refresh step at the end dispatches pages.yml, and gh workflow run
-  # is an Actions API write. Without this it fails with a 403 — and it would
-  # fail exactly when a release needs mirroring, which is the whole point.
-  actions: write
+  contents: read
 
 jobs:
+  # Builds, tests and signs. Read-only: npm packages, Gradle plugins and the
+  # Capacitor plugins' own build scripts all run here, so none of them gets a
+  # token that can write to the repository.
   apk:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -61,9 +64,20 @@ jobs:
       - name: Native app-layer E2E (emulated Capacitor WebView)
         run: npm run e2e:native
         working-directory: web
+      - name: Decide the version
+        # A tag build is its tag (app-v53 -> versionCode 53). Any other build
+        # used to be github.ref_name — "main" — so versionCode 1: it could not
+        # install over an installed release, and the updater could not read
+        # "main" to offer the next one. See the script for what it is now.
+        id: version
+        run: python3 .github/scripts/app_version.py >> "$GITHUB_OUTPUT"
       - name: Assemble web bundle + sync
+        # app:sync is assemble.sh, then `cap sync android`: the sync is what
+        # writes the plugin list (@capacitor/app among them) into the Android
+        # project, so it must run on every build rather than rely on the copy
+        # committed in git.
         env:
-          APP_VERSION: ${{ github.ref_name }}
+          APP_VERSION: ${{ steps.version.outputs.app_version }}
         run: npm run app:sync
         working-directory: web
       - name: Restore the signing key
@@ -79,15 +93,20 @@ jobs:
           fi
           printf '%s' "$KEYSTORE_B64" | base64 -d > web/android/app/signing.jks
           echo "keystore restored ($(stat -c%s web/android/app/signing.jks) bytes)"
-      - name: Build debug APK
+      - name: Build release APK
+        # Release, not debug. The debug build is debuggable, and Capacitor turns
+        # on WebView remote debugging for a debuggable app — the app's storage,
+        # rides and saved places included, open to anyone with the phone and a
+        # USB cable. Signed with the same stable key as every earlier (debug)
+        # release, so it installs over them.
         env:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           # build.gradle derives versionCode from this (app-v50 -> 50). Without
           # it every APK is versionCode 1 again, silently — which is the state
           # this replaced, and nothing about the build would look wrong.
-          APP_VERSION: ${{ github.ref_name }}
-        run: ./gradlew assembleDebug
+          APP_VERSION: ${{ steps.version.outputs.app_version }}
+        run: ./gradlew assembleRelease
         working-directory: web/android
       - name: Verify the APK is signed with the expected key
         # The whole point of the stable key is that every APK can update the
@@ -101,19 +120,45 @@ jobs:
             -storepass "$ANDROID_KEYSTORE_PASSWORD" -alias "$ANDROID_KEY_ALIAS" \
             | sha256sum | cut -d" " -f1)
           ACTUAL=$(python3 .github/scripts/apk_cert.py \
-            web/android/app/build/outputs/apk/debug/app-debug.apk)
+            web/android/app/build/outputs/apk/release/app-release.apk)
           echo "keystore cert: $EXPECT"
           echo "apk cert:      $ACTUAL"
           [ "$EXPECT" = "$ACTUAL" ] || {
             echo "::error::APK is not signed with the stable key — it could not update an installed app"; exit 1; }
+      - name: Check the APK is what it claims to be
+        # From the APK itself: the versionCode decided above, not debuggable,
+        # no backup, the permissions a ride needs and no more, and the plugins
+        # cap sync was meant to include.
+        run: >-
+          bash .github/scripts/check_apk.sh
+          web/android/app/build/outputs/apk/release/app-release.apk
+          ${{ steps.version.outputs.version_code }}
       - name: Rename APK
-        run: cp web/android/app/build/outputs/apk/debug/app-debug.apk family-bike-router.apk
+        # The name the updater and the install page link to.
+        run: cp web/android/app/build/outputs/apk/release/app-release.apk family-bike-router.apk
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: family-bike-router-apk
           path: family-bike-router.apk
+
+  # Publishes a tag's APK. The only job with write access, and it runs no build
+  # code: it downloads the artifact the apk job made and hands it to GitHub.
+  release:
+    needs: apk
+    if: startsWith(github.ref, 'refs/tags/app-v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      # the mirror-refresh step dispatches pages.yml, and gh workflow run is an
+      # Actions API write. Without this it fails with a 403 — and it would fail
+      # exactly when a release needs mirroring, which is the whole point.
+      actions: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: family-bike-router-apk
       - name: Attach to release (tags only)
-        if: startsWith(github.ref, 'refs/tags/app-v')
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           files: family-bike-router.apk
@@ -134,7 +179,7 @@ jobs:
         # no deploy runs, every phone keeps being offered the previous version.
         # Using the release event needs a PAT on the release step instead.
         # https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow
-        if: startsWith(github.ref, 'refs/tags/app-v')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh workflow run pages.yml --ref main
+        # --repo: this job has no checkout for gh to read the repository from
+        run: gh workflow run pages.yml --ref main --repo "${{ github.repository }}"

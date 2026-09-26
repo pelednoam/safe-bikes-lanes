@@ -10,6 +10,7 @@ None of it runs in a unit test otherwise — it runs once, in CI, on a tag.
 
 from __future__ import annotations
 
+import importlib.util
 import re
 import shutil
 import subprocess
@@ -57,9 +58,12 @@ def test_the_apk_build_step_is_given_the_tag() -> None:
     doesn't set it, every APK is versionCode 1 again and nothing about the build
     looks wrong. The tag was set on the bundle step and not on this one.
     """
-    gradle_steps = [
-        s for s in steps(APK_WORKFLOW) if "gradlew" in str(s.get("run", ""))
-    ]
+    all_steps = steps(APK_WORKFLOW)
+    version = [s for s in all_steps if s.get("id") == "version"]
+    assert version and "app_version.py" in str(version[0].get("run", "")), (
+        "the version is no longer decided by .github/scripts/app_version.py"
+    )
+    gradle_steps = [s for s in all_steps if "gradlew" in str(s.get("run", ""))]
     assert gradle_steps, "no Gradle step in the APK workflow"
     for step in gradle_steps:
         env = step.get("env") or {}
@@ -67,9 +71,15 @@ def test_the_apk_build_step_is_given_the_tag() -> None:
             f"the step {step.get('name')!r} runs Gradle without APP_VERSION — "
             "versionCode would silently be 1"
         )
-        assert "ref_name" in str(env["APP_VERSION"]), (
-            "APP_VERSION is not the tag; github.ref_name is what carries app-vNN"
+        # Not github.ref_name: on a Run-workflow build that is "main", which is
+        # versionCode 1 and a version string the updater cannot read.
+        assert "steps.version.outputs.app_version" in str(env["APP_VERSION"]), (
+            "APP_VERSION is not the decided version"
         )
+        # a release build: debug is debuggable, and debuggable means WebView
+        # remote debugging into the app's storage
+        assert "assembleRelease" in str(step["run"]), "the APK is not a release build"
+        assert "assembleDebug" not in str(step["run"])
 
 
 @pytest.mark.skipif(shutil.which("java") is None, reason="no JVM to run Groovy with")
@@ -95,7 +105,8 @@ def test_the_version_code_expression_survives_a_malformed_tag() -> None:
     {rule}
     def cases = [["app-v50", 50], ["app-v7", 7], ["app-v123", 123], ["", 1],
                  ["dev", 1], ["app-vX", 1], ["v50", 1], ["app-v50-rc1", 1],
-                 ["refs/tags/app-v50", 1]]
+                 ["refs/tags/app-v50", 1], ["app-v52-dev.1a2b3c4", 52],
+                 ["app-v52-dev.", 1], ["app-v52-dev.XYZ1234", 1], ["main", 1]]
     def bad = cases.findAll {{ releaseCode(it[0]) != it[1] }}
     println(bad.isEmpty() ? "ALL OK" : "MISMATCH " + bad)
     """
@@ -165,3 +176,46 @@ def test_the_app_reads_its_own_stamp_before_the_servers() -> None:
         "the live build.json is fetched from cache, so a stale page would compare "
         "itself against an equally stale answer and report agreement"
     )
+
+
+def _app_version() -> Any:
+    spec = importlib.util.spec_from_file_location(
+        "app_version", ROOT / ".github" / "scripts" / "app_version.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_a_tag_build_is_its_tag() -> None:
+    decide = _app_version().decide
+    assert decide("refs/tags/app-v53", "app-v53", "1a2b3c4d5e", []) == ("app-v53", 53)
+    # a release must never go out as versionCode 1
+    with pytest.raises(SystemExit):
+        decide("refs/tags/app-vX", "app-vX", "1a2b3c4d5e", [])
+
+
+def test_a_run_workflow_build_follows_the_newest_release() -> None:
+    """It was "main", versionCode 1: it could not install over app-v52, and the
+    updater could not parse "main" to offer app-v53. A trap on both ends."""
+    decide = _app_version().decide
+    tags = ["app-v9", "app-v52", "app-v48", "data-snapshot", "app-v52-rc", "v60"]
+    version, code = decide("refs/heads/main", "main", "1a2b3c4d5e6f7", tags)
+    assert (version, code) == ("app-v52-dev.1a2b3c4", 52)
+    # nothing to follow is an error, not a quiet versionCode 1
+    with pytest.raises(SystemExit):
+        decide("refs/heads/main", "main", "1a2b3c4d5e6f7", ["data-snapshot"])
+
+
+def test_the_dev_version_is_one_gradle_and_the_updater_both_read() -> None:
+    """Three readers of one string: build.gradle's versionCode, the in-app
+    updater's comparison, and a person reading the About box."""
+    version, code = _app_version().decide("refs/heads/x", "x", "abcdef1234", ["app-v52"])
+    gradle = GRADLE.read_text(encoding="utf-8")
+    pattern = re.search(r"tag =~ /(.+?)/\)", gradle)
+    assert pattern is not None, "releaseCode's pattern moved"
+    match = re.match(pattern.group(1), version)
+    assert match is not None and int(match.group(1)) == code
+    native = (ROOT / "web" / "src" / "native.ts").read_text(encoding="utf-8")
+    assert "-dev" in native, "the updater does not read development versions"

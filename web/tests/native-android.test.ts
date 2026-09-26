@@ -241,6 +241,21 @@ describe("Android's Back", () => {
   });
 });
 
+describe("a development build and the updater", () => {
+  it("is offered the next release, and not its own", async () => {
+    // A Run-workflow build used to be versioned "main", which the updater could
+    // not read — so it was never offered anything, ever.
+    installApp({});
+    const { isNewerAppVersion } = await import("../src/native.js");
+    expect(isNewerAppVersion("app-v52-dev.1a2b3c4", "app-v53")).toBe(true);
+    expect(isNewerAppVersion("app-v52-dev.1a2b3c4", "app-v52")).toBe(false);
+    expect(isNewerAppVersion("app-v52-dev.1a2b3c4", "app-v51")).toBe(false);
+    // a development build is never what is offered
+    expect(isNewerAppVersion("app-v52", "app-v53-dev.1a2b3c4")).toBe(false);
+    expect(isNewerAppVersion("main", "app-v53")).toBe(false);
+  });
+});
+
 describe("downloading an update", () => {
   it("names the file for its version, and only for a real one", async () => {
     installApp({});

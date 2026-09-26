@@ -412,14 +412,18 @@ function downloadInFrame(url: string): void {
   window.setTimeout(() => frame.remove(), 60_000);
 }
 
-/** True when `latest` is a newer app-vN tag than `current`. */
+/** True when `latest` is a newer app-vN tag than `current`.
+ *
+ * `current` may be a development build, "app-v52-dev.1a2b3c4": CI names one
+ * for the release it follows, so it is offered app-v53 like app-v52 would be.
+ * `latest` must be a real release. */
 export function isNewerAppVersion(current: string, latest: string): boolean {
-  const num = (v: string): number | null => {
-    const m = /^app-v(\d+)$/.exec(v.trim());
+  const num = (v: string, dev: boolean): number | null => {
+    const m = (dev ? /^app-v(\d+)(?:-dev\.[0-9a-f]{7,40})?$/ : /^app-v(\d+)$/).exec(v.trim());
     return m ? Number(m[1]) : null;
   };
-  const c = num(current);
-  const l = num(latest);
+  const c = num(current, true);
+  const l = num(latest, false);
   return c !== null && l !== null && l > c;
 }
 

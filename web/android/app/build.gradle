@@ -2,8 +2,13 @@ apply plugin: 'com.android.application'
 
 // app-v50 -> 50. Only a well-formed tag yields a code; anything else stays at 1
 // rather than throwing and taking the release down at its last step.
+//
+// A development build from CI is named for the release it follows
+// (app-v50-dev.1a2b3c4, see .github/scripts/app_version.py) and shares its
+// code, 50: Android installs an equal code over the installed app, and the next
+// release's higher one over it in turn.
 def releaseCode = { String tag ->
-    (tag =~ /^app-v(\d+)$/).with { it.matches() ? it.group(1).toInteger() : 1 }
+    (tag =~ /^app-v(\d+)(-dev\.[0-9a-f]{7,40})?$/).with { it.matches() ? it.group(1).toInteger() : 1 }
 }
 
 android {
@@ -57,7 +62,13 @@ android {
                 signingConfig signingConfigs.stable
             }
         }
+        // What CI publishes. Releases used to be assembleDebug output, and a
+        // debuggable app has Capacitor switch on WebView remote debugging: anyone
+        // with the phone and a USB cable could open the app's page in DevTools
+        // and read its storage — rides, saved places, home. Same stable key as
+        // before, so it installs over the debug-built releases already out there.
         release {
+            debuggable false
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
             if (keystoreFile.exists()) {
