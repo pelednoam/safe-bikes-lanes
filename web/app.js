@@ -664,6 +664,14 @@ async function locateStart(ticket, onFail) {
     return start;
 }
 async function requestRoute() {
+    // Mid-ride, a re-plan is a way on from here. Marking a sketchy street,
+    // filing a hazard or dragging a pin all end up here, and used to re-plan the
+    // whole trip from the start pin — which navigation then switched to, telling
+    // a rider a mile down the road to go back to the beginning.
+    if (navActive) {
+        replanRide();
+        return;
+    }
     const ticket = beginPlan();
     if (!end)
         return;
@@ -762,6 +770,8 @@ async function requestRoute() {
     }
 }
 async function requestLoop() {
+    if (navActive)
+        return; // a new round trip is not something to swap in mid-ride
     const ticket = beginPlan();
     await manifestReady;
     if (ticket.stale())
@@ -4072,6 +4082,25 @@ function rideOptionsFrom(r, from, bias) {
         // what is left of the loop is shorter than the way onto it: finish
     }
     return navDest === null ? null : planOptions(r, from, navDest, routePrefs(), bias);
+}
+/** Re-plan the ride from where the rider is, keeping where it is going: after
+ * something changed what the router must avoid. */
+function replanRide() {
+    if (!router || !navLastPos)
+        return;
+    try {
+        const found = rideOptionsFrom(router, navLastPos);
+        const first = found?.[0];
+        if (!found || !first)
+            return;
+        options = found;
+        selectOption(first.id);
+        rebuildNavFromSelected();
+    }
+    catch {
+        showRideAlert("⚠ couldn't re-plan from here — keep to the route", "gps");
+        window.setTimeout(hideRideAlert, 4000);
+    }
 }
 function rebuildNavFromSelected() {
     const sel = options.find((o) => o.id === selectedId);
