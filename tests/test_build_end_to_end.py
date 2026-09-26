@@ -299,3 +299,43 @@ def test_a_contraflow_street_can_be_ridden_both_ways(
     # the lane is on the contraflow side, and only there
     assert against[0]["cls"] == "lane"
     assert with_traffic[0]["cls"] == "quiet_street"
+
+
+def test_a_footpath_meeting_a_road_mid_block_is_joined_to_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The two networks are simplified separately, so the node where a path
+    meets a road partway along it is only a bend to the road and vanishes from
+    the bike graph: the path ended 0 m from the road and did not connect."""
+    from shapely.geometry import LineString
+
+    bike = nx.MultiDiGraph()
+    bike.graph["crs"] = "EPSG:4326"
+    bike.add_node(1, x=-71.1000, y=42.3800)
+    bike.add_node(2, x=-71.0980, y=42.3800)
+    road = [(-71.1000, 42.3800), (-71.0990, 42.3801), (-71.0980, 42.3800)]
+    for a, b, line in ((1, 2, road), (2, 1, road[::-1])):
+        bike.add_edge(a, b, osmid=12, highway="residential", name="Road St",
+                      geometry=LineString(line), length=170.0)
+
+    foot = nx.MultiDiGraph()
+    foot.graph["crs"] = "EPSG:4326"
+    foot.add_node(9, x=-71.0990, y=42.3801)  # the road's middle vertex
+    foot.add_node(10, x=-71.0990, y=42.3820)
+    for a, b in ((9, 10), (10, 9)):
+        foot.add_edge(a, b, osmid=910, highway="footway", bicycle="yes", length=210.0)
+
+    monkeypatch.setattr(
+        ox, "graph_from_bbox",
+        lambda *_a, **kw: foot if "custom_filter" in kw else bike.copy(),
+    )
+    g = build_graph.acquire_osm((-71.2, 42.3, -71.0, 42.5))
+    assert nx.has_path(g, 1, 10), "the path is still a dead end beside the road"
+    assert nx.has_path(g, 10, 2)
+    # the road runs through the junction, in both directions, with its length
+    # split between the pieces rather than duplicated
+    assert not g.has_edge(1, 2) and not g.has_edge(2, 1)
+    pieces = [g.edges[1, 9, 0], g.edges[9, 2, 0]]
+    assert sum(p["length"] for p in pieces) == pytest.approx(170.0, rel=0.05)
+    assert all(p["name"] == "Road St" for p in pieces)
+    assert g.edges[9, 1, 0]["geometry"].coords[0] == (-71.0990, 42.3801)

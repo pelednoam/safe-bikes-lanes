@@ -8,6 +8,7 @@ crash overlay adjust per-edge protection class and cost. Outputs:
   data/network.geojson  undirected edge layer for map display
 """
 
+import itertools
 import json
 import math
 import os
@@ -662,6 +663,79 @@ def with_overpass_retry(what: str, fetch: Callable[[], nx.MultiDiGraph]) -> nx.M
     raise RuntimeError(f"{what}: every Overpass mirror failed — last error: {last}")
 
 
+def _coord_key(x: float, y: float) -> tuple[int, int]:
+    """A node's position as an exact key: 1e-7 degrees is ~1 cm, and both sides
+    of the comparison are the same OSM node's stored coordinates."""
+    return (round(x * 1e7), round(y * 1e7))
+
+
+def _metres(coords: list[tuple[float, float]]) -> float:
+    total = 0.0
+    for (x1, y1), (x2, y2) in itertools.pairwise(coords):
+        total += float(ox.distance.great_circle(y1, x1, y2, x2))
+    return total
+
+
+def connect_midblock_junctions(graph: nx.MultiDiGraph, candidates: set[Any]) -> int:
+    """Join paths that meet a road partway along one of its edges.
+
+    The bike and footpath networks are downloaded and simplified separately,
+    so an OSM node where a footpath meets a road mid-block is simplified out
+    of the bike graph (to the road it is just a bend) while the footpath still
+    ends on it. The two then touch without connecting: the path is a dead end
+    0 m from the road it joins, and the router cannot turn onto it. Measured
+    on the current graph: 3,024 such junctions, 796 of them where a path ends
+    (the rest are paths crossing the road mid-block, joined to each other but
+    not to the road they cross).
+
+    `candidates` are the footpath nodes the bike graph did not have. Any that
+    sits on a vertex inside a bike edge's geometry is where that edge is split,
+    both directions, so the road passes through the junction node; the pieces
+    keep the edge's attributes with their own geometry and length.
+
+    This, rather than one simplify over both networks: the whole-area download
+    is simplified by osmnx on arrival, and holding the unsimplified graph to
+    simplify once would raise a peak that is already ~11 GB.
+    """
+    if not candidates:
+        return 0
+    at: dict[tuple[int, int], Any] = {}
+    for n in candidates:
+        nd = graph.nodes[n]
+        at[_coord_key(float(nd["x"]), float(nd["y"]))] = n
+    splits: list[tuple[Any, Any, Any, list[tuple[int, Any]]]] = []
+    for u, v, k, d in graph.edges(keys=True, data=True):
+        geom = d.get("geometry")
+        if not isinstance(geom, LineString) or u in candidates or v in candidates:
+            continue
+        coords = list(geom.coords)
+        cuts = [
+            (i, at[key])
+            for i in range(1, len(coords) - 1)
+            if (key := _coord_key(coords[i][0], coords[i][1])) in at
+        ]
+        if cuts:
+            splits.append((u, v, k, cuts))
+    for u, v, k, cuts in splits:
+        d = graph.edges[u, v, k]
+        coords = [(float(x), float(y)) for x, y in d["geometry"].coords]
+        ux, uy = float(graph.nodes[u]["x"]), float(graph.nodes[u]["y"])
+        if _coord_key(ux, uy) != _coord_key(*coords[0]) and _coord_key(
+            ux, uy
+        ) == _coord_key(*coords[-1]):
+            coords.reverse()
+            cuts = [(len(coords) - 1 - i, n) for i, n in reversed(cuts)]
+        stops = [(0, u), *cuts, (len(coords) - 1, v)]
+        graph.remove_edge(u, v, k)
+        for (i, a), (j, b) in itertools.pairwise(stops):
+            piece = coords[i : j + 1]
+            attrs = dict(d)
+            attrs["geometry"] = LineString(piece)
+            attrs["length"] = _metres(piece)
+            graph.add_edge(a, b, **attrs)
+    return len(splits)
+
+
 def acquire_osm(bbox: tuple[float, float, float, float]) -> nx.MultiDiGraph:
     """Whole-area bike network + bike-permitted footpaths.
 
@@ -694,11 +768,14 @@ def acquire_osm(bbox: tuple[float, float, float, float]) -> nx.MultiDiGraph:
         print(f"  footpath layer failed ({e}) — bike graph only")
         return G
     # add only footpath nodes/edges the bike graph lacks (bike precedence)
-    G.add_nodes_from((n, d) for n, d in gf.nodes(data=True) if n not in G)
+    new_nodes = {n for n in gf.nodes if n not in G}
+    G.add_nodes_from((n, d) for n, d in gf.nodes(data=True) if n in new_nodes)
     G.add_edges_from(
         (u, v, k, d) for u, v, k, d in gf.edges(keys=True, data=True) if not G.has_edge(u, v, k)
     )
     del gf
+    joined = connect_midblock_junctions(G, new_nodes)
+    print(f"  joined footpaths to {joined} road edges they meet mid-block")
     return G
 
 
