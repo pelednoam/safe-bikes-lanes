@@ -427,3 +427,61 @@ def test_no_work_zone_key_is_not_a_failure(tmp_path: Path, monkeypatch: pytest.M
         monkeypatch.setattr(fetch, name, lambda: empty)
     assert fetch.fetch_all(refresh=True) == []
     assert not (tmp_path / "workzones.geojson").exists()
+
+
+def test_a_dead_corridor_server_uses_the_committed_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Somerville's GIS server was down all day. That held back every other
+    source's week, and building without the layer would have made the city's
+    high-crash corridors look safer than it says. A dead server now means the
+    committed copy, said out loud. Only for that layer: anything else that
+    fails still fails the run."""
+    monkeypatch.setattr(config, "RAW_DIR", tmp_path)
+
+    def down(url: str, *_a: Any, **_k: Any) -> dict[str, Any]:
+        if "somervillema" in url or "pois" in url:
+            raise OSError("timed out")
+        return {"type": "FeatureCollection", "features": []}
+
+    monkeypatch.setattr(fetch, "arcgis_query", down)
+    monkeypatch.setattr(
+        fetch, "_get", lambda *_a, **_k: b'{"type":"FeatureCollection","features":[]}'
+    )
+    for name in (
+        "fetch_towns",
+        "fetch_population",
+        "fetch_workzones",
+        "fetch_cambridge_permits",
+        "fetch_mapc",
+    ):
+        monkeypatch.setattr(fetch, name, lambda: {"type": "FeatureCollection", "features": []})
+
+    def pois_down() -> dict[str, Any]:
+        raise OSError("timed out")
+
+    monkeypatch.setattr(fetch, "fetch_pois", pois_down)
+
+    failures = fetch.fetch_all(refresh=True)
+
+    # the corridors came from the copy, and the sidecar says so
+    corridors = tmp_path / "somerville_high_crash_corridors.geojson"
+    committed = fetch.FALLBACK_DIR / "somerville_high_crash_corridors.geojson"
+    assert json.loads(corridors.read_text()) == json.loads(committed.read_text())
+    meta = json.loads((tmp_path / "somerville_high_crash_corridors.geojson.meta.json").read_text())
+    assert meta["source"].startswith("committed copy of 2026-07-24")
+    assert "::warning::somerville_high_crash_corridors.geojson" in capsys.readouterr().out
+    # and a source with no copy still fails the run
+    assert [name for name, _ in failures] == ["pois.geojson"]
+
+
+def test_the_committed_corridors_are_a_real_layer() -> None:
+    """A fallback that is empty, or whose sidecar lost its date, would build a
+    graph without the corridors while every log said it had them."""
+    data = json.loads((fetch.FALLBACK_DIR / "somerville_high_crash_corridors.geojson").read_text())
+    meta = json.loads(
+        (fetch.FALLBACK_DIR / "somerville_high_crash_corridors.geojson.meta.json").read_text()
+    )
+    assert len(data["features"]) == meta["features"] > 0
+    assert all(f["geometry"] is not None for f in data["features"])
+    assert meta["retrieved"][:4] == "2026"

@@ -120,7 +120,8 @@ CENSUS_BLOCKGROUPS_URL: Final[str] = (
 SOMERVILLE_MOBILITY3: Final[str] = (
     "https://maps.somervillema.gov/arcgis/rest/services/Mobility3/MapServer"
 )
-SOMERVILLE_HIGH_CRASH_LAYERS: Final[dict[str, int]] = {"intersections": 7, "corridors": 13}
+# Layer 7 (high-crash intersections) was fetched too, and nothing ever read it.
+SOMERVILLE_HIGH_CRASH_LAYERS: Final[dict[str, int]] = {"corridors": 13}
 
 # Construction sources (verified 2026-07-21).
 # Cambridge street/excavation permits (Socrata; geocoded, status + start/end).

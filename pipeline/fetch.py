@@ -14,6 +14,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any, Final
 
 import config
@@ -348,6 +349,35 @@ def fetch_mapc() -> GeoJSON:
     return {"type": "FeatureCollection", "features": features}
 
 
+# Sources that change slowly enough that a known copy beats going without.
+# Somerville's high-crash corridors are the city's own analysis, revised
+# rarely, and they raise the crash penalty on the streets they name. On
+# 2026-09-26 the city's GIS server was unreachable all day. Failing the
+# refresh held back every other source's week of changes, and building
+# without the layer would have made those corridors look safer than the city
+# says they are. A copy is used only when the live fetch fails. The run says
+# so, with the copy's date, and the sidecar records it.
+FALLBACK_DIR: Final[Path] = Path(__file__).parent / "fallback"
+FALLBACKS: Final[frozenset[str]] = frozenset({"somerville_high_crash_corridors.geojson"})
+
+
+def _use_fallback(name: str, error: Exception) -> bool:
+    """Save the committed copy of `name` in place of a failed fetch, if it has one."""
+    path = FALLBACK_DIR / name
+    if name not in FALLBACKS or not path.exists():
+        return False
+    meta = json.loads((FALLBACK_DIR / f"{name}.meta.json").read_text())
+    copied = str(meta.get("retrieved", "?"))[:10]
+    _save(
+        name,
+        json.loads(path.read_text()),
+        f"committed copy of {copied} (live fetch failed: {error})",
+    )
+    # a GitHub Actions annotation, so it shows on the run's page, not only in its log
+    print(f"::warning::{name}: live fetch failed ({error}); using the committed copy of {copied}")
+    return True
+
+
 def fetch_all(refresh: bool = False) -> list[tuple[str, str]]:
     """Fetch every source; return the ones that failed.
 
@@ -368,9 +398,6 @@ def fetch_all(refresh: bool = False) -> list[tuple[str, str]]:
         "mapc_bike_network.geojson": fetch_mapc,
         "massdot_bike_inventory.geojson": lambda: arcgis_query(config.MASSDOT_BIKE_INVENTORY),
         "massdot_lts.geojson": lambda: arcgis_query(config.MASSDOT_LTS),
-        "somerville_high_crash_intersections.geojson": lambda: arcgis_query(
-            f"{config.SOMERVILLE_MOBILITY3}/{config.SOMERVILLE_HIGH_CRASH_LAYERS['intersections']}"
-        ),
         "somerville_high_crash_corridors.geojson": lambda: arcgis_query(
             f"{config.SOMERVILLE_MOBILITY3}/{config.SOMERVILLE_HIGH_CRASH_LAYERS['corridors']}"
         ),
@@ -402,6 +429,8 @@ def fetch_all(refresh: bool = False) -> list[tuple[str, str]]:
         try:
             _save(name, job(), name)
         except Exception as e:
+            if _use_fallback(name, e):
+                continue
             failures.append((name, str(e)))
             print(f"  {name}: FAILED - {e}", file=sys.stderr)
     if failures:
