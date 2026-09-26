@@ -238,6 +238,47 @@ describe("loop planning", () => {
     expect(poi?.properties.name).toBe("Toy Park");
   });
 
+  it("comes back a different way than it went out", () => {
+    // Two quiet ways between home (0) and the park (1): via 2, 140 m, and via
+    // 3, 161 m. Out takes the shorter; the return leg has to see that riding
+    // it backwards is the same street — its edges are the reverse ones, with
+    // different indices — or it just retraces it.
+    const dlon = 1 / (111_320 * Math.cos((42.38 * Math.PI) / 180));
+    const dlat = 1 / 110_540;
+    const r = new Router({
+      nodes: [
+        [-71.1, 42.38, 10],
+        [-71.1 + 100 * dlon, 42.38, 10],
+        [-71.1 + 50 * dlon, 42.38 - 40 * dlat, 10],
+        [-71.1 + 50 * dlon, 42.38 + 60 * dlat, 10],
+      ],
+      names: ["", "South Way", "North Way"],
+      classes: [...CLASSES],
+      edges: [
+        edge(0, 2, 70, "quiet_street", 1),
+        edge(2, 0, 70, "quiet_street", 1),
+        edge(2, 1, 70, "quiet_street", 1),
+        edge(1, 2, 70, "quiet_street", 1),
+        edge(0, 3, 80, "quiet_street", 2),
+        edge(3, 0, 80, "quiet_street", 2),
+        edge(3, 1, 81, "quiet_street", 2),
+        edge(1, 3, 81, "quiet_street", 2),
+      ],
+      geoms: [],
+    });
+    const pois: PoiFeature[] = [
+      {
+        type: "Feature",
+        geometry: { type: "Point", coordinates: [-71.1 + 100 * dlon, 42.38] },
+        properties: { kind: "playground", name: "The Park" },
+      },
+    ];
+    const { option } = r.loopRoute([-71.1, 42.38], 300, pois, "young_kids", false);
+    const names = option.payload.geojson.features.map((f) => f.properties.name);
+    expect(names).toEqual(["South Way", "South Way", "North Way", "North Way"]);
+    expect(option.payload.summary.meters).toBe(301);
+  });
+
   it("fails clearly when the stop you asked for has none near enough", () => {
     // an empty candidate list is "you wanted a library and there isn't one",
     // which is worth saying out loud

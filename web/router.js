@@ -155,17 +155,209 @@ class MinHeap {
     }
 }
 // ---------------------------------------------------------------------------
+// nearest-point index
+// ---------------------------------------------------------------------------
+/** Metres per degree, as every distance in this file measures them. */
+const M_PER_DEG_LON_AT_EQUATOR = 111320;
+const M_PER_DEG_LAT = 110540;
+/** Grid cell edge in degrees: ~110 m north-south, ~80 m east-west here, which
+ * holds a handful of edge midpoints in a dense street grid. */
+const INDEX_CELL_DEG = 0.001;
+/** Relative and absolute give on the "nothing outside this ring can be
+ * closer" bound, so floating-point rounding in the bound can only make the
+ * search look one ring further, never stop one ring short. */
+const BOUND_SLACK_REL = 1e-9;
+const BOUND_SLACK_M = 1e-6;
+/** Nearest-point lookups over a fixed set of lon/lat points.
+ *
+ * Snapping used to scan every point for every query. That is fine for the
+ * start and end of a route and ruinous for the construction zones, which are
+ * snapped a vertex at a time — 55,956 of them against every edge of every tile
+ * loaded, on each router rebuild: 18.8 s here for Davis to Kendall, as
+ * one long task, and again every time a search result pulled in a new tile.
+ *
+ * The points go into a uniform grid, and a query searches outward in square
+ * rings of cells until nothing unsearched could be closer than the best found
+ * so far, or than maxM. The answer is the brute-force one exactly, ties
+ * included: the same metric (metres scaled at the query's latitude), and among
+ * equally near points the lowest index wins, as it did when the scan ran in
+ * index order and kept the first strict improvement.
+ */
+export class PointIndex {
+    constructor(xs, ys) {
+        this.xs = xs;
+        this.ys = ys;
+        const n = xs.length;
+        let minX = Infinity;
+        let minY = Infinity;
+        let maxX = -Infinity;
+        let maxY = -Infinity;
+        for (let i = 0; i < n; i++) {
+            const x = xs[i];
+            const y = ys[i];
+            // a non-finite point can never win a comparison, so it is never an
+            // answer and need not be stored
+            if (!Number.isFinite(x) || !Number.isFinite(y))
+                continue;
+            if (x < minX)
+                minX = x;
+            if (x > maxX)
+                maxX = x;
+            if (y < minY)
+                minY = y;
+            if (y > maxY)
+                maxY = y;
+        }
+        const empty = minX > maxX;
+        this.minX = empty ? 0 : minX;
+        this.minY = empty ? 0 : minY;
+        this.maxX = empty ? 0 : maxX;
+        this.maxY = empty ? 0 : maxY;
+        // A dense grid, so a lookup is arithmetic rather than a hash probe. Its
+        // cells are widened only if the points are spread so thin that the grid
+        // would dwarf them; the search is exact at any cell size.
+        let cellDeg = INDEX_CELL_DEG;
+        const cellsFor = (d) => (Math.floor((this.maxX - this.minX) / d) + 1) * (Math.floor((this.maxY - this.minY) / d) + 1);
+        const maxCells = 4 * n + 4096;
+        while (cellsFor(cellDeg) > maxCells)
+            cellDeg *= 2;
+        this.cellDeg = cellDeg;
+        this.cols = Math.floor((this.maxX - this.minX) / cellDeg) + 1;
+        this.rows = Math.floor((this.maxY - this.minY) / cellDeg) + 1;
+        // counting sort into cells, in index order so each cell lists ascending
+        const cellOf = new Int32Array(n).fill(-1);
+        const start = new Int32Array(this.cols * this.rows + 1);
+        if (!empty) {
+            for (let i = 0; i < n; i++) {
+                const x = xs[i];
+                const y = ys[i];
+                if (!Number.isFinite(x) || !Number.isFinite(y))
+                    continue;
+                const k = this.col(x) * this.rows + this.row(y);
+                cellOf[i] = k;
+                start[k + 1] = start[k + 1] + 1;
+            }
+        }
+        for (let k = 0; k < this.cols * this.rows; k++) {
+            start[k + 1] = start[k + 1] + start[k];
+        }
+        const fill = start.slice(0, -1);
+        const items = new Int32Array(start[this.cols * this.rows]);
+        for (let i = 0; i < n; i++) {
+            const k = cellOf[i];
+            if (k < 0)
+                continue;
+            items[fill[k]] = i;
+            fill[k] = fill[k] + 1;
+        }
+        this.items = items;
+        this.start = start;
+    }
+    /** Grid column/row of a stored point. The last column is col(maxX) by
+     * construction; the clamp only guards that promise. */
+    col(x) {
+        return Math.min(this.cols - 1, Math.floor((x - this.minX) / this.cellDeg));
+    }
+    row(y) {
+        return Math.min(this.rows - 1, Math.floor((y - this.minY) / this.cellDeg));
+    }
+    /** Index of the point nearest (lon, lat), or null when none is within maxM. */
+    nearest(lon, lat, maxM) {
+        if (this.items.length === 0)
+            return null;
+        const scaleX = Math.cos((lat * Math.PI) / 180) * M_PER_DEG_LON_AT_EQUATOR;
+        const scaleY = M_PER_DEG_LAT;
+        // Nowhere near any point at all — the usual case for a construction zone
+        // in a town no loaded tile covers — is answered without touching a cell.
+        const gapX = Math.max(this.minX - lon, 0, lon - this.maxX) * scaleX;
+        const gapY = Math.max(this.minY - lat, 0, lat - this.maxY) * scaleY;
+        const gap = Math.hypot(gapX, gapY) * (1 - BOUND_SLACK_REL) - BOUND_SLACK_M;
+        if (gap > maxM)
+            return null;
+        const { xs, ys, items, start, cols, rows, cellDeg } = this;
+        // the query's cell, which may lie outside the grid (unclamped here)
+        const c0 = Math.floor((lon - this.minX) / cellDeg);
+        const r0 = Math.floor((lat - this.minY) / cellDeg);
+        let best = -1;
+        let bestD2 = Infinity;
+        const visit = (c, r) => {
+            const k = c * rows + r;
+            const end = start[k + 1];
+            for (let j = start[k]; j < end; j++) {
+                const i = items[j];
+                const dx = (xs[i] - lon) * scaleX;
+                const dy = (ys[i] - lat) * scaleY;
+                const d2 = dx * dx + dy * dy;
+                if (d2 < bestD2 || (d2 === bestD2 && i < best)) {
+                    bestD2 = d2;
+                    best = i;
+                }
+            }
+        };
+        // Rings that lie wholly outside the grid hold nothing, so start at the
+        // first one that reaches it, and walk only the part of each ring inside
+        // it: a query from far off costs rings across the data, not across the gap.
+        const kStart = Math.max(0, -c0, c0 - (cols - 1), -r0, r0 - (rows - 1));
+        for (let k = kStart;; k++) {
+            const cLo = Math.max(c0 - k, 0);
+            const cHi = Math.min(c0 + k, cols - 1);
+            const rLo = Math.max(r0 - k + 1, 0);
+            const rHi = Math.min(r0 + k - 1, rows - 1);
+            const rowAt = (r) => {
+                if (r >= 0 && r < rows)
+                    for (let c = cLo; c <= cHi; c++)
+                        visit(c, r);
+            };
+            const colAt = (c) => {
+                if (c >= 0 && c < cols)
+                    for (let r = rLo; r <= rHi; r++)
+                        visit(c, r);
+            };
+            rowAt(r0 - k);
+            if (k > 0) {
+                rowAt(r0 + k);
+                colAt(c0 - k);
+                colAt(c0 + k);
+            }
+            // the square searched so far covers the whole grid: nothing is left
+            if (c0 - k <= 0 && c0 + k >= cols - 1 && r0 - k <= 0 && r0 + k >= rows - 1)
+                break;
+            // Anything not yet searched is at least as far as the square's nearest
+            // side. A side on or past the grid's own edge has nothing beyond it, so
+            // it bounds nothing and is left out.
+            const sides = [];
+            if (c0 - k > 0)
+                sides.push((lon - (this.minX + (c0 - k) * cellDeg)) * scaleX);
+            if (c0 + k < cols - 1)
+                sides.push((this.minX + (c0 + k + 1) * cellDeg - lon) * scaleX);
+            if (r0 - k > 0)
+                sides.push((lat - (this.minY + (r0 - k) * cellDeg)) * scaleY);
+            if (r0 + k < rows - 1)
+                sides.push((this.minY + (r0 + k + 1) * cellDeg - lat) * scaleY);
+            const bound = Math.min(...sides) * (1 - BOUND_SLACK_REL) - BOUND_SLACK_M;
+            // strictly beyond: a point exactly as near as the best could still hold
+            // the lower index, and the brute force would have preferred it
+            if (bound > maxM || (best >= 0 && bound * bound > bestD2))
+                break;
+        }
+        return best >= 0 && bestD2 <= maxM * maxM ? best : null;
+    }
+}
+// ---------------------------------------------------------------------------
 // router
 // ---------------------------------------------------------------------------
 export class Router {
     constructor(data) {
-        /** "u,v" -> edge indices, for reverse-edge lookups */
-        this.uvIndex = new Map();
         this.sketchy = new Set();
         this.construction = new Set();
         /** Edges to cost as if already built, for "what if this were protected?".
          * Empty in every ordinary route: this is a question, not a setting. */
         this.upgraded = new Set();
+        // -- snapping --------------------------------------------------------------
+        /** Built on first use and kept for the Router's life: the graph never
+         * changes under a Router, a new tile set means a new Router. */
+        this.nodeIndex = null;
+        this.edgeIndex = null;
         this.g = data;
         this.adj = data.nodes.map(() => []);
         this.hillPen = new Float64Array(data.edges.length);
@@ -177,12 +369,6 @@ export class Router {
             const climb = e[8];
             const grade = e[2] > 0 ? climb / e[2] : 0;
             this.hillPen[i] = climb * HILL_EQUIV_M * (grade > STEEP_GRADE ? 2 : 1);
-            const key = `${e[0]},${e[1]}`;
-            const list = this.uvIndex.get(key);
-            if (list)
-                list.push(i);
-            else
-                this.uvIndex.set(key, [i]);
             const a = data.nodes[e[0]];
             const b = data.nodes[e[1]];
             if (a && b) {
@@ -246,41 +432,41 @@ export class Router {
         });
         return w;
     }
-    // -- snapping --------------------------------------------------------------
     nearestNode(lon, lat) {
-        const scaleX = Math.cos((lat * Math.PI) / 180) * 111320;
-        const scaleY = 110540;
-        let best = -1;
-        let bestD2 = Infinity;
-        this.g.nodes.forEach(([nx, ny], i) => {
-            const dx = (nx - lon) * scaleX;
-            const dy = (ny - lat) * scaleY;
-            const d2 = dx * dx + dy * dy;
-            if (d2 < bestD2) {
-                bestD2 = d2;
-                best = i;
-            }
-        });
-        if (best < 0 || bestD2 > MAX_SNAP_METERS ** 2) {
-            throw new Error("point is too far from the mapped bike network");
+        if (this.nodeIndex === null) {
+            const n = this.g.nodes.length;
+            const xs = new Float64Array(n);
+            const ys = new Float64Array(n);
+            this.g.nodes.forEach(([nx, ny], i) => {
+                xs[i] = nx;
+                ys[i] = ny;
+            });
+            this.nodeIndex = new PointIndex(xs, ys);
         }
+        const best = this.nodeIndex.nearest(lon, lat, MAX_SNAP_METERS);
+        if (best === null)
+            throw new Error("point is too far from the mapped bike network");
         return best;
     }
+    /** The edge whose midpoint is nearest (lon, lat), or null beyond maxM.
+     * Public for the tests that hold it to the brute-force answer. */
     nearestEdge(lon, lat, maxM) {
-        const scaleX = Math.cos((lat * Math.PI) / 180) * 111320;
-        const scaleY = 110540;
-        let best = -1;
-        let bestD2 = Infinity;
-        for (let i = 0; i < this.midX.length; i++) {
-            const dx = (this.midX[i] - lon) * scaleX;
-            const dy = (this.midY[i] - lat) * scaleY;
-            const d2 = dx * dx + dy * dy;
-            if (d2 < bestD2) {
-                bestD2 = d2;
-                best = i;
-            }
+        this.edgeIndex ?? (this.edgeIndex = new PointIndex(this.midX, this.midY));
+        return this.edgeIndex.nearest(lon, lat, maxM);
+    }
+    /** Edges running the other way along the same pair of nodes, in index order.
+     *
+     * Read off the far node's outgoing edges rather than kept in a "u,v" map:
+     * a node has a handful of edges, and building half a million key strings
+     * was the largest part of constructing a Router over a long session's tiles,
+     * which happens on every rebuild. */
+    reverseOf(e) {
+        const out = [];
+        for (const ei of this.adj[e[1]] ?? []) {
+            if (this.g.edges[ei]?.[1] === e[0])
+                out.push(ei);
         }
-        return best >= 0 && bestD2 <= maxM ** 2 ? best : null;
+        return out;
     }
     pointsToEdgeSet(points, snapM) {
         const set = new Set();
@@ -292,7 +478,7 @@ export class Router {
             const e = this.g.edges[ei];
             if (!e)
                 continue;
-            for (const rev of this.uvIndex.get(`${e[1]},${e[0]}`) ?? [])
+            for (const rev of this.reverseOf(e))
                 set.add(rev);
         }
         return set;
@@ -1034,7 +1220,7 @@ export class Router {
                 const e = this.g.edges[ei];
                 if (!e)
                     continue;
-                for (const rev of this.uvIndex.get(`${e[1]},${e[0]}`) ?? []) {
+                for (const rev of this.reverseOf(e)) {
                     reuse.set(rev, LOOP_REUSE_MULT);
                 }
             }
