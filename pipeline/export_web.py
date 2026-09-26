@@ -7,8 +7,12 @@ are fully client-side:
   names:   ["", "Main Street", ...]              deduped street names
   classes: ["path", ...]                         protection classes
   edges:   [[u, v, len_m, clsIdx, nameIdx, geomIdx, crashFactor, pen_m,
-             climb_m, busyRoad01], ...]
-           pen_m = busy-crossing penalty meters, climb_m = elevation gain u->v
+             climb_m, busyRoad01, roadClsIdx], ...]
+           pen_m = busy-crossing penalty meters, climb_m = elevation gain u->v,
+           roadClsIdx = the street's own class without its bike facility (an
+           index into the same table): a painted facility never costs more
+           than this class does. Appended last so a client that reads ten
+           fields is unaffected.
   geoms:   [[lon, lat, lon, lat, ...], ...]      flat coords, edge u->v order;
            geomIdx = -1 when the edge is a straight line between its nodes
 Also copies network.geojson + pois.geojson for map layers, writes
@@ -310,6 +314,7 @@ def _build_tile(
                 e[7],
                 e[8],
                 int(e[9]),
+                int(e[10]),
             ]
         )
     return {
@@ -477,6 +482,8 @@ def export() -> None:
                 round(float(d.get("xpen", 0.0)), 1),
                 round(float(d.get("climb", 0.0)), 1),
                 1 if d.get("road_busy") else 0,
+                # a graph from before road_cls existed: the class is its own floor
+                cls_index[d.get("road_cls", d["cls"])],
             ]
         )
 

@@ -2,7 +2,34 @@
 
 import config
 import pytest
-from build_graph import angle_diff, classify_osm, parse_maxspeed_mph, safer
+from build_graph import (
+    angle_diff,
+    classify_osm,
+    classify_road,
+    facility_multiplier,
+    parse_maxspeed_mph,
+    safer,
+)
+
+# (table, busy-lane, busy-buffered) for each profile the pipeline costs
+PROFILES = {
+    "kids": (
+        config.CLASS_MULTIPLIER,
+        config.BUSY_ROAD_LANE_MULTIPLIER,
+        config.BUSY_ROAD_BUFFERED_MULTIPLIER,
+    ),
+    "solo": (
+        config.SOLO_CLASS_MULTIPLIER,
+        config.SOLO_BUSY_ROAD_LANE_MULTIPLIER,
+        config.SOLO_BUSY_ROAD_BUFFERED_MULTIPLIER,
+    ),
+}
+
+
+def cost(tags: dict[str, object], profile: str = "kids") -> float:
+    cls, busy = classify_osm(tags)
+    table, busy_lane, busy_buffered = PROFILES[profile]
+    return facility_multiplier(cls, classify_road(tags), busy, table, busy_lane, busy_buffered)
 
 
 def test_class_tables_consistent() -> None:
@@ -21,11 +48,47 @@ def test_classify_cycleway() -> None:
     assert classify_osm({"highway": "primary"}) == ("busy_street", True)
     assert classify_osm({"highway": "primary", "cycleway:right": "track"}) == ("separated", True)
     assert classify_osm({"highway": "secondary", "cycleway": "lane"}) == ("lane", True)
+    # the class shown to riders is the facility that is there...
     assert classify_osm({"highway": "residential", "cycleway": "shared_lane"}) == (
         "sharrow",
         False,
     )
+    # ...but it is not priced above the street it is painted on (this test used
+    # to stop at the class, and the class alone priced it at 6.0 against 1.4)
+    assert cost({"highway": "residential", "cycleway": "shared_lane"}) == (
+        config.CLASS_MULTIPLIER["quiet_street"]
+    )
     assert classify_osm({"highway": "tertiary"}) == ("moderate_street", False)
+
+
+def test_a_sharrow_on_a_busy_road_costs_the_busy_road() -> None:
+    """A sharrow is a marking, not a space: on an arterial it cost 6.0 against
+    the bare arterial's 25 — a quarter of the price for the same traffic."""
+    for profile, (table, _lane, _buf) in PROFILES.items():
+        assert cost({"highway": "primary", "cycleway": "shared_lane"}, profile) == (
+            table["busy_street"]
+        ), profile
+    # lanes and buffered lanes on busy roads keep their own (still high) price
+    assert cost({"highway": "primary", "cycleway": "lane"}) == config.BUSY_ROAD_LANE_MULTIPLIER
+    assert cost({"highway": "secondary", "cycleway": "buffered_lane"}, "solo") == (
+        config.SOLO_BUSY_ROAD_BUFFERED_MULTIPLIER
+    )
+
+
+def test_paint_can_only_help() -> None:
+    """A marked facility never costs more than the same street without it.
+    Residential alone was 1.4; with a painted lane 3.0, with sharrows 6.0."""
+    for profile in PROFILES:
+        for highway in ("residential", "service", "tertiary", "primary", "unclassified"):
+            bare = cost({"highway": highway}, profile)
+            for mark in ("lane", "shared_lane", "buffered_lane", "track"):
+                marked = cost({"highway": highway, "cycleway": mark}, profile)
+                assert marked <= bare, (profile, highway, mark, marked, bare)
+    # and it still helps where it should: a lane on a moderate street is a lane
+    assert cost({"highway": "tertiary", "cycleway": "lane"}) == config.CLASS_MULTIPLIER["lane"]
+    assert cost({"highway": "residential", "cycleway": "lane"}) == (
+        config.CLASS_MULTIPLIER["quiet_street"]
+    )
 
 
 def test_a_separately_mapped_cycleway_does_not_protect_the_road() -> None:

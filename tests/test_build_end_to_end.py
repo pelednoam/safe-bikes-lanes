@@ -21,8 +21,11 @@ import osmnx as ox
 import pytest
 
 
-def tiny_osm() -> nx.MultiDiGraph:
-    """Six nodes in Cambridge: a quiet street, an arterial, and a path."""
+def tiny_osm(painted: bool = False) -> nx.MultiDiGraph:
+    """Six nodes in Cambridge: a quiet street, an arterial, and a path.
+
+    `painted` adds two more streets with markings on them: a residential
+    street with a painted lane and an arterial with sharrows."""
     g = nx.MultiDiGraph()
     g.graph["crs"] = "EPSG:4326"
     coords = {
@@ -32,9 +35,12 @@ def tiny_osm() -> nx.MultiDiGraph:
         4: (-71.0980, 42.3820),
         5: (-71.0960, 42.3820),
         6: (-71.0940, 42.3800),
+        7: (-71.1000, 42.3780),
+        8: (-71.0980, 42.3780),
     }
     for n, (x, y) in coords.items():
-        g.add_node(n, x=x, y=y, street_count=2)
+        if n <= 6 or painted:
+            g.add_node(n, x=x, y=y, street_count=2)
     def link(u: int, v: int, **tags: Any) -> None:
         for a, b in ((u, v), (v, u)):
             g.add_edge(a, b, osmid=a * 100 + b, **tags)
@@ -44,6 +50,9 @@ def tiny_osm() -> nx.MultiDiGraph:
     link(2, 4, highway="cycleway", name="The Path")
     link(4, 5, highway="cycleway", name="The Path")
     link(3, 6, highway="residential", name="Other St")
+    if painted:
+        link(1, 7, highway="residential", name="Painted St", cycleway="lane")
+        link(7, 8, highway="primary", name="Sharrow Ave", cycleway="shared_lane")
     # osmnx measures lengths during the download the real acquire_osm does;
     # use its own helper rather than inventing metres by hand
     return ox.distance.add_edge_lengths(g)
@@ -162,3 +171,49 @@ def test_an_edge_survives_the_round_trip_into_a_tile(
     # tiles duplicate edges that straddle a seam, so compare the sets
     assert set(tile_len) <= set(graph_len)
     assert set(graph_len) == set(tile_len)
+
+
+def test_markings_are_priced_against_the_street_they_are_painted_on(
+    sandbox: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Paint can only help, and a sharrow on an arterial is the arterial.
+
+    Before: the residential street with a painted lane cost 3.0 per metre
+    against 1.4 bare, and the arterial with sharrows 6.0 against 25."""
+    import json
+
+    monkeypatch.setattr(build_graph, "acquire_osm", lambda _bbox: tiny_osm(painted=True))
+    monkeypatch.setattr(export_web, "ElevationSampler", lambda: StubSampler())
+    build_graph.build()
+    with (sandbox / "graph.pkl").open("rb") as fh:
+        g: nx.MultiDiGraph = pickle.load(fh)
+    by_name = {d["name"]: d for _u, _v, d in g.edges(data=True)}
+
+    painted = by_name["Painted St"]
+    assert painted["cls"] == "lane"  # what is there is still what riders are told
+    assert painted["stress_mult"] == config.CLASS_MULTIPLIER["quiet_street"]
+    assert painted["road_cls"] == "quiet_street"
+
+    sharrow = by_name["Sharrow Ave"]
+    assert sharrow["cls"] == "sharrow"
+    assert sharrow["stress_mult"] == config.CLASS_MULTIPLIER["busy_street"]
+    assert sharrow["weight_solo"] / sharrow["length"] == pytest.approx(
+        config.SOLO_CLASS_MULTIPLIER["busy_street"] * sharrow["crash_factor"]
+    )
+
+    # the browser prices edges itself, so the street's own class has to reach it
+    web = tmp_path / "web-painted"
+    web.mkdir()
+    monkeypatch.setattr(export_web, "WEB_DATA", web)
+    export_web.export()
+    manifest = json.loads((web / "tiles" / "manifest.json").read_text())
+    table = manifest.get("classTable", manifest["classes"])
+    seen = False
+    for key in manifest["tiles"]:
+        tile = json.loads((web / "tiles" / f"{key}.json").read_text())
+        for e in tile["edges"]:
+            if tile["names"][e[4]] == "Painted St":
+                assert table[e[3]] == "lane"
+                assert table[e[10]] == "quiet_street"
+                seen = True
+    assert seen

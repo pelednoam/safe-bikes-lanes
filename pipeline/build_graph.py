@@ -14,7 +14,7 @@ import os
 import pickle
 import time
 from collections import Counter
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from datetime import UTC, datetime
 from typing import Any, Final
 
@@ -165,50 +165,107 @@ def multilane(tags: Mapping[str, Any]) -> bool:
     return n is not None and n >= MULTILANE_MIN_LANES
 
 
-def classify_osm(tags: Mapping[str, Any]) -> tuple[str, bool]:
-    """Base protection class from OSM tags alone, plus a busy-road flag.
+def classify_road(tags: Mapping[str, Any]) -> str:
+    """The class a way has on its own merits, before any bike facility.
 
-    Conservative: when a tag is a list (simplified edge spans several ways),
-    road class uses the worst part but a facility tag anywhere counts —
-    mixed segments are rare and short."""
+    This is the price floor for painted facilities: a lane or sharrow can only
+    make a street better than it already is (see facility_multiplier)."""
     hws: list[str] = [h for h in listy(tags.get("highway")) if h]
 
     def hw_in(group: set[str]) -> bool:
         return any(h in group for h in hws)
 
     if hws and all(h in PATHLIKE for h in hws):
-        return "path", False
-    cw: set[str] = set()
-    for key in ("cycleway", "cycleway:left", "cycleway:right", "cycleway:both"):
-        cw.update(v for v in listy(tags.get(key)) if v)
-    busy = hw_in(ROAD_BUSY)
-    # `track` is a protected lane on this carriageway. `separate` is the
-    # opposite claim: the bike facility is mapped as its own way beside the
-    # road, and the road carries none — that way gets its own edge and its own
-    # class, and the road is classified as the road it is. Reading `separate`
-    # as protection put 1,033 edge-directions (57 km) in the best class, 638 of
-    # them (35 km) bare arterial.
-    # `separated` is not an OSM value at all; it gets no benefit of the doubt.
-    if "track" in cw:
-        return "separated", busy
-    if "buffered_lane" in cw:
-        return "buffered", busy
-    if "lane" in cw:
-        return "lane", busy
-    if {"shared_lane", "share_busway"} & cw:
-        return "sharrow", busy
-    if busy:
-        return "busy_street", True
+        return "path"
+    if hw_in(ROAD_BUSY):
+        return "busy_street"
     if hw_in(ROAD_MODERATE):
-        return "moderate_street", False
+        return "moderate_street"
     if hw_in({"service"}):
-        return "service", False
+        return "service"
     ms = parse_maxspeed_mph(tags.get("maxspeed"))
     if ms is not None and ms > 30:
-        return "moderate_street", False
+        return "moderate_street"
     if multilane(tags):
-        return "moderate_street", False
-    return "quiet_street", False
+        return "moderate_street"
+    return "quiet_street"
+
+
+def facility_class(values: Iterable[Any]) -> str | None:
+    """The protection class a set of `cycleway*` values describes, if any.
+
+    `track` is a protected lane on this carriageway. `separate` is the opposite
+    claim: the bike facility is mapped as its own way beside the road, and the
+    road carries none — that way gets its own edge and its own class, and the
+    road is classified as the road it is. Reading `separate` as protection put
+    1,033 edge-directions (57 km) in the best class, 638 of them (35 km) bare
+    arterial. `separated` is not an OSM value at all; it gets no benefit of the
+    doubt."""
+    cw = {str(v) for v in values if v}
+    if "track" in cw:
+        return "separated"
+    if "buffered_lane" in cw:
+        return "buffered"
+    if "lane" in cw:
+        return "lane"
+    if {"shared_lane", "share_busway"} & cw:
+        return "sharrow"
+    return None
+
+
+CYCLEWAY_KEYS: Final[tuple[str, ...]] = (
+    "cycleway", "cycleway:left", "cycleway:right", "cycleway:both",
+)
+
+
+def classify_osm(tags: Mapping[str, Any]) -> tuple[str, bool]:
+    """Base protection class from OSM tags alone, plus a busy-road flag.
+
+    Conservative: when a tag is a list (simplified edge spans several ways),
+    road class uses the worst part but a facility tag anywhere counts —
+    mixed segments are rare and short."""
+    road = classify_road(tags)
+    if road == "path":
+        return "path", False
+    busy = road == "busy_street"
+    values: list[Any] = []
+    for key in CYCLEWAY_KEYS:
+        values.extend(listy(tags.get(key)))
+    return facility_class(values) or road, busy
+
+
+def facility_multiplier(
+    cls: str,
+    road_cls: str,
+    busy: bool,
+    table: Mapping[str, float],
+    busy_lane: float,
+    busy_buffered: float,
+) -> float:
+    """What riding an edge of class `cls` costs per metre, for one profile.
+
+    Two rules on top of the class table:
+
+    On a busy road, paint buys little: a lane or buffered lane there has its own
+    (higher) price, and a sharrow — a marking, not a space — buys nothing, so it
+    costs what the busy road costs. It used to cost 6.0, a quarter of the bare
+    arterial it is painted on.
+
+    And paint can only help. A marked facility never costs more than the same
+    street without it: a residential street was 1.4 bare, 3.0 with a painted
+    lane and 6.0 with sharrows, so the router steered families off quiet streets
+    because someone had improved them. `road_cls` is the street's own class
+    (classify_road), and the class shown to riders stays the facility.
+    """
+    m = table[cls]
+    if busy:
+        if cls == "lane":
+            m = busy_lane
+        elif cls == "buffered":
+            m = busy_buffered
+        elif cls == "sharrow":
+            m = table["busy_street"]
+    return min(m, table[road_cls])
 
 
 # ---------------------------------------------------------------------------
@@ -412,6 +469,12 @@ def overrides_overlay() -> gpd.GeoDataFrame | None:
 # build
 # ---------------------------------------------------------------------------
 
+# MassDOT LTS 3-4 on a street we think is calm: one step more stressful.
+LTS_ESCALATION: Final[dict[str, str]] = {
+    "quiet_street": "moderate_street",
+    "moderate_street": "busy_street",
+}
+
 FOOT_FILTER: Final[str] = (
     '["highway"~"footway|pedestrian|path"]["bicycle"~"yes|designated|permissive"]'
 )
@@ -505,9 +568,13 @@ def build() -> None:
     mem("after graph_to_gdfs")
 
     # base classification from OSM tags
-    base = [classify_osm(t) for t in edges.to_dict("records")]
+    records = edges.to_dict("records")
+    base = [classify_osm(t) for t in records]
     edges["cls"] = [c for c, _ in base]
     edges["road_busy"] = [b for _, b in base]
+    # the street's own class, without its facility: what paint is priced against
+    edges["road_cls"] = [classify_road(t) for t in records]
+    del records
     edges["is_pathlike"] = edges["cls"] == "path"
     edges["source"] = "osm"
     edges["lts"] = 0
@@ -557,10 +624,15 @@ def build() -> None:
             edges.iat[i, edges.columns.get_loc("lts")] = score
             if score >= 3:
                 cur = edges.iloc[i]["cls"]
-                new = {"quiet_street": "moderate_street", "moderate_street": "busy_street"}.get(cur)
+                new = LTS_ESCALATION.get(cur)
                 if new:
                     edges.iat[i, edges.columns.get_loc("cls")] = new
                     escalated += 1
+                # and the street under any paint: a painted lane on a street
+                # MassDOT rates LTS 3 must not be priced as a quiet street
+                road = edges.iloc[i]["road_cls"]
+                if road in LTS_ESCALATION:
+                    edges.iat[i, edges.columns.get_loc("road_cls")] = LTS_ESCALATION[road]
         print(f"  escalated {escalated} edges via LTS>=3")
 
     # manual overrides trump everything (can downgrade too)
@@ -572,6 +644,8 @@ def build() -> None:
         for i, pos in enumerate(matches):
             if pos is not None:
                 edges.iat[i, edges.columns.get_loc("cls")] = exploded.iloc[pos]["cls"]
+                # an override is a person saying what the street is, all of it
+                edges.iat[i, edges.columns.get_loc("road_cls")] = exploded.iloc[pos]["cls"]
                 edges.iat[i, edges.columns.get_loc("source")] = "override"
 
     # crash density
@@ -617,24 +691,23 @@ def build() -> None:
             edges.iat[i, cf] = min(edges.iat[i, cf] * config.SOMERVILLE_HIGH_CRASH_FACTOR, cap)
         print(f"  {len(flagged)} edges inside Somerville high-crash corridors")
 
-    # class multiplier, with busy-road override for painted facilities
-    def edge_mult(row: "pd.Series[Any]") -> float:
-        if row["road_busy"] and row["cls"] == "lane":
-            return config.BUSY_ROAD_LANE_MULTIPLIER
-        if row["road_busy"] and row["cls"] == "buffered":
-            return config.BUSY_ROAD_BUFFERED_MULTIPLIER
-        return mult(row["cls"])
-
-    def edge_mult_solo(row: "pd.Series[Any]") -> float:
-        if row["road_busy"] and row["cls"] == "lane":
-            return config.SOLO_BUSY_ROAD_LANE_MULTIPLIER
-        if row["road_busy"] and row["cls"] == "buffered":
-            return config.SOLO_BUSY_ROAD_BUFFERED_MULTIPLIER
-        return config.SOLO_CLASS_MULTIPLIER[row["cls"]]
-
     mem("after crash join")
-    edges["stress_mult"] = edges.apply(edge_mult, axis=1)
-    edges["stress_mult_solo"] = edges.apply(edge_mult_solo, axis=1)
+    triples = list(zip(edges["cls"], edges["road_cls"], edges["road_busy"], strict=True))
+    edges["stress_mult"] = [
+        facility_multiplier(
+            c, r, bool(b), config.CLASS_MULTIPLIER,
+            config.BUSY_ROAD_LANE_MULTIPLIER, config.BUSY_ROAD_BUFFERED_MULTIPLIER,
+        )
+        for c, r, b in triples
+    ]
+    edges["stress_mult_solo"] = [
+        facility_multiplier(
+            c, r, bool(b), config.SOLO_CLASS_MULTIPLIER,
+            config.SOLO_BUSY_ROAD_LANE_MULTIPLIER, config.SOLO_BUSY_ROAD_BUFFERED_MULTIPLIER,
+        )
+        for c, r, b in triples
+    ]
+    del triples
 
     # node crossing penalties: nodes touching a busy street
     busy_nodes: set[int] = set()
@@ -679,6 +752,7 @@ def build() -> None:
         # back into one (crash_factor saturates at CRASH_FACTOR_CAP)
         data["crash_count"] = int(row["crash_count"])
         data["cls"] = row["cls"]
+        data["road_cls"] = row["road_cls"]
         data["stress_mult"] = float(row["stress_mult"])
         data["crash_factor"] = float(row["crash_factor"])
         data["weight"] = float(
