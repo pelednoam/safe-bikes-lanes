@@ -244,6 +244,23 @@ let builtTileCount = -1;
  * is happening, and show the one that has a denominator.
  */
 let onTileProgress;
+/** Say something to a screen reader without putting it on screen.
+ *
+ * Route results, grades and search answers all arrive by redrawing part of the
+ * panel, which a screen reader does not notice: a blind parent asked for a
+ * route and heard nothing at all. `delayMs` lets a burst — a list redrawn on
+ * every keystroke — settle into one announcement. */
+let announceTimer;
+function announce(text, delayMs = 0) {
+    window.clearTimeout(announceTimer);
+    announceTimer = window.setTimeout(() => {
+        const box = document.getElementById("sr-status");
+        if (box === null)
+            return;
+        // the same words twice in a row are only announced if the node changes
+        box.textContent = box.textContent === text ? `${text}\u00a0` : text;
+    }, delayMs);
+}
 function showStage(text, sub = "") {
     const box = el("loading");
     box.innerHTML =
@@ -775,8 +792,11 @@ function clearOptionChips() {
 }
 /** Selectable grade·time chips on the map, one per alternative (Google-style,
  * but the lead label is the safety grade, not the ETA). */
+let chipToFocus = null;
 function renderOptionChips() {
     clearOptionChips();
+    const refocus = chipToFocus;
+    chipToFocus = null;
     if (options.length < 2)
         return; // no choice to make
     options.forEach((o, i) => {
@@ -792,10 +812,25 @@ function renderOptionChips() {
         chip.style.setProperty("--g", GRADE_COLORS[o.grade]);
         chip.textContent = `${o.grade} · ${o.payload.summary.minutes} min`;
         chip.title = `${o.label}: ${o.gradeReason}`;
+        // reachable and pressable from a keyboard, like the cards they mirror
+        chip.tabIndex = 0;
+        chip.setAttribute("role", "button");
+        chip.setAttribute("aria-pressed", String(o.id === selectedId));
+        chip.setAttribute("aria-label", `${o.label}: grade ${o.grade}, ${o.payload.summary.minutes} minutes`);
         chip.addEventListener("click", (ev) => {
             ev.stopPropagation();
             selectOption(o.id);
         });
+        chip.addEventListener("keydown", (ev) => {
+            if (ev.key !== "Enter" && ev.key !== " ")
+                return;
+            ev.preventDefault();
+            ev.stopPropagation();
+            chipToFocus = o.id; // the chips are rebuilt; keep the focus on this one
+            selectOption(o.id);
+        });
+        if (refocus === o.id)
+            window.setTimeout(() => chip.focus(), 0);
         optionChips.push(new maplibregl.Marker({ element: chip }).setLngLat(pt).addTo(map));
     });
 }
@@ -872,12 +907,18 @@ function selectOption(id) {
         renderOptions();
         renderOptionChips();
         showSummary(chosen);
+        const s = chosen.payload.summary;
+        announce(`${chosen.label} route, grade ${chosen.grade}: ${fmtDist(s.meters)}, ${s.minutes} min, ` +
+            `${s.pct_protected}% protected.` +
+            (options.length > 1 ? ` ${options.length} route options.` : ""));
     });
     if (wasNavigating && navActive) {
         // keep the spoken guidance on the line that is actually drawn
         rebuildNavFromSelected();
     }
 }
+/** The card to give focus back to once the cards are rebuilt. */
+let optionToFocus = null;
 function renderOptions() {
     const box = el("options");
     box.innerHTML = "";
@@ -886,6 +927,13 @@ function renderOptions() {
         return;
     }
     box.style.display = "block";
+    // One choice among several: a radio group to assistive tech, and walked with
+    // the arrow keys. They were click-only divs, so a keyboard could not pick
+    // Balanced or Direct at all.
+    box.setAttribute("role", "radiogroup");
+    box.setAttribute("aria-label", "Route options");
+    const refocus = optionToFocus;
+    optionToFocus = null;
     if (options.length > 1) {
         const head = document.createElement("div");
         head.className = "options-head";
@@ -923,6 +971,33 @@ function renderOptions() {
         card.addEventListener("click", () => {
             selectOption(o.id);
         });
+        const selected = o.id === selectedId;
+        card.setAttribute("role", "radio");
+        card.setAttribute("aria-checked", String(selected));
+        // one tab stop for the group, on the chosen one — the radio pattern
+        card.tabIndex = selected ? 0 : -1;
+        card.addEventListener("keydown", (ev) => {
+            const i = options.findIndex((x) => x.id === o.id);
+            const step = ev.key === "ArrowDown" || ev.key === "ArrowRight"
+                ? 1
+                : ev.key === "ArrowUp" || ev.key === "ArrowLeft"
+                    ? -1
+                    : 0;
+            const target = step !== 0
+                ? options[(i + step + options.length) % options.length]
+                : ev.key === "Enter" || ev.key === " "
+                    ? o
+                    : undefined;
+            if (target === undefined)
+                return;
+            ev.preventDefault();
+            // the cards are rebuilt when the panel repaints; keep the focus with the
+            // choice rather than dropping it on the page
+            optionToFocus = target.id;
+            selectOption(target.id);
+        });
+        if (refocus === o.id)
+            window.setTimeout(() => card.focus(), 0);
         // hovering a card previews that route on the map
         card.addEventListener("mouseenter", () => {
             getSource("route").setData(o.payload.geojson);
@@ -1662,8 +1737,10 @@ function renderSearchResults(rows, target = "end") {
     gradeGen++; // abandon grading for whatever list was here before
     if (rows.length === 0) {
         box.textContent = "no results in this area";
+        announce("no results in this area", 700);
         return;
     }
+    announce(`${rows.length} place${rows.length === 1 ? "" : "s"} found`, 700);
     const grading = [];
     for (const r of rows) {
         const row = document.createElement("div");
@@ -2720,6 +2797,9 @@ function setSheet(state) {
     panel.style.maxHeight = "";
     panel.classList.remove("peek", "half", "full");
     panel.classList.add(state);
+    const handle = el("sheet-handle");
+    handle.setAttribute("aria-expanded", String(state !== "peek"));
+    handle.setAttribute("aria-label", `Panel size: ${state === "peek" ? "collapsed" : state === "half" ? "half open" : "fully open"}`);
 }
 function currentSheet() {
     const panel = el("panel");
@@ -2777,6 +2857,27 @@ function currentSheet() {
     };
     handle.addEventListener("pointerup", end);
     handle.addEventListener("pointercancel", end);
+    // From a keyboard (or a switch, or a screen reader's double-tap, which
+    // arrives as a click with no pointer before it): Enter and Space step through
+    // the sizes as a tap does; the arrows open and close.
+    handle.addEventListener("click", (e) => {
+        if (e.detail !== 0)
+            return; // a real pointer tap, already handled by end()
+        const next = SHEET_STATES[(SHEET_STATES.indexOf(currentSheet()) + 1) % 3];
+        setSheet(next ?? "half");
+    });
+    handle.addEventListener("keydown", (e) => {
+        const i = SHEET_STATES.indexOf(currentSheet());
+        const to = e.key === "ArrowUp"
+            ? SHEET_STATES[Math.min(2, i + 1)]
+            : e.key === "ArrowDown"
+                ? SHEET_STATES[Math.max(0, i - 1)]
+                : undefined;
+        if (to === undefined)
+            return;
+        e.preventDefault();
+        setSheet(to);
+    });
     // some WebViews revoke capture mid-gesture; without this the sheet sticks
     handle.addEventListener("lostpointercapture", end);
 })();

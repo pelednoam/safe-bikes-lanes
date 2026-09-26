@@ -66,8 +66,12 @@
     --bg:var(--solid); --fg:var(--ink); --border:var(--line);
     --btn-bg:var(--field); --hover:rgba(17,22,25,.08); --sel-bg:var(--accent-soft);
     --caution:#b3261e; --ok:#12833f;
+    /* native controls — inputs, selects, sliders, scrollbars — follow the
+       page's theme, not the browser's default white */
+    color-scheme: light;
   }
   body.dark {
+    color-scheme: dark;
     --ink:#e9eef1; --muted:#93a1aa; --line:rgba(255,255,255,.13);
     --surface:rgba(19,23,27,.84); --solid:#13171b; --field:rgba(255,255,255,.07);
     --shadow: 0 1px 2px rgba(0,0,0,.5), 0 14px 34px -10px rgba(0,0,0,.6);
@@ -83,13 +87,30 @@
   :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
 
   /* ── Panel ─────────────────────────────────────────────────────────── */
+  /* Insets: viewport-fit=cover hands this page the whole screen, including
+     what sits under the status bar, the notch or Dynamic Island, and — in
+     landscape — the side the camera is on. The iOS home-screen app draws its
+     status bar translucent over the page, and Android 15+ runs the app edge to
+     edge. Everything pinned to an edge adds the inset for that edge. */
   #panel {
-    position:absolute; top:12px; left:12px; z-index:5; width:346px;
+    position:absolute; z-index:5; width:346px;
+    top:calc(12px + env(safe-area-inset-top)); left:calc(12px + env(safe-area-inset-left));
     background:var(--surface); color:var(--ink);
     -webkit-backdrop-filter:blur(22px) saturate(1.6); backdrop-filter:blur(22px) saturate(1.6);
     border:1px solid var(--line); border-radius:var(--r-lg); box-shadow:var(--shadow);
     padding:14px; font-size:14.5px; line-height:1.45;
-    max-height:calc(100% - 24px); overflow-y:auto; overscroll-behavior:contain;
+    max-height:calc(100% - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+    overflow-y:auto; overscroll-behavior:contain;
+  }
+  .maplibregl-ctrl-top-right { top:env(safe-area-inset-top); right:env(safe-area-inset-right); }
+  .maplibregl-ctrl-top-left { top:env(safe-area-inset-top); left:env(safe-area-inset-left); }
+  .maplibregl-ctrl-bottom-left { left:env(safe-area-inset-left); }
+  .maplibregl-ctrl-bottom-right { right:env(safe-area-inset-right); }
+  /* Present to a screen reader, absent from the screen. */
+  .sr-only {
+    position:absolute !important; width:1px !important; height:1px !important;
+    padding:0 !important; margin:-1px !important; overflow:hidden !important;
+    clip:rect(0 0 0 0) !important; white-space:nowrap !important; border:0 !important;
   }
   #panel h1 {
     font-size:16px; font-weight:700; letter-spacing:-.012em; margin:0 0 3px;
@@ -150,16 +171,22 @@
     display:flex; gap:2px; background:var(--field); border-radius:var(--r-pill);
     padding:3px; margin:10px 0;
   }
-  #modes label {
-    flex:1; margin:0; text-align:center; padding:7px 4px; border-radius:var(--r-pill);
-    font-size:13.5px; font-weight:600; color:var(--muted); cursor:pointer;
+  #modes label { flex:1; display:flex; margin:0; cursor:pointer; position:relative; }
+  #modes label > span {
+    flex:1; display:flex; align-items:center; justify-content:center;
+    padding:7px 4px; border-radius:var(--r-pill);
+    font-size:13.5px; font-weight:600; color:var(--muted);
     white-space:nowrap; transition:background .16s ease, color .16s ease;
   }
-  #modes input { position:absolute; opacity:0; width:0; height:0; }
-  #modes label:has(input:checked) {
+  /* visually gone but still focusable and still a radio to assistive tech */
+  #modes input { position:absolute; opacity:0; width:1px; height:1px; margin:0; }
+  #modes input:checked + span {
     background:var(--solid); color:var(--ink); box-shadow:0 1px 3px rgba(10,14,18,.16);
   }
-  #modes label:hover:not(:has(input:checked)) { color:var(--ink); }
+  /* the radios are invisible, so without this a keyboard user moving through
+     them saw nothing move */
+  #modes input:focus-visible + span { outline:2px solid var(--accent); outline-offset:1px; }
+  #modes label:hover > input:not(:checked) + span { color:var(--ink); }
 
   /* ── Route options — the selected one is the hero ──────────────────── */
   #options { margin:12px 0 4px; }
@@ -330,7 +357,10 @@
     /* without border-box the 24 px padding pushed #hazard to 398 px on a 390 px
        phone, so the dialog hung off the side of the screen */
     box-sizing:border-box;
-    max-width:560px; width:calc(100% - 40px); max-height:85vh;
+    max-width:560px; width:calc(100% - 40px);
+    /* dvh: Safari's toolbars come and go, and 85vh of the LARGE viewport ran
+       the dialog's bottom — its buttons — under them */
+    max-height:85vh; max-height:85dvh;
     background:var(--solid); color:var(--ink); border:none; border-radius:var(--r-lg);
     padding:20px 24px; font-size:14px; font-family:var(--font);
     box-shadow:0 24px 60px -12px rgba(10,14,18,.45);
@@ -360,14 +390,21 @@
     border:1px solid var(--line); border-radius:var(--r-md); box-shadow:var(--shadow);
     padding:9px 13px; font-size:13.5px; font-weight:500;
   }
-  #data-update { top:12px; left:50%; transform:translateX(-50%); }
-  #update-banner { top:12px; right:12px; z-index:7; gap:9px; align-items:center; }
+  #data-update { top:calc(12px + env(safe-area-inset-top)); left:50%; transform:translateX(-50%); }
+  /* Beside the panel, not over it: centred on the whole window, it sat on the
+     346 px panel at every width from 761 to about 900. Centred over the map. */
+  @media (min-width: 761px) and (min-height: 501px) {
+    #data-update { left:calc(370px + env(safe-area-inset-left) + (100% - 370px) / 2); }
+  }
+  #update-banner { top:calc(12px + env(safe-area-inset-top));
+    right:calc(12px + env(safe-area-inset-right)); z-index:7; gap:9px; align-items:center; }
 
   /* ── Navigation banner: read at arm's length, at speed ─────────────── */
   /* Compact by default — it sits over the map, so it shows the turn and the
      ETA and nothing else until the rider asks for the controls. */
   #nav-banner {
-    display:none; position:absolute; top:12px; left:50%; transform:translateX(-50%);
+    display:none; position:absolute; top:calc(12px + env(safe-area-inset-top));
+    left:50%; transform:translateX(-50%);
     z-index:6; background:var(--surface); color:var(--ink);
     -webkit-backdrop-filter:blur(22px) saturate(1.6); backdrop-filter:blur(22px) saturate(1.6);
     border:1px solid var(--line); border-radius:var(--r-lg); box-shadow:var(--shadow);
@@ -391,7 +428,7 @@
      street is not aiming precisely, and spread across the width because the
      thumb arrives from either side. */
   #ride-dock {
-    display:none; position:absolute; left:0; right:0;
+    display:none; position:absolute; left:env(safe-area-inset-left); right:env(safe-area-inset-right);
     bottom:calc(10px + env(safe-area-inset-bottom)); z-index:7;
     justify-content:space-evenly; align-items:center; gap:6px; padding:6px;
     /* The band is the dock's. With pointer-events:none the gaps between the
@@ -549,18 +586,32 @@
     #panel {
       top:auto; bottom:0; left:0; right:0; width:auto; max-height:52%;
       border-radius:var(--r-lg) var(--r-lg) 0 0; border-bottom:none; font-size:14.5px;
-      padding:4px 14px calc(14px + env(safe-area-inset-bottom));
+      /* sideways too: in landscape the notch and the navigation bar are on
+         the sheet's left and right */
+      padding:4px calc(14px + env(safe-area-inset-right)) calc(14px + env(safe-area-inset-bottom))
+              calc(14px + env(safe-area-inset-left));
       transition:max-height .2s ease;
     }
     #panel.dragging { transition:none;
     }
-    /* the map already says where you are — the title and blurb are desktop-only */
-    #panel h1, #panel .hint { display:none; }
-    /* h1 goes, ℹ stays — it's the only way into the explanation from a phone */
-    #panel-head { justify-content:flex-end; margin-bottom:6px; }
+    /* The map already says where you are, so the title and blurb leave the
+       screen — but not the page: a screen reader still finds the heading.
+       display:none took the only heading there was. Only the intro blurb, too:
+       "#panel .hint" also hid every other hint in the panel, including the
+       result of the voice test and of a backup. */
+    #panel h1, #intro-hint {
+      position:absolute; width:1px; height:1px; margin:-1px; padding:0; overflow:hidden;
+      clip:rect(0 0 0 0); white-space:nowrap; border:0;
+    }
+    /* h1 goes, ℹ stays — it's the only way into the explanation from a phone.
+       It sits at the end of the grabber's row rather than on a row of its own,
+       which is what lets it be a full 44 px without pushing "Where to?" out of
+       the collapsed sheet. */
+    #panel-head { position:absolute; top:4px; right:calc(14px + env(safe-area-inset-right));
+      z-index:1; margin:0; }
     #panel.peek { max-height:168px; overflow:hidden; }
     #panel.half { max-height:52%; }
-    #panel.full { max-height:88%; }
+    #panel.full { max-height:min(88%, calc(100% - 8px - env(safe-area-inset-top))); }
     /* While searching (see enterSearchMode), the answers go directly under the
        field. The results list is rendered after the whole origin/destination
        block, so the round-trip block sat between "Where to?" and its own
@@ -570,8 +621,9 @@
     /* The grabber is a thin bar, but the TARGET is the full width of the
        sheet top — a 4px-tall hit area is close to undraggable with a thumb. */
     #sheet-handle {
-      display:block; width:100%; height:28px; margin:0 0 2px; position:relative;
-      touch-action:none; cursor:grab; background:none;
+      display:block; width:100%; height:44px; min-height:0; margin:0 0 2px; padding:0;
+      position:relative; touch-action:none; cursor:grab; background:none; border:0;
+      border-radius:var(--r-sm);
     }
     #sheet-handle::before {
       content:""; position:absolute; left:50%; top:10px; transform:translateX(-50%);
@@ -579,8 +631,31 @@
     }
     #sheet-handle:active { cursor:grabbing; }
     #sheet-handle:active::before { opacity:.75; }
-    button, select, input[type="search"] { min-height:40px; }
-    #modes label { padding:9px 4px; }
+    /* 44 px: Apple's and Google's minimum for a thumb, and the size at which a
+       parent holding a bike with the other hand stops mis-tapping. */
+    button, select, input[type="search"], input[type="number"], input[type="text"],
+    input[type="password"], input[type="range"] { min-height:44px; box-sizing:border-box; }
+    #about-top { width:44px; height:44px; min-width:44px; }
+    #loop-row input[type=number] { width:5.2em; }
+    .section > summary, #why summary { min-height:44px; }
+    #build-weights > summary { padding:12px 0; }
+    .od-row button, #panel select { min-width:44px; }
+    .search-row button, #rides td button, .sketchy-row button, .layer-head button {
+      min-width:44px; min-height:44px; }
+    #hazard input, #hazard select, #hazard textarea { min-height:44px; }
+    .maplibregl-ctrl-group button { width:44px; height:44px; }
+    /* Mid-ride these were 23 px tall: min-height:0 on the base rule beat the
+       phone minimum. They are the only way to see or change "my way". */
+    #nav-flags button { min-height:44px; padding:0 14px; font-size:14px; }
+    #nav-flags { gap:8px; }
+    #modes label > span { min-height:44px; padding:0 4px; box-sizing:border-box; }
+  }
+  /* iOS zooms the whole page when a field under 16 px takes focus, and leaves it
+     zoomed — the map, the sheet and the keyboard all shift. Any touch screen,
+     not only a narrow one: an iPad does it too. */
+  @media (max-width: 760px), (max-height: 500px), (pointer: coarse) {
+    #panel input, #panel select, #panel textarea, dialog input, dialog select,
+    dialog textarea { font-size:16px; }
   }
   button, input, select, label { touch-action:manipulation; }
   @media (prefers-reduced-motion: reduce) {
@@ -673,14 +748,19 @@
     </div>
   </div>
 </div>
-<div id="panel">
-  <div id="sheet-handle" title="drag to resize"></div>
+<!-- main: the one landmark a screen reader can jump to; the map is a canvas
+     it can say nothing useful about -->
+<main id="panel" aria-label="Plan a ride">
+  <!-- A button, so it can be reached and worked without a thumb: Enter or
+       Space steps it through the sizes, the arrow keys open and close it. -->
+  <button id="sheet-handle" type="button" title="drag to resize"
+          aria-label="Panel size" aria-controls="panel" aria-expanded="false"></button>
   <div id="panel-head">
     <h1>Family Bike Router</h1>
     <button id="about-top" type="button" aria-label="About — how safety is decided"
             title="About — how safety is decided, data sources and freshness">ℹ</button>
   </div>
-  <div class="hint">Cambridge, Somerville &amp; nearby towns — safety first. Search or tap the map for where you’re headed; routes start from your location.</div>
+  <div class="hint" id="intro-hint">Cambridge, Somerville &amp; nearby towns — safety first. Search or tap the map for where you’re headed; routes start from your location.</div>
   <div id="od">
     <div class="od-row">
       <input id="from-field" type="search" placeholder="Your location" autocomplete="off"
@@ -724,12 +804,19 @@
     <summary>🕘 Recent routes</summary>
     <div id="recent-list"></div>
   </details>
-  <div id="modes">
-    <label><input type="radio" name="profile" value="young_kids" checked> young kids</label>
-    <label><input type="radio" name="profile" value="older_kids"> older kids</label>
-    <label><input type="radio" name="profile" value="solo"> solo</label>
+  <!-- The text is in a span beside the radio so the selected pill can be drawn
+       with "input:checked + span", which every browser has, rather than only
+       with label:has(), which Firefox before 121 lacks — there the choice was
+       invisible, since the radios themselves are hidden. -->
+  <div id="modes" role="radiogroup" aria-label="Who's riding">
+    <label><input type="radio" name="profile" value="young_kids" checked><span>young kids</span></label>
+    <label><input type="radio" name="profile" value="older_kids"><span>older kids</span></label>
+    <label><input type="radio" name="profile" value="solo"><span>solo</span></label>
   </div>
-  <div id="loading">routing…</div>
+  <!-- Said aloud as it changes: which stage the wait is at, what the route
+       came out as, and what went wrong. None of it was, before. -->
+  <div id="sr-status" class="sr-only" role="status" aria-live="polite"></div>
+  <div id="loading" role="status" aria-live="polite">routing…</div>
   <div id="options" style="display:none"></div>
   <div id="summary">
     <div id="fingerprint">
@@ -757,7 +844,7 @@
       <button id="offline-btn" title="Pre-download the map tiles along this route so it works with no signal">⬇ Offline map</button>
     </details>
   </div>
-  <div id="error"></div>
+  <div id="error" role="alert"></div>
   <div class="row"><button id="reset">Reset</button><button id="swap">⇄ Swap A/B</button></div>
 
   <details class="section">
@@ -924,7 +1011,7 @@
     <button id="about-btn">ℹ How safety is decided</button>
     <button id="rides-btn" title="Your ride history and stats (stored on this device only)">📊 Rides</button>
   </div>
-</div>
+</main>
 <dialog id="rides">
   <button id="rides-close" title="close">✕</button>
   <h2>Your rides</h2>
