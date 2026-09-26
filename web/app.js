@@ -1,5 +1,5 @@
 import { CARTO_ATTRIBUTION, CARTO_MAXZOOM, CARTO_TILES, createBasemap, VENDORED_FONT_STACK, } from "./basemap.js";
-import { askForRideNotifications, isNativeApp, isNewerAppVersion, keepScreenOn, lastNativeSpeechError, locationAdvice, minimizeApp, nativeLocationAllowed, nativeSpeak, onAndroidBack, rideLocationState, startDownload, startBackgroundWatcher, stopBackgroundWatcher, webVoiceCount, } from "./native.js";
+import { askForRideNotifications, isNativeApp, isNewerAppVersion, keepScreenOn, lastNativeSpeechError, locationAdvice, minimizeApp, nativeLocationAllowed, nativeSpeak, onAndroidBack, rideLocationState, setSystemBarsDark, startDownload, startBackgroundWatcher, stopBackgroundWatcher, webVoiceCount, } from "./native.js";
 import { GEOCODE_DEBOUNCE_MS, geocodeDelayMs, matchScore, metresBetween, rank as rankSearch, describe as describeRow, worthGeocoding, } from "./search.js";
 import { CLASS_LABELS, cautionsHtml, clearPhotoCache, esc, FACILITY_CLASSES, nearestMapillary, fillSegmentPhoto as fillPhotoSlot, GRADE_COLORS, segmentHtml, } from "./segment.js";
 import { bearingDeg, buildAlerts, buildManeuvers, buildTrack, distM, snapToTrack, sunsetTime, trackBearingAhead, trackSlice, } from "./nav.js";
@@ -5097,6 +5097,7 @@ function applyBasemap() {
 function applyDark(dark) {
     document.body.classList.toggle("dark", dark);
     el("dark-mode").checked = dark;
+    setSystemBarsDark(dark); // the status bar icons follow the app's theme, not the phone's
     applyBasemap();
 }
 // Light by default: this is a daylight map, and the basemap + safety colours

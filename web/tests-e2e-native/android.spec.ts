@@ -296,6 +296,25 @@ test("the watcher's NOT_AUTHORIZED is explained by what is actually wrong", asyn
   expect(await calls(page)).not.toContain("AppShell.openLocationSettings");
 });
 
+// ── the status bar ─────────────────────────────────────────────────────────
+
+test("the status bar follows the app's dark mode, not the phone's", async ({ page }) => {
+  // Capacitor's default follows the phone's theme: white icons over the
+  // near-white map for anyone whose phone is in dark mode.
+  await page.emulateMedia({ colorScheme: "dark" }); // the phone is dark...
+  await androidShim(page);
+  await boot(page); // ...the app is light unless switched
+  const styles = (): Promise<unknown[]> =>
+    page.evaluate(() =>
+      window.__shell.args.filter((_a, i) => window.__shell.calls[i] === "SystemBars.setStyle"),
+    );
+  await expect.poll(styles).toEqual([{ style: "LIGHT" }]);
+  await page.evaluate(() => document.getElementById("dark-mode")?.click());
+  await expect.poll(styles).toEqual([{ style: "LIGHT" }, { style: "DARK" }]);
+  await page.evaluate(() => document.getElementById("dark-mode")?.click());
+  await expect.poll(styles).toEqual([{ style: "LIGHT" }, { style: "DARK" }, { style: "LIGHT" }]);
+});
+
 // ── the screen ─────────────────────────────────────────────────────────────
 
 test("the screen is held on for a ride, and let go when it ends", async ({ page }) => {

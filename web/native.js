@@ -116,6 +116,18 @@ export function onAndroidBack(handler) {
     void plugin.addListener("backButton", () => handler()).catch(() => undefined);
     return true;
 }
+/** Colour the status and navigation bar icons for the app's own theme.
+ *
+ * Capacitor's default follows the PHONE's theme, which is not the app's: the
+ * app is light unless dark mode is switched on inside it, so a phone in system
+ * dark mode drew white icons over the near-white map. "DARK" means a dark
+ * background, so light icons; "LIGHT" the reverse. A no-op on the website. */
+export function setSystemBarsDark(dark) {
+    const plugin = nativePlugin("SystemBars");
+    if (plugin === null || typeof plugin.setStyle !== "function")
+        return;
+    void plugin.setStyle({ style: dark ? "DARK" : "LIGHT" }).catch(() => undefined);
+}
 /** Send the app to the background, as Home would, rather than closing it. */
 export function minimizeApp() {
     const plugin = nativePlugin("App");

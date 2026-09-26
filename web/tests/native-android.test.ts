@@ -241,6 +241,29 @@ describe("Android's Back", () => {
   });
 });
 
+describe("the status bar", () => {
+  it("is styled from the app's theme, and light before the page says otherwise", async () => {
+    const got: unknown[] = [];
+    installApp({
+      SystemBars: {
+        setStyle: async (o: unknown) => {
+          got.push(o);
+        },
+      },
+    });
+    const { setSystemBarsDark } = await import("../src/native.js");
+    setSystemBarsDark(true);
+    setSystemBarsDark(false);
+    // "DARK" is Capacitor's word for a dark background, so light icons
+    await vi.waitFor(() => expect(got).toEqual([{ style: "DARK" }, { style: "LIGHT" }]));
+
+    // the shell's own default, used before app.js runs: the app's light
+    // theme, not "DEFAULT" (which follows the phone's theme)
+    const { default: config } = await import("../capacitor.config.js");
+    expect(config.plugins?.["SystemBars"]).toMatchObject({ style: "LIGHT" });
+  });
+});
+
 describe("keeping the screen on", () => {
   it("asks the app's window, and does nothing on the website", async () => {
     const got: unknown[] = [];

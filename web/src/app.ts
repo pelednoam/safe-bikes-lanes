@@ -31,6 +31,7 @@ import {
   nativeSpeak,
   onAndroidBack,
   rideLocationState,
+  setSystemBarsDark,
   startDownload,
   startBackgroundWatcher,
   stopBackgroundWatcher,
@@ -5415,6 +5416,7 @@ function applyBasemap(): void {
 function applyDark(dark: boolean): void {
   document.body.classList.toggle("dark", dark);
   el<HTMLInputElement>("dark-mode").checked = dark;
+  setSystemBarsDark(dark); // the status bar icons follow the app's theme, not the phone's
   applyBasemap();
 }
 
