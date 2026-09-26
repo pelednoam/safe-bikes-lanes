@@ -167,16 +167,30 @@ export class RideRecorder {
  * crash lost the whole thing. */
 const IN_PROGRESS_KEY = "rideInProgress";
 
+// Every storage call in here is guarded. Storage fills up, and a browser with
+// site data blocked throws on any access at all; saving a ride runs inside
+// ending one, and an exception there used to escape before the GPS watcher,
+// the wake lock and the ride screen were let go.
+
 export function stashInProgress(ride: RideSummary | null): void {
-  if (ride === null) localStorage.removeItem(IN_PROGRESS_KEY);
-  else localStorage.setItem(IN_PROGRESS_KEY, JSON.stringify(ride));
+  try {
+    if (ride === null) localStorage.removeItem(IN_PROGRESS_KEY);
+    else localStorage.setItem(IN_PROGRESS_KEY, JSON.stringify(ride));
+  } catch {
+    // full or blocked: the ride is still saved properly when it ends
+  }
 }
 
 /** Recover a ride that was underway when the app went away, and clear it.
  * Returns null when there was nothing worth keeping. */
 export function takeInProgress(): RideSummary | null {
-  const raw = localStorage.getItem(IN_PROGRESS_KEY);
-  localStorage.removeItem(IN_PROGRESS_KEY);
+  let raw: string | null;
+  try {
+    raw = localStorage.getItem(IN_PROGRESS_KEY);
+    localStorage.removeItem(IN_PROGRESS_KEY);
+  } catch {
+    return null;
+  }
   if (raw === null) return null;
   try {
     const ride = JSON.parse(raw) as RideSummary;
@@ -195,20 +209,58 @@ export function loadRides(): RideSummary[] {
   }
 }
 
+function tryStore(rides: RideSummary[]): boolean {
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify(rides));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Every other point, keeping both ends: the shape survives, the size halves. */
+function thinned(ride: RideSummary): RideSummary {
+  const p = ride.polyline;
+  if (p.length <= 2) return ride;
+  const kept = p.filter((_pt, i) => i % 2 === 0);
+  const last = p[p.length - 1];
+  if (last !== undefined && kept[kept.length - 1] !== last) kept.push(last);
+  return { ...ride, polyline: kept };
+}
+
+/** Add a ride to the history, newest first, and return what was stored.
+ *
+ * When storage is full the oldest rides go first, half at a time, and if the
+ * new ride alone still does not fit its drawn path is thinned until it does.
+ * The numbers — distance, time, how much was protected — are kept whole. It
+ * never throws: at worst the history is not written, and the caller is told by
+ * an empty list rather than by an exception in the middle of ending a ride. */
 export function saveRide(ride: RideSummary): RideSummary[] {
-  const rides = [ride, ...loadRides()].slice(0, MAX_RIDES);
-  localStorage.setItem(STORE_KEY, JSON.stringify(rides));
+  let rides = [ride, ...loadRides()].slice(0, MAX_RIDES);
+  while (!tryStore(rides)) {
+    if (rides.length > 1) {
+      rides = rides.slice(0, Math.ceil(rides.length / 2));
+      continue;
+    }
+    const only = rides[0];
+    if (only === undefined || only.polyline.length <= 2) return [];
+    rides = [thinned(only)];
+  }
   return rides;
 }
 
 export function deleteRide(id: string): RideSummary[] {
   const rides = loadRides().filter((r) => r.id !== id);
-  localStorage.setItem(STORE_KEY, JSON.stringify(rides));
+  tryStore(rides);
   return rides;
 }
 
 export function clearRides(): void {
-  localStorage.removeItem(STORE_KEY);
+  try {
+    localStorage.removeItem(STORE_KEY);
+  } catch {
+    // blocked: there is nothing stored to clear
+  }
 }
 
 export interface RideTotals {

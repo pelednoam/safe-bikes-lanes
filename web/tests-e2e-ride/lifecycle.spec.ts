@@ -3,7 +3,7 @@
 import { expect, test } from "@playwright/test";
 import type { Map as MLMap } from "maplibre-gl";
 
-import { installRider } from "./rider.js";
+import { installRider, ride } from "./rider.js";
 
 declare global {
   interface Window {
@@ -132,4 +132,33 @@ test("a new version of the app waits for the ride to end before reloading", asyn
   await expect
     .poll(() => page.evaluate(() => window.__marker).catch(() => undefined), { timeout: 30_000 })
     .toBeUndefined();
+});
+
+test("a ride ends cleanly even when storage is full", async ({ page }) => {
+  // Ending a ride saved it first, and a full store threw out of exitNav before
+  // the GPS watcher, the wake lock and the ride screen were let go — with the
+  // recorder already emptied, so the ride was lost too.
+  test.slow();
+  await installRider(page);
+  await planned(page);
+  const path = await page.evaluate(() => {
+    const src = window._map?.getSource("route") as
+      | { _data?: GeoJSON.FeatureCollection }
+      | undefined;
+    return (src?._data?.features ?? []).flatMap((f) =>
+      f.geometry.type === "LineString" ? (f.geometry.coordinates as [number, number][]) : [],
+    );
+  });
+  await startRide(page);
+  // far enough to be a ride worth saving
+  await ride(page, path, { speedKmh: 14, jitterM: 2, timeScale: 20, untilM: 600 });
+  await page.evaluate(() => {
+    Storage.prototype.setItem = (): never => {
+      throw new DOMException("The quota has been exceeded.", "QuotaExceededError");
+    };
+  });
+  await page.locator("#nav-exit").click();
+  await page.locator("#nav-ask-yes").click();
+  await expect(page.locator("#nav-banner")).toBeHidden();
+  expect(await page.evaluate(() => document.body.classList.contains("navigating"))).toBe(false);
 });

@@ -293,3 +293,88 @@ describe("ride history storage", () => {
     expect(kept[0]?.id).toBe("249"); // the newest survives the cap
   });
 });
+
+/** Storage that refuses writes past a size, the way a full browser store does. */
+class FullStorage extends MemoryStorage {
+  constructor(private readonly limit: number) {
+    super();
+  }
+  override setItem(k: string, v: string): void {
+    if (v.length > this.limit) {
+      throw new DOMException("The quota has been exceeded.", "QuotaExceededError");
+    }
+    super.setItem(k, v);
+  }
+}
+
+/** Storage the browser has blocked outright (cookies off, some private modes). */
+class BlockedStorage extends MemoryStorage {
+  override getItem(): string | null {
+    throw new DOMException("The operation is insecure.", "SecurityError");
+  }
+  override setItem(): void {
+    throw new DOMException("The operation is insecure.", "SecurityError");
+  }
+  override removeItem(): void {
+    throw new DOMException("The operation is insecure.", "SecurityError");
+  }
+}
+
+describe("saving a ride when storage is full", () => {
+  const withPath = (id: string, points: number): RideSummary => ({
+    id,
+    startedAt: "2026-08-05T10:00:00.000Z",
+    meters: 5000,
+    durationS: 1200,
+    movingS: 1100,
+    byClass: {},
+    pctProtected: 50,
+    pctQuiet: 20,
+    profile: "young_kids",
+    polyline: Array.from({ length: points }, (_v, i): [number, number] => [
+      -71.1 + i * 1e-4,
+      42.38,
+    ]),
+  });
+
+  it("drops the oldest rides to make room, and never throws", () => {
+    // Ending a ride saved it first, and a full store threw before the GPS, the
+    // wake lock and the screen were let go — with the recorder already emptied,
+    // so the ride was lost as well.
+    const store = new MemoryStorage();
+    (globalThis as unknown as { localStorage: MemoryStorage }).localStorage = store;
+    for (let i = 0; i < 20; i++) saveRide(withPath(`old${i}`, 100));
+    const full = new FullStorage((store.getItem("rideHistory") ?? "").length);
+    full.setItem("rideHistory", store.getItem("rideHistory") ?? "[]");
+    (globalThis as unknown as { localStorage: MemoryStorage }).localStorage = full;
+
+    let kept: RideSummary[] = [];
+    expect(() => {
+      kept = saveRide(withPath("today", 100));
+    }).not.toThrow();
+    expect(kept[0]?.id).toBe("today");
+    expect(loadRides()[0]?.id).toBe("today");
+    expect(loadRides().length).toBeLessThan(21);
+  });
+
+  it("keeps today's ride, thinned, when even it alone does not fit", () => {
+    const full = new FullStorage(4000);
+    (globalThis as unknown as { localStorage: MemoryStorage }).localStorage = full;
+    const kept = saveRide(withPath("today", 2000));
+    expect(kept.map((r) => r.id)).toEqual(["today"]);
+    expect(loadRides()[0]?.meters).toBe(5000);
+    expect(loadRides()[0]?.polyline.length).toBeLessThan(2000);
+  });
+
+  it("with storage blocked, saving and the in-progress stash are no-ops", () => {
+    (globalThis as unknown as { localStorage: MemoryStorage }).localStorage =
+      new BlockedStorage();
+    expect(() => saveRide(withPath("x", 10))).not.toThrow();
+    expect(() => stashInProgress(withPath("x", 10))).not.toThrow();
+    expect(() => stashInProgress(null)).not.toThrow();
+    expect(takeInProgress()).toBeNull();
+    expect(loadRides()).toEqual([]);
+    expect(() => deleteRide("x")).not.toThrow();
+    expect(() => clearRides()).not.toThrow();
+  });
+});

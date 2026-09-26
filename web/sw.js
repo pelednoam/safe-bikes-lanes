@@ -40,6 +40,7 @@ const ASSETS = [
   "segment.js",
   "sharecard.js",
   "speech.js",
+  "storage.js",
   "tiles.js",
   "types.js",
   "units.js",

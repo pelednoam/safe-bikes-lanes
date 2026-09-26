@@ -13,6 +13,7 @@ import { NetworkTiles, TileStore } from "./tiles.js";
 import { Lane, planOptions, withUpgraded } from "./planner.js";
 import { SpeechQueue } from "./speech.js";
 import { loopRejoinPoint, payloadLength, rejoinOption } from "./rejoin.js";
+import { readItem, readJson, removeItem, trimRecord, writeItem } from "./storage.js";
 import { DeferredReload, ScreenLock } from "./lifecycle.js";
 import { drawRideCard, drawTotalsCard, rideShareText, totalsShareText } from "./sharecard.js";
 // ---------------------------------------------------------------------------
@@ -75,7 +76,7 @@ function loadSketchy() {
     }
 }
 function saveSketchy(marks) {
-    localStorage.setItem(SKETCHY_KEY, JSON.stringify(marks));
+    writeItem(SKETCHY_KEY, JSON.stringify(marks));
     // this is exactly a change to what the router must avoid, so any grade
     // computed before it is now a claim about a route the app wouldn't plan
     avoidRevision++;
@@ -155,7 +156,10 @@ const AVOIDABLE = [
     ["moderate_street", "moderate streets"],
     ["busy_street", "busy streets"],
 ];
-let avoidTypes = new Set(JSON.parse(localStorage.getItem("avoidTypes") ?? "[]"));
+// Read at module level, so it must not throw: with site data blocked, the old
+// unguarded read here stopped the whole app on load (see storage.ts).
+const storedAvoid = readJson("avoidTypes", []);
+let avoidTypes = new Set(Array.isArray(storedAvoid) ? storedAvoid : []);
 /** Every routing choice the rider has made, as the router takes them — the one
  * place a reroute, a detour or a search grade reads them from (see planOptions). */
 function routePrefs() {
@@ -358,7 +362,7 @@ map.on("moveend", () => {
 void dataReady
     .then(() => loadJson("keys.json"))
     .then((keys) => {
-    mapillaryToken = localStorage.getItem("mapillaryToken") ?? keys.mapillary ?? "";
+    mapillaryToken = readItem("mapillaryToken") ?? keys.mapillary ?? "";
 })
     .catch(() => undefined);
 const constructionReady = dataReady
@@ -480,13 +484,17 @@ const autoNamed = { start: false, end: false };
 function revKey(lon, lat) {
     return `${lon.toFixed(4)},${lat.toFixed(4)}`;
 }
+/** Names worth remembering: enough for every place a family rides to, and
+ * small enough that the cache cannot crowd the ride history out of storage —
+ * it was never trimmed, and grew by a name for every pin ever dropped. */
+const REVGEO_MAX = 400;
 function revCache() {
-    try {
-        return JSON.parse(localStorage.getItem(REVGEO_KEY) ?? "{}");
-    }
-    catch {
-        return {};
-    }
+    return readJson(REVGEO_KEY, {});
+}
+function rememberName(cache, key, name) {
+    cache[key] = name;
+    // private mode or a full store: the name just won't be remembered
+    writeItem(REVGEO_KEY, JSON.stringify(trimRecord(cache, REVGEO_MAX)));
 }
 /** The router once it exists, or null if it hasn't within `ms`. */
 async function withRouter(ms) {
@@ -520,13 +528,7 @@ async function reverseGeocode(lon, lat) {
     // street it happens to sit beside.
     const local = (await withRouter(10000))?.streetNameAt(lon, lat, 20) ?? null;
     if (local !== null) {
-        cache[key] = local;
-        try {
-            localStorage.setItem(REVGEO_KEY, JSON.stringify(cache));
-        }
-        catch {
-            /* private mode: the name just won't be remembered */
-        }
+        rememberName(cache, key, local);
         return local;
     }
     const url = "https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18" +
@@ -544,15 +546,8 @@ async function reverseGeocode(lon, lat) {
         a["city"] ||
         (j.display_name ?? "").split(",")[0] ||
         "";
-    if (label !== "") {
-        cache[key] = label;
-        try {
-            localStorage.setItem(REVGEO_KEY, JSON.stringify(cache));
-        }
-        catch {
-            /* private mode: the name just won't be remembered */
-        }
-    }
+    if (label !== "")
+        rememberName(cache, key, label);
     return label === "" ? null : label;
 }
 /** Name an end in its field, unless the rider typed something there. */
@@ -3084,12 +3079,12 @@ el("prefer-flat").addEventListener("change", (e) => {
 });
 el("walk-max").addEventListener("change", (e) => {
     walkMaxM = Number(e.target.value);
-    localStorage.setItem("walkMaxM", String(walkMaxM));
+    writeItem("walkMaxM", String(walkMaxM));
     void requestRoute();
     regradeVisible();
 });
 // restore the persisted walking budget
-walkMaxM = Number(localStorage.getItem("walkMaxM") ?? "0") || 0;
+walkMaxM = Number(readItem("walkMaxM") ?? "0") || 0;
 el("walk-max").value = String(walkMaxM);
 for (const [cls] of AVOIDABLE) {
     const box = el(`avoid-${cls}`);
@@ -3099,7 +3094,7 @@ for (const [cls] of AVOIDABLE) {
             avoidTypes.add(cls);
         else
             avoidTypes.delete(cls);
-        localStorage.setItem("avoidTypes", JSON.stringify([...avoidTypes]));
+        writeItem("avoidTypes", JSON.stringify([...avoidTypes]));
         syncAvoidSummary();
         // Write the permalink NOW, not just when the reroute finishes: the URL is
         // parsed on load and overrides the stored preferences, so a reload (or a
@@ -3680,9 +3675,9 @@ el("mapillary-save").addEventListener("click", () => {
     const token = el("mapillary-token").value.trim();
     mapillaryToken = token;
     if (token === "")
-        localStorage.removeItem("mapillaryToken");
+        removeItem("mapillaryToken");
     else
-        localStorage.setItem("mapillaryToken", token);
+        writeItem("mapillaryToken", token);
     clearPhotoCache(); // the shared lookup holds misses fetched with the old token
     el("mapillary-status").textContent =
         token === "" ? "cleared" : "✓ saved — hover any street";
@@ -3866,7 +3861,7 @@ let navNextKm = 1;
 let navHalfway = false;
 let navLastRerouteAt = 0;
 /** "go with my street choice": reroutes respect the rider's direction. */
-let navMyWay = localStorage.getItem("navMyWay") === "1";
+let navMyWay = readItem("navMyWay") === "1";
 let navPrevPos = null;
 let navHeading = null;
 // --- smooth motion (the "feels like Google Maps" layer) -------------------
@@ -4701,7 +4696,14 @@ function exitNav() {
     // the ride's own queue goes first, so the line that closes it is not
     // cancelled the moment it starts ("ride saved…" was queued, then cleared)
     clearSpeech();
-    finishAndSaveRide();
+    // Saving never stands in the way of the ride ending: an exception here used
+    // to leave the ride screen up with the GPS and the wake lock still held.
+    try {
+        finishAndSaveRide();
+    }
+    catch (err) {
+        console.warn("ride not saved", err);
+    }
     document.body.classList.remove("navigating");
     el("nav-banner").style.display = "none";
     map.setLayoutProperty("route-done", "visibility", "none");
@@ -4785,7 +4787,7 @@ el("nav-resume").addEventListener("click", () => {
 el("nav-myway").classList.toggle("active", navMyWay);
 el("nav-myway").addEventListener("click", () => {
     navMyWay = !navMyWay;
-    localStorage.setItem("navMyWay", navMyWay ? "1" : "0");
+    writeItem("navMyWay", navMyWay ? "1" : "0");
     el("nav-myway").classList.toggle("active", navMyWay);
     speak(navMyWay
         ? "going your way: reroutes will follow your direction."
@@ -5192,10 +5194,10 @@ function applyDark(dark) {
 // Light by default: this is a daylight map, and the basemap + safety colours
 // are tuned for it. Dark is opt-in and remembered — following the phone's
 // system theme turned it on for riders who never asked for it.
-applyDark(localStorage.getItem(DARK_KEY) === "1");
+applyDark(readItem(DARK_KEY) === "1");
 el("dark-mode").addEventListener("change", (e) => {
     const dark = e.target.checked;
-    localStorage.setItem(DARK_KEY, dark ? "1" : "0");
+    writeItem(DARK_KEY, dark ? "1" : "0");
     applyDark(dark);
 });
 el("show-aerial").addEventListener("change", applyBasemap);
