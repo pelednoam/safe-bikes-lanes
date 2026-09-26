@@ -19,7 +19,6 @@ async function nativeShim(page: Page): Promise<void> {
       isNativePlatform: () => true,
       registerPlugin: (name: string) => {
         if (name === "TextToSpeech") return { speak: noop, stop: noop };
-        if (name === "Browser") return { open: noop };
         if (name === "BackgroundGeolocation") {
           return { addWatcher: async () => "w", removeWatcher: noop, openSettings: noop };
         }
@@ -226,7 +225,6 @@ async function mutePhone(page: Page): Promise<void> {
             stop: noop,
           };
         }
-        if (name === "Browser") return { open: noop };
         if (name === "BackgroundGeolocation") {
           return { addWatcher: async () => "w", removeWatcher: noop, openSettings: noop };
         }

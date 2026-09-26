@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<paths xmlns:android="http://schemas.android.com/apk/res/android">
-    <external-path name="my_images" path="." />
-    <cache-path name="my_cache_images" path="." />
+<!-- Only what the app actually hands out. Capacitor's WebView photographs into
+     getExternalFilesDir(Pictures) when the hazard form's camera input is used,
+     and shares that one file with the camera app through this provider. The
+     template shipped external-path "." — the whole of shared storage — and a
+     cache path nothing uses. -->
+<paths>
+    <external-files-path name="captured_photos" path="Pictures/" />
 </paths>

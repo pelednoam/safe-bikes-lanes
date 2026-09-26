@@ -17,7 +17,7 @@
     "test:coverage": "vitest run --coverage"
   },
   "devDependencies": {
-    "@capacitor/cli": "^8.4.2",
+    "@capacitor/cli": "^8.4.3",
     "@playwright/test": "^1.61.1",
     "@vitest/coverage-v8": "^4.1.10",
     "fake-indexeddb": "^6.2.5",
@@ -29,8 +29,7 @@
   "dependencies": {
     "@capacitor-community/background-geolocation": "^1.2.26",
     "@capacitor-community/text-to-speech": "^8.0.2",
-    "@capacitor/android": "^8.4.2",
-    "@capacitor/browser": "^8.0.4",
-    "@capacitor/core": "^8.4.2"
+    "@capacitor/android": "^8.4.3",
+    "@capacitor/core": "^8.4.3"
   }
 }
