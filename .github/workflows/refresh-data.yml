@@ -23,14 +23,14 @@ jobs:
     # little headroom is a missed week, not a bad map.
     timeout-minutes: 180
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # This job can write releases and start deploys. Checkout would
           # otherwise leave that token in .git/config for every later step —
           # including every package pip is about to install. Only the publish
           # step is given a token, through its own env.
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Install dependencies
@@ -69,7 +69,7 @@ jobs:
         # exactly this, into a log nobody reads.
         run: python city_pages.py
       - name: Cache aerial + terrain tiles
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             data/raw/aerial
