@@ -179,6 +179,7 @@ const CLASS_COLORS: Record<ProtectionClass, string> = {
 //
 //   protected (path, separated, buffered)  plain, and the widest lines
 //   quiet street / alley                   plain and thin
+//   unpaved path                           short dark dashes: a path, but rough
 //   painted lane                           a dark dash down the middle
 //   sharrow                                a row of dark dots
 //   moderate street                        dark ticks across it, spaced
@@ -195,6 +196,8 @@ const CLASS_WIDTH: Record<ProtectionClass, number> = {
   buffered: 1.3,
   quiet_street: 0.9,
   service: 0.9,
+  // off-street like a path, but slow on small wheels: between the two in weight
+  unpaved: 1.3,
   lane: 1.3,
   sharrow: 1.3,
   moderate_street: 1.1,
@@ -213,6 +216,9 @@ interface ClassMark {
 }
 
 const CLASS_MARKS: ClassMark[] = [
+  // Short and stubby where a lane's are long, so the two never read alike; the
+  // class arrived with the pipeline's surface fix after this table was drawn.
+  { id: "unpaved", cls: "unpaved", scale: 0.45, dash: [0.9, 1.8], round: false },
   { id: "lane", cls: "lane", scale: 0.3, dash: [3.2, 2.2], round: false },
   { id: "sharrow", cls: "sharrow", scale: 0.5, dash: [0, 2.4], round: true },
   { id: "moderate", cls: "moderate_street", scale: 2.1, dash: [0.28, 3.2], round: false },
@@ -305,6 +311,8 @@ function constructionIcon(): { width: number; height: number; data: Uint8Array }
 /** The marks as SVG patterns, for the ride ribbon's 12 px class strip. */
 const RIBBON_PATTERNS =
   `<defs>` +
+  `<pattern id="rp-unpaved" width="4" height="12" patternUnits="userSpaceOnUse">` +
+  `<rect x="0" y="5" width="1.8" height="2" fill="${MARK_INK}"/></pattern>` +
   `<pattern id="rp-lane" width="9" height="12" patternUnits="userSpaceOnUse">` +
   `<rect x="0" y="5.2" width="5" height="1.6" fill="${MARK_INK}"/></pattern>` +
   `<pattern id="rp-sharrow" width="6" height="12" patternUnits="userSpaceOnUse">` +
