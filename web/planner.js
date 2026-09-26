@@ -29,6 +29,18 @@ export class Lane {
         this.gen++;
     }
 }
+/** Route options with every preference the rider has set, always.
+ *
+ * routeOptions takes them positionally, most of them optional, and the reroute,
+ * the detour and the resume each spelled the call out for themselves — and all
+ * three left the walking limit off, so a rider who had said "no more than 500 m
+ * pushing the bike" got a reroute with none of that mid-ride, when a new route
+ * is hardest to question. Every call in the app goes through here instead
+ * (a test holds app.ts to that), so a preference is passed everywhere or
+ * nowhere. */
+export function planOptions(router, from, to, prefs, bias) {
+    return router.routeOptions(from, to, prefs.profileId, prefs.preferFlat, bias, prefs.avoid, prefs.walkMaxM);
+}
 /** Run `fn` against a router that costs these points as if already built, and
  * put the router back as it was before returning — including when `fn` throws.
  *

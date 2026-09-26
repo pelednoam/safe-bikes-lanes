@@ -10,7 +10,7 @@ import { dataUrl, initDataSource, loadJson, usingRemoteData } from "./data.js";
 import { buildCues, PROFILES, Router, routeCacheKey, toGPX } from "./router.js";
 import { distVoice, fmtDist, fmtClimb, fmtDistTight, fmtSpeed, fromMeters, getUnits, navRound, setUnits, toMeters, unitName, } from "./units.js";
 import { NetworkTiles, TileStore } from "./tiles.js";
-import { Lane, withUpgraded } from "./planner.js";
+import { Lane, planOptions, withUpgraded } from "./planner.js";
 import { SpeechQueue } from "./speech.js";
 import { DeferredReload, ScreenLock } from "./lifecycle.js";
 import { drawRideCard, drawTotalsCard, rideShareText, totalsShareText } from "./sharecard.js";
@@ -155,6 +155,11 @@ const AVOIDABLE = [
     ["busy_street", "busy streets"],
 ];
 let avoidTypes = new Set(JSON.parse(localStorage.getItem("avoidTypes") ?? "[]"));
+/** Every routing choice the rider has made, as the router takes them — the one
+ * place a reroute, a detour or a search grade reads them from (see planOptions). */
+function routePrefs() {
+    return { profileId, preferFlat, avoid: avoidTypes, walkMaxM };
+}
 function syncAvoidSummary() {
     el("avoid-summary").textContent =
         avoidTypes.size === 0 ? "🛡 avoid lane types" : `🛡 avoiding ${avoidTypes.size} lane type${avoidTypes.size > 1 ? "s" : ""}`;
@@ -695,7 +700,7 @@ async function requestRoute() {
         // first attempt finds nothing.
         const route = (r) => {
             showStage("Finding the safest way…");
-            return r.routeOptions(a, b, profileId, preferFlat, undefined, avoidTypes, walkMaxM);
+            return planOptions(r, a, b, routePrefs());
         };
         // Computed into a local and only published once this plan is known to be
         // the current one: `options` is what the cards, the chips and navigation
@@ -1672,7 +1677,14 @@ async function gradeSearchResults(rows) {
                 // by id, not by index: the badge says "safest", and relying on the
                 // order routeOptions happens to build its candidates in makes that a
                 // safety claim held together by an array position
-                const opts = r?.routeOptions(a, row.lngLat, snap.profileId, snap.preferFlat, undefined, new Set(snap.avoid), snap.walkMaxM);
+                const opts = r === null
+                    ? undefined
+                    : planOptions(r, a, row.lngLat, {
+                        profileId: snap.profileId,
+                        preferFlat: snap.preferFlat,
+                        avoid: new Set(snap.avoid),
+                        walkMaxM: snap.walkMaxM,
+                    });
                 const best = opts?.find((o) => o.id === "safest") ?? opts?.[0];
                 if (!best)
                     throw new Error("no route");
@@ -4373,7 +4385,7 @@ function navOnFix(fix) {
                 const bias = useMyWay && navHeading !== null
                     ? router.headingBias([lon, lat], navHeading)
                     : undefined;
-                options = router.routeOptions([lon, lat], navDest, profileId, preferFlat, bias, avoidTypes);
+                options = planOptions(router, [lon, lat], navDest, routePrefs(), bias);
                 const first = options[0];
                 if (first) {
                     selectOption(first.id);
@@ -4621,7 +4633,7 @@ function detourToNearest(kind) {
         return;
     }
     try {
-        options = router.routeOptions(navLastPos, poi.geometry.coordinates, profileId, preferFlat, undefined, avoidTypes);
+        options = planOptions(router, navLastPos, poi.geometry.coordinates, routePrefs());
         const first = options[0];
         if (!first)
             return;
@@ -4655,7 +4667,7 @@ el("nav-resume").addEventListener("click", () => {
     if (!router || !navLastPos || !navOriginalDest)
         return;
     try {
-        options = router.routeOptions(navLastPos, navOriginalDest, profileId, preferFlat, undefined, avoidTypes);
+        options = planOptions(router, navLastPos, navOriginalDest, routePrefs());
         const first = options[0];
         if (!first)
             return;
@@ -5449,7 +5461,7 @@ async function runWhatIf(pid) {
         // applied for this one computation and taken off again before anything
         // else can route: the next trip, a search grade or a ride must never be
         // planned along a lane that has only been proposed
-        ({ covered, result: hypothetical } = withUpgraded(r, points, () => r.routeOptions(a, b, profileId, preferFlat, undefined, avoidTypes, walkMaxM)));
+        ({ covered, result: hypothetical } = withUpgraded(r, points, () => planOptions(r, a, b, routePrefs())));
     }
     catch {
         hypothetical = [];

@@ -1,8 +1,14 @@
-// Who owns a planner output while a computation waits, and how a what-if is
-// kept from outliving the question it answers.
+// Who owns a planner output while a computation waits, how a what-if is kept
+// from outliving the question it answers, and how every routing call gets
+// every preference.
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it } from "vitest";
 
-import { Lane, withUpgraded } from "../src/planner.js";
+import { Lane, type OptionsRouter, planOptions, withUpgraded } from "../src/planner.js";
+import type { RouteOption } from "../src/types.js";
 
 describe("Lane", () => {
   it("keeps only the newest piece of work current", () => {
@@ -80,5 +86,43 @@ describe("withUpgraded", () => {
     ).toThrow("no path found");
     expect(r.applied).toEqual([]);
     expect(r.history).toEqual([1, 0]);
+  });
+});
+
+describe("planOptions", () => {
+  it("hands the router every preference, the walking limit included", () => {
+    const calls: unknown[][] = [];
+    const router: OptionsRouter = {
+      routeOptions: (...args): RouteOption[] => {
+        calls.push(args);
+        return [];
+      },
+    };
+    const bias = new Map([[3, 8]]);
+    planOptions(
+      router,
+      [-71.1, 42.38],
+      [-71.09, 42.37],
+      { profileId: "older_kids", preferFlat: true, avoid: new Set(["busy_street"]), walkMaxM: 500 },
+      bias,
+    );
+    expect(calls).toEqual([
+      [[-71.1, 42.38], [-71.09, 42.37], "older_kids", true, bias, new Set(["busy_street"]), 500],
+    ]);
+  });
+
+  it("is the only way app.ts asks for route options", () => {
+    // The reroute, the detour and the resume each spelled the positional call
+    // out for themselves, and all three left the walking limit off. Held here
+    // so the next call written by hand cannot drop a preference again.
+    const app = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), "..", "src", "app.ts"),
+      "utf8",
+    );
+    const direct = app
+      .split("\n")
+      .map((line, i) => ({ line: line.trim(), n: i + 1 }))
+      .filter(({ line }) => /\.routeOptions\(/.test(line) && !line.startsWith("//"));
+    expect(direct.map(({ n, line }) => `app.ts:${n} ${line}`)).toEqual([]);
   });
 });

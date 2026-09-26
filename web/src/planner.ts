@@ -16,6 +16,8 @@
 // the ticket after every await and gives up quietly when it is stale, leaving
 // the output to whoever holds the current one.
 
+import type { ProfileId, ProtectionClass, RouteOption } from "./types.js";
+
 /** Proof of being the newest piece of work on a lane. */
 export interface Ticket {
   /** True once newer work started on the lane, or the lane was cancelled. */
@@ -35,6 +37,54 @@ export class Lane {
   cancel(): void {
     this.gen++;
   }
+}
+
+/** Every routing choice the rider has made. */
+export interface RoutePrefs {
+  profileId: ProfileId;
+  preferFlat: boolean;
+  avoid: ReadonlySet<ProtectionClass>;
+  walkMaxM: number;
+}
+
+/** The part of a Router that plans A-to-B options. */
+export interface OptionsRouter {
+  routeOptions(
+    start: [number, number],
+    end: [number, number],
+    profileId: ProfileId,
+    preferFlat: boolean,
+    bias: Map<number, number> | undefined,
+    avoid: ReadonlySet<ProtectionClass>,
+    walkMaxM: number,
+  ): RouteOption[];
+}
+
+/** Route options with every preference the rider has set, always.
+ *
+ * routeOptions takes them positionally, most of them optional, and the reroute,
+ * the detour and the resume each spelled the call out for themselves — and all
+ * three left the walking limit off, so a rider who had said "no more than 500 m
+ * pushing the bike" got a reroute with none of that mid-ride, when a new route
+ * is hardest to question. Every call in the app goes through here instead
+ * (a test holds app.ts to that), so a preference is passed everywhere or
+ * nowhere. */
+export function planOptions(
+  router: OptionsRouter,
+  from: [number, number],
+  to: [number, number],
+  prefs: RoutePrefs,
+  bias?: Map<number, number>,
+): RouteOption[] {
+  return router.routeOptions(
+    from,
+    to,
+    prefs.profileId,
+    prefs.preferFlat,
+    bias,
+    prefs.avoid,
+    prefs.walkMaxM,
+  );
 }
 
 /** The part of a Router a what-if needs. */
