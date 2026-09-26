@@ -493,6 +493,53 @@ test.describe("safety classes without colour", () => {
   });
 });
 
+test.describe("the workspace and the city pages", () => {
+  test.use({ viewport: PHONE, isMobile: true, hasTouch: true });
+
+  test("the where-to-build workspace can be worked with a thumb", async ({ page }) => {
+    await page.goto("/build/");
+    await expect(page.locator(".row").first()).toBeVisible({ timeout: budget(60_000) });
+    // the sliders were 16 px tall and "⬇ CSV" 31 px; the town menu 13 px
+    for (const sel of ["#w-sev", "#w-acc", "#csv", "#town", "#w-reset"]) {
+      const b = await page.locator(sel).boundingBox();
+      expect(b?.height ?? 0, `${sel} is ${b?.height} px tall`).toBeGreaterThanOrEqual(44);
+    }
+    const px = await page.locator("#town").evaluate((e) => parseFloat(getComputedStyle(e).fontSize));
+    expect(px).toBeGreaterThanOrEqual(16);
+  });
+
+  test("a city page's layer switches can be worked with a thumb", async ({ page }) => {
+    await page.goto("/somerville/");
+    await page.waitForFunction(() => window._map !== undefined, null, { timeout: budget(45_000) });
+    const heights = await page
+      .locator(".layer")
+      .evaluateAll((ls) => ls.map((l) => l.getBoundingClientRect().height));
+    expect(heights.length).toBeGreaterThan(3);
+    for (const h of heights) expect(h).toBeGreaterThanOrEqual(44);
+  });
+
+  for (const [name, path, panel] of [
+    ["workspace", "/build/", "#rank-panel"],
+    ["city page", "/somerville/", "#panel"],
+  ] as const) {
+    test(`the ${name} follows a dark system theme`, async ({ page }) => {
+      await page.emulateMedia({ colorScheme: "dark" });
+      await page.goto(path);
+      await page.waitForFunction(() => window._map !== undefined, null, {
+        timeout: budget(45_000),
+      });
+      const [fg, bg] = await page
+        .locator(panel)
+        .evaluate((e) => [getComputedStyle(e).color, getComputedStyle(e).backgroundColor]);
+      // a white panel, glaring, on a phone set to dark: now dark, with light text
+      expect(contrast(bg ?? "", "rgb(255,255,255)"), `${name} panel is still white`).toBeGreaterThan(
+        10,
+      );
+      expect(contrast(fg ?? "", bg ?? "")).toBeGreaterThanOrEqual(7);
+    });
+  }
+});
+
 test.describe("when something goes wrong", () => {
   const developerWords = /snap|intersection|no path found|TypeError|failed to load|routing tiles/i;
 

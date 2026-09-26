@@ -40,7 +40,8 @@ body { font-family: var(--font); color: var(--ink); background: #eef1f3; }
 #map { position: absolute; inset: 0; }
 
 #panel {
-  position: absolute; top: 14px; left: 14px; z-index: 5; width: 372px;
+  position: absolute; z-index: 5; width: 372px;
+  top: calc(14px + env(safe-area-inset-top)); left: calc(14px + env(safe-area-inset-left));
   max-height: calc(100% - 28px); overflow-y: auto; overscroll-behavior: contain;
   background: var(--surface); border: 1px solid var(--line);
   border-radius: var(--r-md); box-shadow: var(--shadow); padding: 16px;
@@ -58,7 +59,7 @@ h1 { font-family: var(--font-cond); font-size: 30px; line-height: 1.02; margin: 
 .figure { background: var(--field); border-radius: var(--r-sm); padding: 9px 10px; }
 .figure .n { font-family: var(--font-cond); font-size: 23px; font-weight: 700; line-height: 1;
              font-variant-numeric: tabular-nums; }
-.figure .l { font-size: 11.5px; color: var(--muted); line-height: 1.3; margin-top: 3px; }
+.figure .l { font-size: 12.5px; color: var(--muted); line-height: 1.3; margin-top: 3px; }
 .figure.bad .n { color: var(--barrier); }
 .figure.good .n { color: var(--connected); }
 
@@ -90,7 +91,7 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: 
 .badge { display: inline-block; padding: 0 6px; border-radius: 999px; background: #e8f3ec;
          color: var(--accent); font-size: 10.5px; font-weight: 700; margin-left: 5px; }
 
-.note { font-size: 11.5px; color: var(--muted); line-height: 1.45; margin-top: 14px;
+.note { font-size: 12.5px; color: var(--muted); line-height: 1.45; margin-top: 14px;
         border-top: 1px solid var(--line); padding-top: 10px; }
 .note a { color: var(--accent); }
 details.limits summary { cursor: pointer; font-weight: 600; }
@@ -101,9 +102,41 @@ details.limits li { margin-bottom: 3px; }
 @media (max-width: 760px) {
   #panel {
     top: auto; bottom: 0; left: 0; width: 100%; max-height: 58%;
-    border-radius: var(--r-md) var(--r-md) 0 0; padding: 14px 14px 20px;
+    border-radius: var(--r-md) var(--r-md) 0 0;
+    padding: 14px calc(14px + env(safe-area-inset-right)) calc(20px + env(safe-area-inset-bottom))
+             calc(14px + env(safe-area-inset-left));
   }
   h1 { font-size: 25px; }
+}
+
+/* Touch: a layer's row was the height of its text, about 20 px, with a 16 px
+   box — a thumb needs 44. */
+@media (max-width: 760px), (pointer: coarse) {
+  .layer { min-height: 44px; }
+  .layer input { width: 20px; height: 20px; }
+  .project { min-height: 44px; }
+  details.limits summary { padding: 12px 0; }
+}
+
+/* Dark, when the phone or computer is: the panel is most of a phone's screen. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --ink: #e9eef1;
+    --muted: #93a1aa;
+    --line: rgba(255, 255, 255, 0.13);
+    --surface: rgba(19, 23, 27, 0.95);
+    --field: rgba(255, 255, 255, 0.07);
+    --accent: #36b768;
+    --shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+  }
+  body { background: #0e1114; }
+  .badge { background: rgba(102, 189, 99, 0.16); }
+  .note a { color: #8ab4f8; }
+  /* the projects' swatch is near-black: ring it so it shows on the dark panel */
+  .swatch { box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4); }
+  .maplibregl-popup-content { background: #13171b; color: var(--ink); }
+  .maplibregl-popup-tip { border-top-color: #13171b !important; border-bottom-color: #13171b !important; }
 }
 
 /* the aerial toggle's swatch: a scrap of imagery rather than a colour, since it

@@ -128,11 +128,50 @@ details.limits li { margin-bottom: 5px; }
 
 #empty { font-size: 13px; color: var(--muted); }
 
+/* The edges of a real phone: under the status bar at the top, the home
+   indicator at the bottom, a notch at the side in landscape. */
+#rank-panel, #detail-panel { top: calc(12px + env(safe-area-inset-top)); }
+#rank-panel { left: calc(12px + env(safe-area-inset-left)); }
+#detail-panel { right: calc(12px + env(safe-area-inset-right)); }
+
+/* Touch: the weight sliders were 16 px tall and "⬇ CSV" 31 px — under the 44 px
+   a thumb needs — and the town menu was 13 px, which iOS zooms the page for. */
+@media (max-width: 900px), (pointer: coarse) {
+  button, .controls select { min-height: 44px; }
+  .controls select { font-size: 16px; }
+  .weight input { height: 44px; }
+  details.limits summary { padding: 12px 0; }
+}
+
+/* Dark, when the phone or computer is. The map stays as it is; the panels,
+   which are most of the screen on a phone, follow the system. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --ink: #e9eef1;
+    --muted: #93a1aa;
+    --line: rgba(255, 255, 255, 0.13);
+    --surface: rgba(19, 23, 27, 0.95);
+    --field: rgba(255, 255, 255, 0.07);
+    --accent: #36b768;
+    --shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+  }
+  body { background: #0e1114; }
+  button, .controls select { background: #1c2227; color: var(--ink); }
+  button.primary { background: #1e7f45; border-color: #1e7f45; color: #fff; }
+  button.primary:hover { background: #1a6f3c; }
+  .row .badge { background: rgba(102, 189, 99, 0.16); }
+  .whatif { background: rgba(102, 189, 99, 0.14); color: #b9ecc9; }
+  .note a, .lede a { color: #8ab4f8; }
+}
+
 /* A phone gets one panel at a time: the ranking, and the project it opened. */
 @media (max-width: 900px) {
   #rank-panel, #detail-panel {
     left: 0; right: 0; width: 100%; top: auto; bottom: 0; max-height: 62%;
-    border-radius: var(--r-md) var(--r-md) 0 0; padding: 14px 14px 20px;
+    border-radius: var(--r-md) var(--r-md) 0 0;
+    padding: 14px calc(14px + env(safe-area-inset-right)) calc(20px + env(safe-area-inset-bottom))
+             calc(14px + env(safe-area-inset-left));
   }
   #detail-panel.on { z-index: 6; }
   body.picked #rank-panel { display: none; }
