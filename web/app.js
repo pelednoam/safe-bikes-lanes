@@ -354,12 +354,16 @@ void constructionReady.then(() => {
         router.setConstructionPoints(constructionAvoidPoints(constructionFC));
     }
 });
-const poisReady = dataReady
+/** pois.geojson, fetched and parsed once. The loop planner reads its features
+ * and the map's POI layer draws the same collection; each used to load the
+ * 786 KB file for itself. null when it could not be loaded. */
+const poisData = dataReady
     .then(() => loadJson("pois.geojson"))
-    .then((fc) => {
-    pois = fc.features;
-})
-    .catch(() => undefined);
+    .catch(() => null);
+const poisReady = poisData.then((fc) => {
+    if (fc)
+        pois = fc.features;
+});
 function getSource(id) {
     const src = map.getSource(id);
     if (src === undefined)
@@ -2579,10 +2583,11 @@ map.on("load", () => {
     // by viewport (see refreshNetworkTiles); only POIs (needed by the loop
     // planner) load eagerly here; the heavy heatmap/elevation/lane overlays load
     // the first time their toggle is turned on (see ensureLayer).
-    void dataReady
-        .then(() => loadJson("pois.geojson"))
+    void poisData
         .then((d) => {
-        map.getSource("pois").setData(d);
+        // the same collection the loop planner reads (see poisData)
+        if (d)
+            map.getSource("pois").setData(d);
     })
         .catch(() => undefined)
         .finally(() => dataProgress());

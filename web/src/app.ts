@@ -509,12 +509,16 @@ void constructionReady.then(() => {
   }
 });
 
-const poisReady: Promise<void> = dataReady
+/** pois.geojson, fetched and parsed once. The loop planner reads its features
+ * and the map's POI layer draws the same collection; each used to load the
+ * 786 KB file for itself. null when it could not be loaded. */
+const poisData: Promise<{ features: PoiFeature[] } | null> = dataReady
   .then(() => loadJson<{ features: PoiFeature[] }>("pois.geojson"))
-  .then((fc) => {
-    pois = fc.features;
-  })
-  .catch(() => undefined);
+  .catch(() => null);
+
+const poisReady: Promise<void> = poisData.then((fc) => {
+  if (fc) pois = fc.features;
+});
 
 function getSource(id: string): GeoJSONSource {
   const src = map.getSource(id);
@@ -2778,10 +2782,10 @@ map.on("load", () => {
   // by viewport (see refreshNetworkTiles); only POIs (needed by the loop
   // planner) load eagerly here; the heavy heatmap/elevation/lane overlays load
   // the first time their toggle is turned on (see ensureLayer).
-  void dataReady
-    .then(() => loadJson<GeoJSON.GeoJSON>("pois.geojson"))
+  void poisData
     .then((d) => {
-      (map.getSource("pois") as GeoJSONSource).setData(d);
+      // the same collection the loop planner reads (see poisData)
+      if (d) (map.getSource("pois") as GeoJSONSource).setData(d as unknown as GeoJSON.GeoJSON);
     })
     .catch(() => undefined)
     .finally(() => dataProgress());
