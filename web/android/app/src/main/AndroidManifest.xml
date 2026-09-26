@@ -1,8 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- allowBackup off: the app's storage holds recorded rides and saved places,
+         home among them, and with backup on `adb backup` copies it off an unlocked
+         phone (Android 11 and below) and it goes to cloud backup too. The cost is
+         that a phone restored from a cloud backup starts without them; the app's
+         "Back up" / "Restore" file is the way to move them. -->
     <application
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
@@ -42,7 +47,12 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <!-- Android 13+: without it the ride's "navigation is running" notification is
+         hidden. Asked for when a ride starts (AppShellPlugin.requestNotifications).
+         No ACCESS_BACKGROUND_LOCATION: a ride runs as a foreground service with that
+         notification, which is what keeps GPS going with the screen off, and the
+         background permission was declared but never asked for. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 </manifest>

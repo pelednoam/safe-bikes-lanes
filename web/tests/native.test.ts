@@ -196,7 +196,11 @@ describe("the background watcher that keeps GPS alive with the screen off", () =
     expect(fixes[0]).toMatchObject({ lat: 42.38, lon: -71.1 });
   });
 
-  it("explains the Android permission that actually matters", async () => {
+  it("never sends the rider after 'Allow all the time', and waits to be tapped", async () => {
+    // It used to say 'set location to "Allow all the time"' for every
+    // NOT_AUTHORIZED and open app settings unasked — but the plugin raises that
+    // for the location switch being off too, and the ride's foreground service
+    // is what covers the screen being off, not the background permission.
     type Cb2 = (p?: unknown, e?: unknown) => void;
     const captured2: { cb?: Cb2 } = {};
     let settingsOpened = false;
@@ -211,16 +215,24 @@ describe("the background watcher that keeps GPS alive with the screen off", () =
       },
     });
     const { startBackgroundWatcher } = await import("../src/native.js");
-    const errors: string[] = [];
-    await startBackgroundWatcher("t", "m", () => undefined, (msg) => errors.push(msg));
+    const errors: { msg: string; fix?: () => void }[] = [];
+    await startBackgroundWatcher(
+      "t",
+      "m",
+      () => undefined,
+      (msg, fix) => errors.push(fix === undefined ? { msg } : { msg, fix }),
+    );
 
     captured2.cb?.(undefined, { code: "NOT_AUTHORIZED", message: "denied" });
-    // "Allow all the time" is the specific setting, and saying so is the fix
-    expect(errors[0]).toMatch(/Allow all the time/);
+    await vi.waitFor(() => expect(errors).toHaveLength(1));
+    expect(errors[0]?.msg).not.toMatch(/all the time/i);
+    expect(errors[0]?.msg).toMatch(/off or not allowed/);
+    expect(settingsOpened, "settings opened without being asked").toBe(false);
+    errors[0]?.fix?.();
     expect(settingsOpened).toBe(true);
 
     captured2.cb?.(undefined, { code: "OTHER", message: "gps unavailable" });
-    expect(errors[1]).toBe("gps unavailable");
+    expect(errors[1]?.msg).toBe("gps unavailable");
   });
 
   it("returns null instead of throwing when the plugin isn't there", async () => {

@@ -19,7 +19,6 @@ async function nativeShim(page: Page): Promise<void> {
       isNativePlatform: () => true,
       registerPlugin: (name: string) => {
         if (name === "TextToSpeech") return { speak: noop, stop: noop };
-        if (name === "Browser") return { open: noop };
         if (name === "BackgroundGeolocation") {
           return { addWatcher: async () => "w", removeWatcher: noop, openSettings: noop };
         }
@@ -183,21 +182,32 @@ test("the Android side asks for a real download, not for something to open the l
   // prove the download works; it can prove nobody quietly went back to asking an
   // app to look at a link.
   const { readFileSync } = await import("node:fs");
-  const java = readFileSync(
-    "android/app/src/main/java/com/pelednoam/safebikes/MainActivity.java",
-    "utf8",
-  );
+  const dir = "android/app/src/main/java/com/pelednoam/safebikes";
+  const java = readFileSync(`${dir}/MainActivity.java`, "utf8");
+  const downloader = readFileSync(`${dir}/UpdateDownloader.java`, "utf8");
   expect(java, "no DownloadListener: the WebView drops downloads silently").toContain(
     "setDownloadListener",
   );
-  expect(java, "downloads are not going through the system download service").toContain(
+  expect(java, "the listener no longer goes through the shared downloader").toContain(
+    "UpdateDownloader.enqueue",
+  );
+  expect(downloader, "downloads are not going through the system download service").toContain(
     "DownloadManager.Request",
   );
   // into the folder the rider will actually open, under a name worth reading
-  expect(java).toContain("DIRECTORY_DOWNLOADS");
-  expect(java).toContain("family-bike-router.apk");
+  expect(downloader).toContain("DIRECTORY_DOWNLOADS");
+  expect(downloader).toContain("family-bike-router.apk");
   // and it shows progress, because a 90 MB file over a phone connection is not instant
-  expect(java).toContain("VISIBILITY_VISIBLE_NOTIFY_COMPLETED");
+  expect(downloader).toContain("VISIBILITY_VISIBLE_NOTIFY_COMPLETED");
+  // Earlier update downloads are cleared, so the old file is not the one found
+  // first in Downloads (Android refuses to install it over the newer app).
+  expect(downloader).toContain("manager.remove(");
+  // Android 7-9 cannot write to public Downloads without WRITE_EXTERNAL_STORAGE,
+  // which the app does not hold — there it used to fail over to the browser.
+  expect(downloader).toContain("setDestinationInExternalFilesDir");
+  // the banner's path: the plugin, not an iframe Capacitor may divert
+  const plugin = readFileSync(`${dir}/AppShellPlugin.java`, "utf8");
+  expect(plugin).toContain("public void downloadUpdate(PluginCall call)");
   // ACTION_VIEW survives only as the fallback, inside a catch
   const listenerBody = java.slice(java.indexOf("setDownloadListener"));
   const firstView = listenerBody.indexOf("ACTION_VIEW");
@@ -226,7 +236,6 @@ async function mutePhone(page: Page): Promise<void> {
             stop: noop,
           };
         }
-        if (name === "Browser") return { open: noop };
         if (name === "BackgroundGeolocation") {
           return { addWatcher: async () => "w", removeWatcher: noop, openSettings: noop };
         }
