@@ -266,7 +266,8 @@ def test_a_road_is_busy_by_class_or_by_speed() -> None:
 
 def test_maxspeed_parses_the_forms_osm_actually_uses() -> None:
     assert build_graph.parse_maxspeed_mph("25 mph") == pytest.approx(25.0)
-    assert build_graph.parse_maxspeed_mph(["25 mph", "30 mph"]) == pytest.approx(25.0)
+    # a merged edge is as fast as its fastest part (this asserted the first, 25)
+    assert build_graph.parse_maxspeed_mph(["25 mph", "30 mph"]) == pytest.approx(30.0)
     assert build_graph.parse_maxspeed_mph(None) is None
     assert build_graph.parse_maxspeed_mph("walk") is None
     assert build_graph.parse_maxspeed_mph("") is None

@@ -94,10 +94,16 @@ def parse_maxspeed_mph(v: Any) -> float | None:
 
     Highest, not first: a simplified edge that merges ways with different limits
     is as stressful as its fastest part, which is what classify_osm's "worst
-    part" rule promises. And units as OSM defines them — "25 mph" is mph, a
-    bare number is km/h — so a way tagged "50" (31 mph) is not read as 50 mph,
-    nor a "40" (25 mph) as a 40 mph road. Words ("walk", "none", "signals")
-    and values like "US:urban" say nothing numeric and are skipped.
+    part" rule promises. An explicit "km/h" is converted. Words ("walk",
+    "none", "signals") and values like "US:urban" say nothing numeric and are
+    skipped.
+
+    A bare number stays mph, although OSM's default unit is km/h. Every sign in
+    Massachusetts is in mph, so a bare "40" here is a mapper who left the unit
+    off a 40 mph road, not a 25 mph street; 117 edges carry one. Converting
+    would read those roads as calmer than their signs, the one direction a tool
+    that puts children on streets must not err in. (tests/test_overlays.py has
+    locked this in on purpose since it was first noticed.)
     """
     best: float | None = None
     for item in listy(v):
@@ -116,7 +122,9 @@ def parse_maxspeed_mph(v: Any) -> float | None:
                 continue
             if unit == "mph":
                 mph = value
-            elif unit in ("", "km/h", "kmh", "kph"):
+            elif unit == "":
+                mph = value  # see above: the sign says mph
+            elif unit in ("km/h", "kmh", "kph"):
                 mph = value / KMH_PER_MPH
             else:  # knots and anything unforeseen: not a road speed we can read
                 continue

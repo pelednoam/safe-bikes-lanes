@@ -79,18 +79,15 @@ def test_a_merged_edge_is_as_fast_as_its_fastest_part() -> None:
     )
 
 
-def test_a_bare_speed_limit_is_kmh() -> None:
-    """OSM's default unit is km/h. "50" is 31 mph, and "40" is 25 mph — reading
-    them as mph put 40 km/h streets over the 30 mph line."""
-    assert parse_maxspeed_mph("50") == pytest.approx(31.07, abs=0.01)
+def test_speed_units() -> None:
+    """An explicit km/h is converted. A bare number stays mph: every sign here
+    is in mph, so a bare "40" is a 40 mph road missing its unit (see
+    parse_maxspeed_mph)."""
     assert parse_maxspeed_mph("40 km/h") == pytest.approx(24.85, abs=0.01)
     assert parse_maxspeed_mph("25mph") == 25
     assert parse_maxspeed_mph("none") is None
-    assert classify_osm({"highway": "residential", "maxspeed": "40"}) == (
-        "quiet_street",
-        False,
-    )
-    assert classify_osm({"highway": "residential", "maxspeed": "60"}) == (
+    assert parse_maxspeed_mph("40") == 40
+    assert classify_osm({"highway": "residential", "maxspeed": "60 km/h"}) == (
         "moderate_street",
         False,
     )
