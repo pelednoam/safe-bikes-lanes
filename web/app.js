@@ -910,7 +910,11 @@ function renderOptionChips() {
         optionChips.push(new maplibregl.Marker({ element: chip }).setLngLat(pt).addTo(map));
     });
 }
-let panelPaintGen = 0;
+/** Takes the pending panel paint's listeners off. A superseded paint used to
+ * return from its own check before removing them, so every option switched
+ * past before its line was drawn left a render handler behind — running
+ * queryRenderedFeatures on every frame for the rest of the session. */
+let cancelPanelPaint = null;
 /** Run the panel's DOM writes once the route line is actually on the map.
  *
  * The line goes through MapLibre's worker (parse, re-tile, render) while the
@@ -918,18 +922,23 @@ let panelPaintGen = 0;
  * numbers a frame or two before the route appeared — planners read the gap as
  * the app having routed somewhere else and then corrected itself. */
 function paintPanelWithRoute(paint) {
-    const gen = ++panelPaintGen;
+    cancelPanelPaint?.(); // the newest selection is the only one to paint
     let done = false;
     let renders = 0;
     let parsed = false;
-    const fire = () => {
-        if (done || gen !== panelPaintGen)
-            return;
+    const stop = () => {
         done = true;
         map.off("render", onRender);
         map.off("sourcedata", onData);
         window.clearTimeout(soft);
         window.clearTimeout(hard);
+        if (cancelPanelPaint === stop)
+            cancelPanelPaint = null;
+    };
+    const fire = () => {
+        if (done)
+            return;
+        stop();
         paint();
     };
     const onData = () => {
@@ -958,6 +967,7 @@ function paintPanelWithRoute(paint) {
             fire();
     }, 600);
     const hard = window.setTimeout(fire, 3000);
+    cancelPanelPaint = stop;
 }
 function selectOption(id) {
     // While navigating, guidance follows its own copy of the track. Swapping the

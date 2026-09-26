@@ -1061,7 +1061,11 @@ function renderOptionChips(): void {
   });
 }
 
-let panelPaintGen = 0;
+/** Takes the pending panel paint's listeners off. A superseded paint used to
+ * return from its own check before removing them, so every option switched
+ * past before its line was drawn left a render handler behind — running
+ * queryRenderedFeatures on every frame for the rest of the session. */
+let cancelPanelPaint: (() => void) | null = null;
 
 /** Run the panel's DOM writes once the route line is actually on the map.
  *
@@ -1070,17 +1074,21 @@ let panelPaintGen = 0;
  * numbers a frame or two before the route appeared — planners read the gap as
  * the app having routed somewhere else and then corrected itself. */
 function paintPanelWithRoute(paint: () => void): void {
-  const gen = ++panelPaintGen;
+  cancelPanelPaint?.(); // the newest selection is the only one to paint
   let done = false;
   let renders = 0;
   let parsed = false;
-  const fire = (): void => {
-    if (done || gen !== panelPaintGen) return;
+  const stop = (): void => {
     done = true;
     map.off("render", onRender);
     map.off("sourcedata", onData);
     window.clearTimeout(soft);
     window.clearTimeout(hard);
+    if (cancelPanelPaint === stop) cancelPanelPaint = null;
+  };
+  const fire = (): void => {
+    if (done) return;
+    stop();
     paint();
   };
   const onData = (): void => {
@@ -1104,6 +1112,7 @@ function paintPanelWithRoute(paint: () => void): void {
     if (renders === 0) fire();
   }, 600);
   const hard = window.setTimeout(fire, 3000);
+  cancelPanelPaint = stop;
 }
 
 function selectOption(id: RouteOption["id"]): void {
