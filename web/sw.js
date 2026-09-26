@@ -70,11 +70,26 @@ self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(ASSETS)));
 });
 
+/** Every version of the app shell's cache is named this, and nothing else is.
+ * The shell is the only thing a new build replaces; every other cache holds
+ * the rider's data — maps downloaded for a ride, styles, browsed tiles — and
+ * belongs to them, not to the build that happened to write it. */
+const SHELL_PREFIX = "family-bike-router-";
+
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches
       .keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+      // Only older shells. This used to delete everything that was not the
+      // current shell, so every deploy silently threw away the offline maps
+      // riders had downloaded — found on the road, with no signal.
+      .then((keys) =>
+        Promise.all(
+          keys
+            .filter((k) => k.startsWith(SHELL_PREFIX) && k !== CACHE)
+            .map((k) => caches.delete(k)),
+        ),
+      )
       // take control of open pages so the update reaches them at once
       .then(() => self.clients.claim()),
   );
@@ -129,25 +144,85 @@ function isShell(url) {
   );
 }
 
+/**
+ * How long a same-origin request gets before a cached copy is served instead.
+ *
+ * Network-first on its own has no answer for one bar of signal: a request that
+ * neither arrives nor fails holds the page blank at startup, or a mid-ride
+ * reroute waiting on a routing tile, until the browser gives up on it —
+ * a minute or more — with the answer sitting in the cache the whole time.
+ * Long enough that a slow connection that is working still wins, which is what
+ * keeps a stale shell off a phone that is online.
+ */
+const NETWORK_TIMEOUT_MS = 4000;
+
+/**
+ * Pages that were themselves served from cache after a timeout. Their shell
+ * requests are answered from the same cache, without racing the network: a
+ * cached index.html running a freshly fetched app.js, or the reverse, is two
+ * builds glued together — a broken app, not a slightly old one. The cached
+ * page's own network fetch refreshes the cache behind it, so the next load
+ * is new. Kept in memory only; a restarted worker simply races again.
+ */
+const staleClients = new Set();
+
+/** Network-first with a timeout. Whatever the network sends is cached for
+ * next time, even when it arrives after the cache has already answered. */
+function networkFirst(event, req) {
+  const network = fetch(req);
+  // Clone before anything reads the body, and keep the worker alive until the
+  // copy is stored: after a timeout the page has its answer and nothing else
+  // would wait for this.
+  event.waitUntil(
+    network
+      .then((resp) => {
+        if (!resp.ok) return undefined;
+        const clone = resp.clone();
+        return caches.open(CACHE).then((cache) => cache.put(event.request, clone));
+      })
+      .catch(() => undefined),
+  );
+  const cached = () => caches.match(event.request);
+  return new Promise((resolve) => {
+    let answered = false;
+    const answer = (resp) => {
+      if (answered) return;
+      answered = true;
+      clearTimeout(timer);
+      resolve(resp);
+    };
+    const timer = setTimeout(() => {
+      void cached().then((hit) => {
+        // Nothing cached: keep waiting — a late answer beats none.
+        if (hit === undefined) return;
+        if (event.request.mode === "navigate" && event.resultingClientId) {
+          staleClients.add(event.resultingClientId);
+        }
+        answer(hit);
+      });
+    }, NETWORK_TIMEOUT_MS);
+    network.then(answer, () => {
+      void cached().then((hit) => answer(hit ?? Response.error()));
+    });
+  });
+}
+
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   if (url.origin === self.location.origin) {
-    const req =
-      event.request.mode === "navigate" || isShell(url)
-        ? new Request(event.request, { cache: "reload" }) // skip HTTP cache
-        : event.request;
-    // network-first: freshest app/data, fall back to cache offline
-    event.respondWith(
-      fetch(req)
-        .then((resp) => {
-          if (resp.ok) {
-            const clone = resp.clone();
-            void caches.open(CACHE).then((cache) => cache.put(event.request, clone));
-          }
-          return resp;
-        })
-        .catch(() => caches.match(event.request).then((c) => c ?? Response.error())),
-    );
+    const shell = event.request.mode === "navigate" || isShell(url);
+    if (shell && event.clientId && staleClients.has(event.clientId)) {
+      event.respondWith(
+        caches.match(event.request).then((hit) => hit ?? networkFirst(event, event.request)),
+      );
+      return;
+    }
+    const req = shell
+      ? new Request(event.request, { cache: "reload" }) // skip HTTP cache
+      : event.request;
+    // network-first: freshest app/data, fall back to cache offline or when the
+    // network is too slow to be worth waiting for
+    event.respondWith(networkFirst(event, req));
     return;
   }
   // basemap tiles: cache-first (pre-cached along a route by the app, or
