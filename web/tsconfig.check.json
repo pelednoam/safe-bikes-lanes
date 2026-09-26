@@ -2,7 +2,12 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": true,
-    "rootDir": "."
+    "rootDir": ".",
+    // The tests run in Node (fs, path, process, Buffer). TypeScript 6 stopped
+    // loading every installed @types package by default, so this says so.
+    // Only here: src/ runs in a browser, and tsconfig.json leaving Node's types
+    // out is what keeps a Node API from typechecking in app code.
+    "types": ["node"]
   },
   "include": [
     "src/**/*.ts",
