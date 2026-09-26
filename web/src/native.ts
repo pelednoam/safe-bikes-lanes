@@ -223,6 +223,7 @@ interface AppShellPlugin {
   requestNotifications(): Promise<{ notifications: string }>;
   openLocationSettings(): Promise<void>;
   openAppSettings(): Promise<void>;
+  keepScreenOn(options: { on: boolean }): Promise<void>;
 }
 
 function appShell(): AppShellPlugin | null {
@@ -304,6 +305,18 @@ export async function nativeLocationAllowed(): Promise<boolean | null> {
   } catch {
     return null;
   }
+}
+
+/** Keep the phone's screen on — for the length of a ride, not the app's.
+ *
+ * The app used to hold the screen on whenever it was open, planning included.
+ * The ride also asks for a Wake Lock, which is all the website has; in the app
+ * this is the native window flag, which does not depend on the WebView
+ * supporting that API. A no-op on the website. */
+export function keepScreenOn(on: boolean): void {
+  const shell = nativePlugin<AppShellPlugin>("AppShell");
+  if (shell === null || typeof shell.keepScreenOn !== "function") return;
+  void shell.keepScreenOn({ on }).catch(() => undefined);
 }
 
 /** Ask for the notification permission (Android 13+) before a ride's watcher

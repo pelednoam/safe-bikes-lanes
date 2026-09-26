@@ -9,6 +9,7 @@ import android.location.LocationManager;
 import android.net.Uri;
 import android.os.Build;
 import android.provider.Settings;
+import android.view.WindowManager;
 
 import androidx.core.content.ContextCompat;
 import androidx.core.location.LocationManagerCompat;
@@ -40,7 +41,7 @@ import com.getcapacitor.annotation.PermissionCallback;
  * watcher, means the service starts with the permission already held.
  *
  * <p>Also the notification permission (Android 13+), without which the "navigation
- * is running" notice is hidden.
+ * is running" notice is hidden, and keeping the screen on for a ride only.
  */
 @CapacitorPlugin(
         name = "AppShell",
@@ -148,5 +149,32 @@ public class AppShellPlugin extends Plugin {
         } catch (ActivityNotFoundException e) {
             call.reject("no settings screen for this on this phone");
         }
+    }
+
+    /**
+     * Keep the screen on for a ride, and only for a ride.
+     *
+     * <p>This used to be FLAG_KEEP_SCREEN_ON set once for the whole activity, so the
+     * phone never slept while the app was open — planning at a desk included. The
+     * web code's Wake Lock request cannot cover the ride on its own: whether an
+     * Android WebView honours it depends on the WebView.
+     */
+    @PluginMethod
+    public void keepScreenOn(PluginCall call) {
+        boolean on = Boolean.TRUE.equals(call.getBoolean("on", false));
+        getActivity()
+                .runOnUiThread(
+                        () -> {
+                            if (on) {
+                                getActivity()
+                                        .getWindow()
+                                        .addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                            } else {
+                                getActivity()
+                                        .getWindow()
+                                        .clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                            }
+                            call.resolve();
+                        });
     }
 }

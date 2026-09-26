@@ -23,6 +23,7 @@ import {
   askForRideNotifications,
   isNativeApp,
   isNewerAppVersion,
+  keepScreenOn,
   lastNativeSpeechError,
   locationAdvice,
   minimizeApp,
@@ -4845,6 +4846,7 @@ async function startNav(): Promise<void> {
   // label-free basemap, our own upright labels, and the network dimmed behind
   // the route — all of which applyBasemap decides from navActive
   applyBasemap();
+  keepScreenOn(true); // the app's window flag: a WebView may not honour the Wake Lock
   try {
     wakeLock = await navigator.wakeLock.request("screen");
   } catch {
@@ -4870,6 +4872,7 @@ function exitNav(): void {
   navBgWatcherId = null;
   void wakeLock?.release().catch(() => undefined);
   wakeLock = null;
+  keepScreenOn(false);
   closeAsk();
   hideClassify();
   hideRideAlert();

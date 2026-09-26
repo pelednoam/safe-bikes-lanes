@@ -240,3 +240,25 @@ describe("Android's Back", () => {
     expect(() => web.minimizeApp()).not.toThrow();
   });
 });
+
+describe("keeping the screen on", () => {
+  it("asks the app's window, and does nothing on the website", async () => {
+    const got: unknown[] = [];
+    installApp({
+      AppShell: {
+        keepScreenOn: async (o: unknown) => {
+          got.push(o);
+        },
+      },
+    });
+    const { keepScreenOn } = await import("../src/native.js");
+    keepScreenOn(true);
+    keepScreenOn(false);
+    await vi.waitFor(() => expect(got).toEqual([{ on: true }, { on: false }]));
+
+    vi.resetModules();
+    installApp({}, false);
+    const web = await import("../src/native.js");
+    expect(() => web.keepScreenOn(true)).not.toThrow();
+  });
+});

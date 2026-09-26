@@ -36,6 +36,10 @@ interface ShimOptions {
 }
 
 async function androidShim(page: Page, options: ShimOptions = {}): Promise<void> {
+  // The bundled data only. With the site reachable, the app fetches a newer data
+  // build when there is one, and the route waits on that download — a network
+  // race these tests are not about.
+  await page.route(/pelednoam\.github\.io/, (route) => route.abort());
   await page.addInitScript((opts: ShimOptions) => {
     const shell: ShellState = {
       calls: [],
@@ -290,4 +294,27 @@ test("the watcher's NOT_AUTHORIZED is explained by what is actually wrong", asyn
   // and nothing was opened without being asked
   expect(await calls(page)).not.toContain("BackgroundGeolocation.openSettings");
   expect(await calls(page)).not.toContain("AppShell.openLocationSettings");
+});
+
+// ── the screen ─────────────────────────────────────────────────────────────
+
+test("the screen is held on for a ride, and let go when it ends", async ({ page }) => {
+  // It used to be held on for as long as the app was open, planning included.
+  await androidShim(page);
+  await boot(page, DAVIS_KENDALL);
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
+  expect(await calls(page), "planning must not hold the screen on").not.toContain(
+    "AppShell.keepScreenOn",
+  );
+  await page.locator("#nav-btn").click();
+  await expect.poll(() => calls(page)).toContain("AppShell.keepScreenOn");
+  const screenArgs = (): Promise<unknown[]> =>
+    page.evaluate(() =>
+      window.__shell.args.filter((_a, i) => window.__shell.calls[i] === "AppShell.keepScreenOn"),
+    );
+  expect(await screenArgs()).toEqual([{ on: true }]);
+
+  await pressBack(page);
+  await page.locator("#nav-ask-yes").click();
+  await expect.poll(screenArgs).toEqual([{ on: true }, { on: false }]);
 });

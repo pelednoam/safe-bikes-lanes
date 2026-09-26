@@ -5,7 +5,6 @@ import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Environment;
-import android.view.WindowManager;
 
 import com.getcapacitor.BridgeActivity;
 
@@ -21,8 +20,6 @@ public class MainActivity extends BridgeActivity {
         // asks the first time "Your location" is used, and a ride asks through
         // AppShellPlugin before it starts the watcher.
 
-        // riding use: never let the screen sleep while the app is open
-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         // A WebView silently drops downloads, so tapping "install" on the in-app
         // update banner did nothing at all. The first fix handed the URL to
         // ACTION_VIEW — "let some other app open this" — which is not a download

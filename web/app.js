@@ -1,5 +1,5 @@
 import { CARTO_ATTRIBUTION, CARTO_MAXZOOM, CARTO_TILES, createBasemap, VENDORED_FONT_STACK, } from "./basemap.js";
-import { askForRideNotifications, isNativeApp, isNewerAppVersion, lastNativeSpeechError, locationAdvice, minimizeApp, nativeLocationAllowed, nativeSpeak, onAndroidBack, rideLocationState, startDownload, startBackgroundWatcher, stopBackgroundWatcher, webVoiceCount, } from "./native.js";
+import { askForRideNotifications, isNativeApp, isNewerAppVersion, keepScreenOn, lastNativeSpeechError, locationAdvice, minimizeApp, nativeLocationAllowed, nativeSpeak, onAndroidBack, rideLocationState, startDownload, startBackgroundWatcher, stopBackgroundWatcher, webVoiceCount, } from "./native.js";
 import { GEOCODE_DEBOUNCE_MS, geocodeDelayMs, matchScore, metresBetween, rank as rankSearch, describe as describeRow, worthGeocoding, } from "./search.js";
 import { CLASS_LABELS, cautionsHtml, clearPhotoCache, esc, FACILITY_CLASSES, nearestMapillary, fillSegmentPhoto as fillPhotoSlot, GRADE_COLORS, segmentHtml, } from "./segment.js";
 import { bearingDeg, buildAlerts, buildManeuvers, buildTrack, distM, snapToTrack, sunsetTime, trackBearingAhead, trackSlice, } from "./nav.js";
@@ -4546,6 +4546,7 @@ async function startNav() {
     // label-free basemap, our own upright labels, and the network dimmed behind
     // the route — all of which applyBasemap decides from navActive
     applyBasemap();
+    keepScreenOn(true); // the app's window flag: a WebView may not honour the Wake Lock
     try {
         wakeLock = await navigator.wakeLock.request("screen");
     }
@@ -4573,6 +4574,7 @@ function exitNav() {
     navBgWatcherId = null;
     void wakeLock?.release().catch(() => undefined);
     wakeLock = null;
+    keepScreenOn(false);
     closeAsk();
     hideClassify();
     hideRideAlert();
