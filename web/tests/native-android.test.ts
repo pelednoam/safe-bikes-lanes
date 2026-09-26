@@ -241,6 +241,66 @@ describe("Android's Back", () => {
   });
 });
 
+describe("downloading an update", () => {
+  it("names the file for its version, and only for a real one", async () => {
+    installApp({});
+    const { updateFileName } = await import("../src/native.js");
+    expect(updateFileName("app-v53")).toBe("family-bike-router-app-v53.apk");
+    for (const odd of [undefined, "dev", "app-v53-dev.1a2b3c4", "../../x", "app-v"]) {
+      expect(updateFileName(odd), String(odd)).toBe("family-bike-router.apk");
+    }
+  });
+
+  it("asks Android's download service through AppShell, not an iframe", async () => {
+    const asked: unknown[] = [];
+    installApp({
+      AppShell: {
+        downloadUpdate: async (o: unknown) => {
+          asked.push(o);
+          return { status: "started" };
+        },
+      },
+    });
+    const made: unknown[] = [];
+    (globalThis as unknown as { document: Record<string, unknown> }).document = {
+      createElement: () => {
+        made.push("iframe");
+        return { style: {} };
+      },
+      body: { appendChild: () => undefined },
+    };
+    const { startDownload } = await import("../src/native.js");
+    startDownload("https://example.test/app.apk", "app-v60");
+    await vi.waitFor(() => expect(asked).toHaveLength(1));
+    expect(asked[0]).toEqual({
+      url: "https://example.test/app.apk",
+      fileName: "family-bike-router-app-v60.apk",
+    });
+    expect(made).toEqual([]);
+  });
+
+  it("falls back to the iframe if the plugin refuses", async () => {
+    installApp({
+      AppShell: {
+        downloadUpdate: async () => {
+          throw new Error("no DownloadManager on this device");
+        },
+      },
+    });
+    const w = (globalThis as unknown as { window: Record<string, unknown> }).window;
+    w["setTimeout"] = () => 0;
+    const frames: Record<string, unknown>[] = [];
+    (globalThis as unknown as { document: Record<string, unknown> }).document = {
+      createElement: () => ({ style: {} }),
+      body: { appendChild: (f: Record<string, unknown>) => frames.push(f) },
+    };
+    const { startDownload } = await import("../src/native.js");
+    startDownload("https://example.test/app.apk", "app-v60");
+    await vi.waitFor(() => expect(frames).toHaveLength(1));
+    expect(frames[0]?.["src"]).toBe("https://example.test/app.apk");
+  });
+});
+
 describe("the status bar", () => {
   it("is styled from the app's theme, and light before the page says otherwise", async () => {
     const got: unknown[] = [];

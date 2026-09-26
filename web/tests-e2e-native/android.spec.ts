@@ -296,6 +296,37 @@ test("the watcher's NOT_AUTHORIZED is explained by what is actually wrong", asyn
   expect(await calls(page)).not.toContain("AppShell.openLocationSettings");
 });
 
+// ── the update ─────────────────────────────────────────────────────────────
+
+test("an update downloads under its own version's name, through Android", async ({ page }) => {
+  await androidShim(page);
+  await page.route("**/version.json", (route) => {
+    const remote = route.request().url().includes("github.io");
+    return route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ version: remote ? "app-v999" : "app-v17" }),
+    });
+  });
+  let iframeFetch = false;
+  await page.route("**/family-bike-router.apk", (route) => {
+    iframeFetch = true;
+    return route.abort();
+  });
+  await page.goto("/");
+  await expect(page.locator("#update-banner")).toBeVisible({ timeout: 30_000 });
+  await page.locator("#update-get").click();
+  await expect.poll(() => calls(page)).toContain("AppShell.downloadUpdate");
+  const asked = await page.evaluate(
+    () => window.__shell.args[window.__shell.calls.indexOf("AppShell.downloadUpdate")],
+  );
+  expect(asked).toMatchObject({
+    url: expect.stringContaining("releases/latest/download/family-bike-router.apk"),
+    fileName: "family-bike-router-app-v999.apk",
+  });
+  // not also through the iframe, which Capacitor may divert to the browser
+  expect(iframeFetch).toBe(false);
+});
+
 // ── the status bar ─────────────────────────────────────────────────────────
 
 test("the status bar follows the app's dark mode, not the phone's", async ({ page }) => {

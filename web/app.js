@@ -5158,7 +5158,7 @@ async function checkAppUpdate() {
             // success. The wording now names the two places the file can appear and
             // leaves the rider able to tell that it hasn't.
             text.textContent = "asked Android to download it — look in your notifications, then Downloads";
-            startDownload(APK_URL);
+            startDownload(APK_URL, latest.version);
         });
         el("update-dismiss").addEventListener("click", () => {
             banner.style.display = "none";

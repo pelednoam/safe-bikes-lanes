@@ -359,28 +359,57 @@ export async function askForRideNotifications(
   }
 }
 
-/** Start a file download (the APK update).
+/** The name an update is saved under: its version, when it has a real one.
+ *
+ * Every update used to be "family-bike-router.apk", so the second became
+ * "family-bike-router-1.apk" beside the first — and the one somebody opened
+ * from Downloads was as likely as not the older, which Android refuses to
+ * install over the newer app. */
+export function updateFileName(version: string | undefined): string {
+  return version !== undefined && /^app-v\d+$/.test(version)
+    ? `family-bike-router-${version}.apk`
+    : "family-bike-router.apk";
+}
+
+interface DownloadPlugin {
+  downloadUpdate(options: { url: string; fileName: string }): Promise<{ status: string }>;
+}
+
+/** Start a file download (the APK update), named for `version`.
  *
  * This used to go through the Capacitor Browser plugin, which opens a Chrome
  * Custom Tab — and Custom Tabs silently DROP file downloads, so tapping
- * "install" appeared to do nothing. Navigating the WebView instead trips the
- * DownloadListener registered in MainActivity, which hands the URL to the
- * system browser to download and offer for install. */
-export function startDownload(url: string): void {
+ * "install" appeared to do nothing. In the app it now asks AppShell, which
+ * hands it to Android's DownloadManager. The hidden iframe that did this
+ * before is kept only as a fallback: it relied on the WebView's
+ * DownloadListener, and a github.com navigation can be diverted to the
+ * external browser by Capacitor before that listener sees it. */
+export function startDownload(url: string, version?: string): void {
   const cap = window.Capacitor;
   if (cap && cap.isNativePlatform()) {
-    // Loaded in a hidden iframe rather than by navigating the top document:
-    // the DownloadListener fires either way, but if it ever doesn't, a
-    // top-level navigation to a binary would leave the rider staring at a
-    // blank WebView — this way the app page survives.
-    const frame = document.createElement("iframe");
-    frame.style.display = "none";
-    frame.src = url;
-    document.body.appendChild(frame);
-    window.setTimeout(() => frame.remove(), 60_000);
+    const shell = nativePlugin<DownloadPlugin>("AppShell");
+    if (shell !== null && typeof shell.downloadUpdate === "function") {
+      void shell
+        .downloadUpdate({ url, fileName: updateFileName(version) })
+        .catch(() => downloadInFrame(url));
+      return;
+    }
+    downloadInFrame(url);
     return;
   }
   window.open(url, "_blank");
+}
+
+function downloadInFrame(url: string): void {
+  // Loaded in a hidden iframe rather than by navigating the top document: the
+  // DownloadListener fires either way, but if it ever doesn't, a top-level
+  // navigation to a binary would leave the rider staring at a blank WebView —
+  // this way the app page survives.
+  const frame = document.createElement("iframe");
+  frame.style.display = "none";
+  frame.src = url;
+  document.body.appendChild(frame);
+  window.setTimeout(() => frame.remove(), 60_000);
 }
 
 /** True when `latest` is a newer app-vN tag than `current`. */

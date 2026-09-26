@@ -41,7 +41,8 @@ import com.getcapacitor.annotation.PermissionCallback;
  * watcher, means the service starts with the permission already held.
  *
  * <p>Also the notification permission (Android 13+), without which the "navigation
- * is running" notice is hidden, and keeping the screen on for a ride only.
+ * is running" notice is hidden, keeping the screen on for a ride only, and the
+ * update download.
  */
 @CapacitorPlugin(
         name = "AppShell",
@@ -176,5 +177,30 @@ public class AppShellPlugin extends Plugin {
                             }
                             call.resolve();
                         });
+    }
+
+    /**
+     * Download an update through the system, under a name that says which one.
+     *
+     * <p>Called directly rather than by loading the URL in a hidden iframe, as the
+     * web code used to: a github.com navigation can be claimed by Capacitor's
+     * shouldOverrideUrlLoading and handed to the browser before the WebView's
+     * DownloadListener ever sees it.
+     */
+    @PluginMethod
+    public void downloadUpdate(PluginCall call) {
+        String url = call.getString("url");
+        if (url == null || !url.startsWith("https://")) {
+            call.reject("no https url to download");
+            return;
+        }
+        String fileName = call.getString("fileName", UpdateDownloader.DEFAULT_NAME);
+        try {
+            JSObject result = new JSObject();
+            result.put("status", UpdateDownloader.enqueue(getContext(), url, fileName));
+            call.resolve(result);
+        } catch (RuntimeException e) {
+            call.reject(e.getMessage() == null ? "the download did not start" : e.getMessage());
+        }
     }
 }
