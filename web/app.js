@@ -2851,6 +2851,8 @@ for (const evt of ["touchend", "touchmove", "touchcancel"]) {
 const SHEET_STATES = ["peek", "half", "full"];
 /** The layout where the panel is a bottom sheet — the same query the CSS uses. */
 const sheetLayout = window.matchMedia("(max-width: 760px), (max-height: 500px)");
+/** The half sheet's max-height, as a share of the screen (#panel.half). */
+const SHEET_HALF = 0.52;
 function setSheet(state) {
     const panel = el("panel");
     panel.style.maxHeight = "";
@@ -4298,15 +4300,18 @@ function frameRoute(option) {
         if (lat > n)
             n = lat;
     }
-    const phone = window.matchMedia("(max-width: 760px)").matches;
     map.fitBounds([
         [w, sth],
         [e, n],
     ], {
-        // leave room for the panel: on a phone it's a bottom sheet, on desktop
-        // it's down the left-hand side
-        padding: phone
-            ? { top: 60, bottom: Math.round(window.innerHeight * 0.5), left: 30, right: 30 }
+        // Leave room for the panel: a bottom sheet wherever the CSS makes it one
+        // — sheetLayout is that same query, which includes a phone held sideways
+        // (max-height: 500px); asking about width alone framed a landscape phone's
+        // route with desktop padding, under the sheet — and down the left-hand
+        // side on a desktop. The sheet stands at "half" once a route is shown
+        // (revealSheet): 52% plus its own padding.
+        padding: sheetLayout.matches
+            ? { top: 40, bottom: Math.round(window.innerHeight * SHEET_HALF) + 40, left: 30, right: 30 }
             : { top: 60, bottom: 60, left: 380, right: 60 },
         duration: 700,
         maxZoom: 16,

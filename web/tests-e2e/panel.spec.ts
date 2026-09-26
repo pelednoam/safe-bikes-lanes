@@ -1,5 +1,5 @@
 // The route panel and the map around it: what switching between options
-// leaves behind.
+// leaves behind, and where a route is framed on a phone held sideways.
 import { expect, test } from "@playwright/test";
 import type { Map as MLMap } from "maplibre-gl";
 
@@ -43,4 +43,27 @@ test("switching options quickly leaves no per-frame work behind", async ({ page 
   // past the three-second hard stop every paint has
   await page.waitForTimeout(4500);
   expect(await listeners(), "render listeners leaked by superseded paints").toBe(before);
+});
+
+test("on a phone held sideways, the route is framed above the sheet", async ({ page }) => {
+  // The panel is a bottom sheet on a landscape phone too (max-height: 500px),
+  // but the framing asked only about width and used the desktop padding — the
+  // route went under the sheet.
+  await page.setViewportSize({ width: 844, height: 390 });
+  await planned(page);
+  await page.waitForTimeout(2500); // the fit animates
+  const lowest = await page.evaluate(() => {
+    const map = window._map;
+    const src = map?.getSource("route") as { _data?: GeoJSON.FeatureCollection } | undefined;
+    const ys = (src?._data?.features ?? []).flatMap((f) =>
+      f.geometry.type === "LineString"
+        ? f.geometry.coordinates.map((c) => map?.project(c as [number, number]).y ?? 0)
+        : [],
+    );
+    return Math.max(...ys);
+  });
+  const sheetTop = await page.evaluate(
+    () => document.getElementById("panel")?.getBoundingClientRect().top ?? 0,
+  );
+  expect(lowest, "the route runs under the bottom sheet").toBeLessThan(sheetTop + 10);
 });
