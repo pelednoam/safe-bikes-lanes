@@ -40,6 +40,7 @@ export const PROFILES: Record<ProfileId, RiderProfile> = {
     mult: {
       path: 1.0, separated: 1.0, buffered: 2.0, lane: 3.0, quiet_street: 1.4,
       service: 2.0, sharrow: 6.0, moderate_street: 8.0, busy_street: 25.0,
+      unpaved: 2.0,
     },
     busyLane: 10.0,
     busyBuffered: 6.0,
@@ -52,6 +53,7 @@ export const PROFILES: Record<ProfileId, RiderProfile> = {
     mult: {
       path: 1.0, separated: 1.0, buffered: 1.5, lane: 2.0, quiet_street: 1.2,
       service: 1.6, sharrow: 3.5, moderate_street: 4.0, busy_street: 12.0,
+      unpaved: 1.5,
     },
     busyLane: 5.0,
     busyBuffered: 3.0,
@@ -64,6 +66,7 @@ export const PROFILES: Record<ProfileId, RiderProfile> = {
     mult: {
       path: 1.0, separated: 1.0, buffered: 1.1, lane: 1.3, quiet_street: 1.1,
       service: 1.3, sharrow: 2.0, moderate_street: 2.5, busy_street: 6.0,
+      unpaved: 1.2,
     },
     busyLane: 2.5,
     busyBuffered: 1.8,
@@ -88,6 +91,7 @@ const CLASS_COLORS: Record<ProtectionClass, string> = {
   sharrow: "#fdae61",
   moderate_street: "#f46d43",
   busy_street: "#d73027",
+  unpaved: "#a6761d",
 };
 
 const CAUTION_CLASSES: ReadonlySet<ProtectionClass> = new Set([

@@ -5,7 +5,8 @@ precomputed — the browser computes them from raw components so rider profiles
 are fully client-side:
   nodes:   [[lon, lat, elev_m], ...]             graph nodes
   names:   ["", "Main Street", ...]              deduped street names
-  classes: ["path", ...]                         protection classes
+  classTable: ["buffered", ...]                 protection classes (manifest;
+                                                 `classes` is its legacy prefix)
   edges:   [[u, v, len_m, clsIdx, nameIdx, geomIdx, crashFactor, pen_m,
              climb_m, busyRoad01, roadClsIdx], ...]
            pen_m = busy-crossing penalty meters, climb_m = elevation gain u->v,
@@ -372,12 +373,13 @@ def export_tiles(
         total_bytes += len(data)
         (tiles_dir / f"{key}.json").write_text(data)
 
-    classes: list[str] = sorted(config.CLASS_MULTIPLIER)
     manifest = {
         "originLon": config.TILE_ORIGIN_LON,
         "originLat": config.TILE_ORIGIN_LAT,
         "tileDeg": config.TILE_DEG,
-        "classes": classes,
+        # what clients from before a class existed read; see config.TILE_CLASSES
+        "classes": list(config.LEGACY_TILE_CLASSES),
+        "classTable": list(config.TILE_CLASSES),
         "tiles": sorted(keys),
     }
     (tiles_dir / "manifest.json").write_text(json.dumps(manifest, separators=(",", ":")))
@@ -439,8 +441,7 @@ def export() -> None:
 
     name_index: dict[str, int] = {"": 0}
     names: list[str] = [""]
-    classes: list[str] = sorted(config.CLASS_MULTIPLIER)
-    cls_index = {c: i for i, c in enumerate(classes)}
+    cls_index = {c: i for i, c in enumerate(config.TILE_CLASSES)}
 
     edges: list[list[float]] = []
     geoms: list[list[float]] = []

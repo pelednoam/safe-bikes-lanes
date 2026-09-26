@@ -52,6 +52,7 @@ def tiny_osm(painted: bool = False) -> nx.MultiDiGraph:
     link(3, 6, highway="residential", name="Other St")
     if painted:
         link(1, 7, highway="residential", name="Painted St", cycleway="lane")
+        link(4, 8, highway="path", name="Mud Trail", surface="dirt")
         link(7, 8, highway="primary", name="Sharrow Ave", cycleway="shared_lane")
     # osmnx measures lengths during the download the real acquire_osm does;
     # use its own helper rather than inventing metres by hand
@@ -217,3 +218,62 @@ def test_markings_are_priced_against_the_street_they_are_painted_on(
                 assert table[e[10]] == "quiet_street"
                 seen = True
     assert seen
+
+
+def test_an_unpaved_trail_reaches_the_app_as_its_own_class(
+    sandbox: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End to end: classified, priced, drawn in its own colour, and exported so
+    that the app can name it while an app from before the class existed still
+    routes it (as the quiet street it falls back to) rather than as NaN."""
+    import json
+
+    monkeypatch.setattr(build_graph, "acquire_osm", lambda _bbox: tiny_osm(painted=True))
+    monkeypatch.setattr(export_web, "ElevationSampler", lambda: StubSampler())
+    # An official layer draws a "shared-use path" along it. That says nothing
+    # about the surface, and OSM saying "dirt" does: it stays unpaved.
+    official = {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "type": "Feature",
+                "geometry": {
+                    "type": "LineString",
+                    "coordinates": [[-71.09802, 42.3820], [-71.09802, 42.3780]],
+                },
+                "properties": {"mapc_cls": "path"},
+            }
+        ],
+    }
+    (sandbox / "raw" / "mapc_bike_network.geojson").write_text(json.dumps(official))
+    build_graph.build()
+    with (sandbox / "graph.pkl").open("rb") as fh:
+        g: nx.MultiDiGraph = pickle.load(fh)
+    trail = next(d for _u, _v, d in g.edges(data=True) if d["name"] == "Mud Trail")
+    assert trail["cls"] == "unpaved"
+    assert trail["stress_mult"] == config.CLASS_MULTIPLIER["unpaved"]
+
+    net = json.loads((sandbox / "network.geojson").read_text())
+    drawn = [f for f in net["features"] if f["properties"]["name"] == "Mud Trail"]
+    assert drawn and drawn[0]["properties"]["color"] == config.CLASS_COLOR["unpaved"]
+
+    web = tmp_path / "web-unpaved"
+    web.mkdir()
+    monkeypatch.setattr(export_web, "WEB_DATA", web)
+    export_web.export()
+    manifest = json.loads((web / "tiles" / "manifest.json").read_text())
+    legacy, table = manifest["classes"], manifest["classTable"]
+    assert table[: len(legacy)] == legacy
+    found = False
+    for key in manifest["tiles"]:
+        tile = json.loads((web / "tiles" / f"{key}.json").read_text())
+        for e in tile["edges"]:
+            if tile["names"][e[4]] == "Mud Trail":
+                assert table[e[3]] == "unpaved"
+                # past the end of what an old app reads: it falls back, not NaN
+                assert e[3] >= len(legacy)
+                found = True
+            else:
+                # every other class keeps the index it has always had
+                assert e[3] < len(legacy)
+    assert found

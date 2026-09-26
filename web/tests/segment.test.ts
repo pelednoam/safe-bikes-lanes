@@ -30,6 +30,7 @@ describe("the street card", () => {
     expect(classGrade("lane")).toBe("C");
     expect(classGrade("sharrow")).toBe("D");
     expect(classGrade("busy_street")).toBe("F");
+    expect(classGrade("unpaved")).toBe("B"); // off the road, but rough going
   });
 
   it("says what the street is, and what that means for a child", () => {

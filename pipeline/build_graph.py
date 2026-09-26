@@ -59,12 +59,27 @@ ROAD_MODERATE: Final[set[str]] = {"tertiary", "tertiary_link"}
 PATHLIKE: Final[set[str]] = {
     "cycleway", "path", "footway", "pedestrian", "track", "bridleway", "steps",
 }
+# Off-street classes: an official layer drawing one of these beside a road must
+# not upgrade the road (see overlay_match).
+OFFSTREET: Final[frozenset[str]] = frozenset({"path", "unpaved"})
+# Ways that are dirt unless someone has said otherwise.
+UNSURFACED_BY_DEFAULT: Final[set[str]] = {"track", "bridleway"}
+# Surfaces a child's bike does badly on. `gravel` is here and `fine_gravel` and
+# `compacted` are not: in OSM, gravel is loose crushed rock, while fine_gravel
+# and compacted are the packed stone dust of rail trails, which a kid rides
+# like pavement. `natural` is not a documented value but is in this region's
+# data (126 edges), always on woodland trails.
+UNPAVED_SURFACES: Final[frozenset[str]] = frozenset({
+    "unpaved", "dirt", "ground", "earth", "grass", "mud", "sand", "gravel",
+    "pebblestone", "rock", "stone", "woodchips", "grass_paver", "natural", "soil",
+})
 
 ox.settings.useful_tags_way = list(
     set(ox.settings.useful_tags_way)
     | {
         "cycleway", "cycleway:left", "cycleway:right", "cycleway:both",
         "bicycle", "maxspeed", "surface", "segregated", "oneway:bicycle",
+        "tracktype",
     }
 )
 ox.settings.useful_tags_node = ["ref", "highway", "crossing"]
@@ -72,6 +87,12 @@ ox.settings.useful_tags_node = ["ref", "highway", "crossing"]
 
 def listy(v: Any) -> list[Any]:
     return v if isinstance(v, list) else [v]
+
+
+def tag_values(tags: Mapping[str, Any], key: str) -> list[str]:
+    """A tag's values as strings, without the None/NaN/"" that stand for
+    "absent" once edges have been through a DataFrame."""
+    return [str(v) for v in listy(tags.get(key)) if v is not None and v == v and v != ""]
 
 
 def mult(cls: str) -> float:
@@ -165,6 +186,32 @@ def multilane(tags: Mapping[str, Any]) -> bool:
     return n is not None and n >= MULTILANE_MIN_LANES
 
 
+def rough_surface(tags: Mapping[str, Any]) -> bool:
+    """Someone has tagged some part of this way with a rough surface."""
+    return any(s.strip().lower() in UNPAVED_SURFACES for s in tag_values(tags, "surface"))
+
+
+def offstreet_class(tags: Mapping[str, Any], hws: list[str]) -> str:
+    """"path" or "unpaved" for a way that is off the street.
+
+    `surface` was downloaded and never read, so a mud bridleway and a paved
+    rail trail were both "path", the best class there is, and a family could be
+    routed down a horse trail as the safest way home. Unpaved if any part is
+    tagged rough (the worst part governs, as for roads), or if it is a track or
+    bridleway nobody has described as surfaced: those are farm and forest
+    roads unless tagged otherwise (tracktype=grade1 is the solid kind).
+    """
+    if rough_surface(tags):
+        return "unpaved"
+    if any(h in UNSURFACED_BY_DEFAULT for h in hws):
+        surfaced = bool(tag_values(tags, "surface")) or "grade1" in tag_values(
+            tags, "tracktype"
+        )
+        if not surfaced:
+            return "unpaved"
+    return "path"
+
+
 def classify_road(tags: Mapping[str, Any]) -> str:
     """The class a way has on its own merits, before any bike facility.
 
@@ -176,7 +223,7 @@ def classify_road(tags: Mapping[str, Any]) -> str:
         return any(h in group for h in hws)
 
     if hws and all(h in PATHLIKE for h in hws):
-        return "path"
+        return offstreet_class(tags, hws)
     if hw_in(ROAD_BUSY):
         return "busy_street"
     if hw_in(ROAD_MODERATE):
@@ -225,8 +272,8 @@ def classify_osm(tags: Mapping[str, Any]) -> tuple[str, bool]:
     road class uses the worst part but a facility tag anywhere counts —
     mixed segments are rare and short."""
     road = classify_road(tags)
-    if road == "path":
-        return "path", False
+    if road in OFFSTREET:
+        return road, False
     busy = road == "busy_street"
     values: list[Any] = []
     for key in CYCLEWAY_KEYS:
@@ -309,7 +356,7 @@ def overlay_match(
         best_d: float | None = None
         for pos in sindex.query(mid.buffer(radius)):
             row = overlay.iloc[pos]
-            if row["cls"] == "path" and not is_path:
+            if row["cls"] in OFFSTREET and not is_path:
                 continue
             d = row.geometry.distance(mid)
             if d > radius:
@@ -574,8 +621,9 @@ def build() -> None:
     edges["road_busy"] = [b for _, b in base]
     # the street's own class, without its facility: what paint is priced against
     edges["road_cls"] = [classify_road(t) for t in records]
+    edges["rough"] = [rough_surface(t) for t in records]
     del records
-    edges["is_pathlike"] = edges["cls"] == "path"
+    edges["is_pathlike"] = edges["cls"].isin(OFFSTREET)
     edges["source"] = "osm"
     edges["lts"] = 0
 
@@ -602,6 +650,11 @@ def build() -> None:
             cls = exploded.iloc[pos]["cls"]
             # official path can't upgrade an on-road edge past "separated"
             cur = edges.iloc[i]["cls"]
+            # An official "shared-use path" says nothing about its surface, and
+            # OSM saying "mud" does: it stays unpaved. (A track with no surface
+            # tag is unpaved only by default, and an official path wins there.)
+            if cur == "unpaved" and edges.iloc[i]["rough"]:
+                continue
             new = safer(cur, cls)
             if new != cur:
                 edges.iat[i, edges.columns.get_loc("cls")] = new

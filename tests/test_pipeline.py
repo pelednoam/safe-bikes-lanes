@@ -34,6 +34,51 @@ def cost(tags: dict[str, object], profile: str = "kids") -> float:
 
 def test_class_tables_consistent() -> None:
     assert set(config.CLASS_MULTIPLIER) == set(config.CLASS_COLOR)
+    assert set(config.CLASS_MULTIPLIER) == set(config.SOLO_CLASS_MULTIPLIER)
+    assert set(config.CLASS_MULTIPLIER) == set(config.TILE_CLASSES)
+    assert set(config.MAPC_ALLTRAILS_LAYERS.values()) <= set(config.CLASS_MULTIPLIER)
+
+
+def test_the_tile_class_table_only_ever_grows() -> None:
+    """Tile edges carry class *indices*. The first nine are what every snapshot
+    has published (sorted names), and what an app built before a new class reads;
+    anything new goes after them, where an old app falls back to a quiet street
+    instead of pricing an unknown name as NaN."""
+    legacy = config.LEGACY_TILE_CLASSES
+    assert legacy == tuple(sorted(legacy)) and len(legacy) == 9
+    assert config.TILE_CLASSES[: len(legacy)] == legacy
+    assert len(set(config.TILE_CLASSES)) == len(config.TILE_CLASSES)
+
+
+def test_unpaved_paths_are_not_the_best_class() -> None:
+    """`surface` was downloaded and never read, and track and bridleway counted as
+    paths: a mud horse trail was priced like the Minuteman."""
+    assert classify_osm({"highway": "path", "surface": "dirt"}) == ("unpaved", False)
+    assert classify_osm({"highway": "footway", "surface": "Natural"}) == ("unpaved", False)
+    assert classify_osm({"highway": "bridleway"}) == ("unpaved", False)
+    assert classify_osm({"highway": "track"}) == ("unpaved", False)
+    # the worst part of a merged edge governs, as it does for roads
+    assert classify_osm({"highway": "path", "surface": ["asphalt", "ground"]}) == (
+        "unpaved",
+        False,
+    )
+    # a pandas record says "absent" with NaN, and that is not a surface
+    assert classify_osm({"highway": "track", "surface": float("nan")}) == ("unpaved", False)
+    # rideable: paved, and the packed stone dust of rail trails
+    assert classify_osm({"highway": "cycleway"}) == ("path", False)
+    assert classify_osm({"highway": "path", "surface": "fine_gravel"}) == ("path", False)
+    assert classify_osm({"highway": "path", "surface": "compacted"}) == ("path", False)
+    assert classify_osm({"highway": "track", "surface": "asphalt"}) == ("path", False)
+    assert classify_osm({"highway": "track", "tracktype": "grade1"}) == ("path", False)
+
+
+def test_unpaved_sits_between_a_quiet_street_and_a_painted_lane() -> None:
+    m = config.CLASS_MULTIPLIER
+    assert m["quiet_street"] < m["unpaved"] < m["lane"]
+    # off the road, so still kid-safe for the where-to-build analysis
+    assert m["unpaved"] <= config.SAFE_MULT_MAX
+    s = config.SOLO_CLASS_MULTIPLIER
+    assert s["path"] < s["unpaved"] <= s["lane"]
     assert set(config.CAMBRIDGE_FACILITY_CLASS.values()) <= set(config.CLASS_MULTIPLIER)
 
 

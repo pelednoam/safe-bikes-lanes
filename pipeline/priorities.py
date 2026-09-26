@@ -501,6 +501,7 @@ CLASS_WORDS: dict[str, str] = {
     "quiet_street": "a quiet street",
     "separated": "a separated lane",
     "path": "an off-street path",
+    "unpaved": "an unpaved path",
 }
 
 

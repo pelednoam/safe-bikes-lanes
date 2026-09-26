@@ -100,6 +100,36 @@ describe("TileStore", () => {
     expect(meters).toBeLessThan(150);
   });
 
+  it("reads the full class table, so an appended class is named and priced", async () => {
+    // `classes` is the legacy prefix an older app reads; `classTable` is the
+    // whole append-only table (pipeline config.TILE_CLASSES)
+    const manifest = {
+      ...MANIFEST,
+      classes: ["quiet_street"],
+      classTable: ["quiet_street", "unpaved"],
+      tiles: ["0_0"],
+    };
+    const trail = (u: number, v: number): Edge => [u, v, 70, 1, 0, -1, 1, 0, 0, 0];
+    const tile = { ...TILE_0_0, edges: [trail(0, 1), trail(1, 0)] };
+    const store = new TileStore(<T,>(name: string): Promise<T> =>
+      Promise.resolve((name === "tiles/manifest.json" ? manifest : tile) as T),
+    );
+    await store.loadManifest();
+    expect(store.classes).toEqual(["quiet_street", "unpaved"]);
+    await store.ensure({ west: 0.1, south: 0.4, east: 0.95, north: 0.6 }, 0);
+    const router = new Router(store.assemble());
+    const opts = router.routeOptions([0.2, 0.5], [0.9, 0.5], "young_kids");
+    const summary = opts[0]?.payload.summary;
+    expect(summary?.by_class_m.unpaved).toBe(70);
+    expect(Number.isFinite(summary?.meters)).toBe(true);
+  });
+
+  it("still reads a snapshot published before the full class table existed", async () => {
+    const store = new TileStore(fetcher([]));
+    await store.loadManifest();
+    expect(store.classes).toEqual(["quiet_street"]);
+  });
+
   it("keysForBBox grows the covered cells by the margin", async () => {
     const store = new TileStore(fetcher([]));
     await store.loadManifest();

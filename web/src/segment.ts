@@ -18,6 +18,7 @@ export const CLASS_LABELS: Record<ProtectionClass, string> = {
   sharrow: "sharrow",
   moderate_street: "moderate street",
   busy_street: "busy street",
+  unpaved: "unpaved path",
 };
 
 /** What each class means for riding with kids, in plain words. */
@@ -31,6 +32,7 @@ export const CLASS_SAFETY: Record<ProtectionClass, string> = {
   sharrow: "shared with car traffic, marking only",
   moderate_street: "no bike facility, moderate traffic",
   busy_street: "no protection on a busy street",
+  unpaved: "off-street, but dirt, grass or loose gravel — slow going on small wheels",
 };
 
 export const GRADE_COLORS: Record<SafetyGrade, string> = {

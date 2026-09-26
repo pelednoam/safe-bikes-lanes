@@ -64,6 +64,16 @@ def test_a_path_never_upgrades_the_road_beside_it() -> None:
     assert build_graph.overlay_match(edges_frame([(road, True)]), frame, 18.0) == [0]
 
 
+def test_an_unpaved_trail_never_upgrades_the_road_beside_it() -> None:
+    """The same rule for the other off-street class: MAPC's unimproved trails
+    now arrive as "unpaved", and that must not turn a parallel arterial into a
+    dirt path at 2.0."""
+    road = LineString([(0, 0), (100, 0)])
+    trail = overlay_frame([(LineString([(0, 5), (100, 5)]), "unpaved")])
+    assert build_graph.overlay_match(edges_frame([(road, False)]), trail, 18.0) == [None]
+    assert build_graph.overlay_match(edges_frame([(road, True)]), trail, 18.0) == [0]
+
+
 def test_the_nearest_of_several_candidates_wins() -> None:
     street = LineString([(0, 0), (100, 0)])
     far = LineString([(0, 15), (100, 15)])
