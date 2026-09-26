@@ -1,6 +1,8 @@
 // Saved places (tagged locations like Home/Work) and recent route history.
 // Everything lives in localStorage on the device.
 
+import { HAZARD_MIRROR_KEY } from "./hazards.js";
+
 export interface SavedPlace {
   name: string;
   lon: number;
@@ -105,6 +107,9 @@ const BACKUP_KEYS = [
   "walkMaxM",
   "navMyWay",
   "darkMode",
+  // Hazard reports, without their photos: see the mirror in hazards.ts, which
+  // writes this key and restores what a backup brings back into IndexedDB.
+  HAZARD_MIRROR_KEY,
 ] as const;
 
 export interface Backup {
