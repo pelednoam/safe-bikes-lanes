@@ -16,7 +16,12 @@ permissions:
 jobs:
   refresh:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    # 180, not 120: fetch.py now pages ArcGIS layers to the end instead of
+    # stopping at the first ~1,000 rows, which is ~250 more pages of MassDOT LTS
+    # alone (251,046 features where the snapshot had 997). Recent runs took
+    # 32-68 min; a timeout kills the job before it publishes, so the cost of too
+    # little headroom is a missed week, not a bad map.
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
         with:
