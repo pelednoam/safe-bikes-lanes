@@ -19,11 +19,14 @@ const ASSETS = [
   // was) is exactly the one a first offline load would be missing. A test asserts
   // this list covers the import graph, so the next one cannot be forgotten.
   "app.js",
-  // MapLibre itself, vendored. index.html loads it with a plain <script src>, and
-  // without it in the precache a first offline load fails before app.js runs —
-  // the same failure the module list above was extended to prevent, one file
-  // further out. A test now reads index.html rather than trusting this list.
-  "maplibre-gl.js",
+  // MapLibre itself, vendored: maplibre.js imports maplibre-gl.mjs, which
+  // imports the shared chunk and starts the worker from its own URL. Missing any
+  // one, a first offline load has no map. A test reads the vendored module for
+  // the files it loads rather than trusting this list.
+  "maplibre.js",
+  "maplibre-gl.mjs",
+  "maplibre-gl-shared.mjs",
+  "maplibre-gl-worker.mjs",
   "maplibre-gl.css",
   "basemap.js",
   "data.js",
@@ -152,6 +155,7 @@ function isShell(url) {
     url.pathname.endsWith("/") ||
     url.pathname.endsWith(".html") ||
     url.pathname.endsWith(".js") ||
+    url.pathname.endsWith(".mjs") || // MapLibre, which must match the maplibre.js importing it
     url.pathname.endsWith("manifest.json")
   );
 }

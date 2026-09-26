@@ -437,13 +437,13 @@ test("a phone gets one panel at a time", async ({ page }) => {
   // is on the right and gets 420 px of padding; asking for that on a 390 px
   // canvas leaves fitBounds a negative width to fit into.
   await page.waitForTimeout(1200);
-  const framing = await page.evaluate(() => {
+  const framing = await page.evaluate(async () => {
     const map = window._map;
     const pid = document.querySelector<HTMLElement>(".row.on")?.dataset["pid"] ?? "";
     const src = map?.getSource("projects") as unknown as {
-      _data?: GeoJSON.FeatureCollection<GeoJSON.MultiLineString>;
+      getData(): Promise<GeoJSON.FeatureCollection<GeoJSON.MultiLineString>>;
     };
-    const f = src._data?.features.find((x) => x.properties?.["pid"] === pid);
+    const f = (await src.getData())?.features.find((x) => x.properties?.["pid"] === pid);
     const line = f?.geometry.coordinates.flat() as [number, number][] | undefined;
     const box = map?.getCanvas().getBoundingClientRect();
     if (!map || !line || !box) return null;
@@ -585,14 +585,14 @@ test("a street on the map is a way in, not just a picture", async ({ page }) => 
   // Aim at a highly ranked project: those are the lines the map draws thickly,
   // and a low-ranked one can be drawn under a pixel wide, where a miss would be
   // the paint expression working rather than the click handler failing.
-  const hit = await page.evaluate(() => {
+  const hit = await page.evaluate(async () => {
     const map = window._map;
     if (!map) return null;
     const src = map.getSource("projects") as unknown as {
-      _data?: GeoJSON.FeatureCollection<GeoJSON.MultiLineString>;
+      getData(): Promise<GeoJSON.FeatureCollection<GeoJSON.MultiLineString>>;
     };
     const byPid = new Map<string, GeoJSON.Feature<GeoJSON.MultiLineString>>();
-    for (const f of src._data?.features ?? []) byPid.set(String(f.properties?.["pid"]), f);
+    for (const f of (await src.getData())?.features ?? []) byPid.set(String(f.properties?.["pid"]), f);
     const box = map.getCanvas().getBoundingClientRect();
     for (const row of [...document.querySelectorAll<HTMLElement>(".row")].slice(0, 40)) {
       const pid = row.dataset["pid"] ?? "";
@@ -1309,14 +1309,14 @@ test("the layout and the camera agree about where the panel is", async ({ page }
   await page.locator(".row").first().click();
   await page.waitForTimeout(1200);
 
-  const state = await page.evaluate(() => {
+  const state = await page.evaluate(async () => {
     const map = window._map;
     const rank = document.getElementById("rank-panel");
     const pid = document.querySelector<HTMLElement>(".row.on")?.dataset["pid"] ?? "";
     const src = map?.getSource("projects") as unknown as {
-      _data?: GeoJSON.FeatureCollection<GeoJSON.MultiLineString>;
+      getData(): Promise<GeoJSON.FeatureCollection<GeoJSON.MultiLineString>>;
     };
-    const f = src._data?.features.find((x) => x.properties?.["pid"] === pid);
+    const f = (await src.getData())?.features.find((x) => x.properties?.["pid"] === pid);
     const line = f?.geometry.coordinates.flat() as [number, number][] | undefined;
     const box = map?.getCanvas().getBoundingClientRect();
     if (!map || !line || !box || !rank) return null;

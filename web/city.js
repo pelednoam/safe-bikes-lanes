@@ -11,6 +11,7 @@
 // planner.
 import { CARTO_ATTRIBUTION, CARTO_GLYPHS, CARTO_MAXZOOM, CARTO_TILES, createBasemap, NOLABEL_STYLE_URL, PHOTO_LABEL_STYLE_URL, } from "./basemap.js";
 import { fillSegmentPhoto, segmentHtml } from "./segment.js";
+import { maplibregl } from "./maplibre.js";
 /** One hue per pocket. Rank 0 is the network that leaves the city, so it gets
  * the safety green everything else in the app uses for "you can ride this";
  * the rest are distinguishable rather than ranked — a pocket isn't better for
@@ -548,7 +549,7 @@ async function start() {
     }
     document.title = `${city.name} — where to build for family biking`;
     summarise(city);
-    const map = new window.maplibregl.Map({
+    const map = new maplibregl.Map({
         container: "map",
         // Label-free: the city's own streets are the subject, and the basemap's
         // labels compete with them. Carto's vector positron-nolabels rather than
@@ -585,7 +586,7 @@ async function start() {
         fitBoundsOptions: { padding: framePadding() },
     });
     window._map = map;
-    map.addControl(new window.maplibregl.NavigationControl({}), "top-right");
+    map.addControl(new maplibregl.NavigationControl({}), "top-right");
     map.on("load", () => {
         addLayers(map, city);
         // Underneath everything this page draws, and after it: the basemap is
@@ -602,7 +603,7 @@ async function start() {
         // The street card, in the route planner's own words (src/segment.ts), plus
         // what this page knows that it doesn't: which piece of the network the
         // street belongs to, and whether you can leave it.
-        const popup = new window.maplibregl.Popup({ closeButton: false, closeOnClick: false });
+        const popup = new maplibregl.Popup({ closeButton: false, closeOnClick: false });
         let photoTimer;
         let openFor = "";
         const cardFor = (props, layer) => {

@@ -17,11 +17,11 @@ type Page = import("@playwright/test").Page;
 const LOOP = "#s=-71.122258,42.396748&l=5,none&m=young_kids";
 
 async function drawnRoute(page: Page): Promise<[number, number][]> {
-  return page.evaluate(() => {
+  return page.evaluate(async () => {
     const src = window._map?.getSource("route") as
-      | { _data?: GeoJSON.FeatureCollection }
+      | { getData(): Promise<GeoJSON.FeatureCollection> }
       | undefined;
-    return (src?._data?.features ?? []).flatMap((f) =>
+    return ((await src?.getData())?.features ?? []).flatMap((f) =>
       f.geometry.type === "LineString" ? (f.geometry.coordinates as [number, number][]) : [],
     );
   });

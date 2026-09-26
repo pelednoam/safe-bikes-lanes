@@ -48,9 +48,9 @@ async function plan(page: Page, hash = DAVIS_KENDALL): Promise<[number, number][
     timeout: 90_000,
   });
   await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
-  return page.evaluate(() => {
-    const src = window._map?.getSource("route") as { _data?: GeoJSON.FeatureCollection } | undefined;
-    return (src?._data?.features ?? []).flatMap((f) =>
+  return page.evaluate(async () => {
+    const src = window._map?.getSource("route") as { getData(): Promise<GeoJSON.FeatureCollection> } | undefined;
+    return ((await src?.getData())?.features ?? []).flatMap((f) =>
       f.geometry.type === "LineString" ? (f.geometry.coordinates as [number, number][]) : [],
     );
   });

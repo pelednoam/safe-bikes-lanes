@@ -287,7 +287,12 @@ for (const [name, hash] of [
     await expect(page.locator(".option-card").first()).toBeVisible({ timeout: budget(90_000) });
     // a real drawn route, not just an empty card
     const coords = await page.evaluate(
-      () => (window._map?.getSource("route") as { _data?: GeoJSON.FeatureCollection })._data,
+      async () =>
+        await (
+          window._map?.getSource("route") as
+            | { getData(): Promise<GeoJSON.FeatureCollection> }
+            | undefined
+        )?.getData(),
     );
     expect(JSON.stringify(coords)).toContain("LineString");
   });
@@ -494,11 +499,11 @@ test("a shared route link brings the route into view", async ({ page }) => {
   await expect
     .poll(
       () =>
-        page.evaluate(() => {
+        page.evaluate(async () => {
           const src = window._map?.getSource("route") as
-            | { _data?: GeoJSON.FeatureCollection }
+            | { getData(): Promise<GeoJSON.FeatureCollection> }
             | undefined;
-          const coords = (src?._data?.features ?? []).flatMap((f) =>
+          const coords = ((await src?.getData())?.features ?? []).flatMap((f) =>
             f.geometry.type === "LineString" ? (f.geometry.coordinates as [number, number][]) : [],
           );
           if (coords.length === 0 || !window._map) return 0;

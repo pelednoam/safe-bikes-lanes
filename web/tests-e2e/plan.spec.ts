@@ -33,6 +33,27 @@ async function boot(page: Page, hash = ""): Promise<void> {
 }
 
 /** Screen point of a lon/lat, for clicking a specific place on the map. */
+/** Wait until a route line is on the map.
+ *
+ * Through expect.poll and page.evaluate, not waitForFunction: the source's data
+ * is only readable asynchronously (GeoJSONSource.getData), and waitForFunction
+ * does not await a predicate's promise — it takes the promise itself as
+ * truthy, so a wait written that way returns at once, before anything is drawn. */
+async function routeDrawn(page: Page): Promise<void> {
+  await expect
+    .poll(
+      () =>
+        page.evaluate(async () => {
+          const s = window._map?.getSource("route") as
+            | { getData(): Promise<{ features?: unknown[] }> }
+            | undefined;
+          return ((await s?.getData())?.features ?? []).length > 0;
+        }),
+      { timeout: budget(60_000) },
+    )
+    .toBe(true);
+}
+
 async function at(page: Page, lon: number, lat: number): Promise<{ x: number; y: number }> {
   return page.evaluate(
     ([lo, la]) => {
@@ -119,11 +140,11 @@ test("compare the options: hovering previews, clicking commits", async ({ page }
   expect(count).toBeGreaterThan(1);
 
   const drawn = (): Promise<number> =>
-    page.evaluate(() => {
+    page.evaluate(async () => {
       const src = window._map?.getSource("route") as
-        | { _data?: GeoJSON.FeatureCollection }
+        | { getData(): Promise<GeoJSON.FeatureCollection> }
         | undefined;
-      return JSON.stringify(src?._data ?? {}).length;
+      return JSON.stringify((await src?.getData()) ?? {}).length;
     });
 
   const selected = await drawn();
@@ -548,22 +569,15 @@ test("a round trip can be planned without hunting for it", async ({ page, contex
 
   // pressing it with no start set finds one rather than refusing
   await loop.click();
-  await page.waitForFunction(
-    () => {
-      const s = window._map?.getSource("route") as { _data?: { features?: unknown[] } } | undefined;
-      return (s?._data?.features ?? []).length > 0;
-    },
-    null,
-    { timeout: budget(60_000) },
-  );
+  await routeDrawn(page);
   await expect(page.locator("#error")).not.toBeVisible();
 
   // it is a loop: the drawn line comes back to where it started
-  const closed = await page.evaluate(() => {
+  const closed = await page.evaluate(async () => {
     const src = window._map?.getSource("route") as
-      | { _data?: GeoJSON.FeatureCollection }
+      | { getData(): Promise<GeoJSON.FeatureCollection> }
       | undefined;
-    const coords = (src?._data?.features ?? []).flatMap((f) =>
+    const coords = ((await src?.getData())?.features ?? []).flatMap((f) =>
       f.geometry.type === "LineString" ? (f.geometry.coordinates as [number, number][]) : [],
     );
     if (coords.length < 2) return -1;
@@ -587,14 +601,7 @@ test("a round trip can have no stop at all", async ({ page, context }) => {
   await expect(page.locator("#loop-stop option[value='none']")).toHaveCount(1);
   await page.locator("#loop-stop").selectOption("none");
   await page.locator("#loop-btn").click();
-  await page.waitForFunction(
-    () => {
-      const s = window._map?.getSource("route") as { _data?: { features?: unknown[] } } | undefined;
-      return (s?._data?.features ?? []).length > 0;
-    },
-    null,
-    { timeout: budget(60_000) },
-  );
+  await routeDrawn(page);
   // no stop marker, and the explanation doesn't promise one
   const markers = await page.evaluate(
     () => document.querySelectorAll('.maplibregl-marker[style*="e67e22"]').length,
@@ -632,14 +639,7 @@ test("a round trip is asked for in miles, typed freely, and answered with a choi
   await box.fill("4");
   await page.locator("#loop-stop").selectOption("none");
   await page.locator("#loop-btn").click();
-  await page.waitForFunction(
-    () => {
-      const s = window._map?.getSource("route") as { _data?: { features?: unknown[] } } | undefined;
-      return (s?._data?.features ?? []).length > 0;
-    },
-    null,
-    { timeout: budget(60_000) },
-  );
+  await routeDrawn(page);
   await expect.poll(() => page.locator(".option-card").count(), { timeout: 20_000 }).toBeGreaterThan(1);
 
   const cards = await page.locator(".option-card").allInnerTexts();

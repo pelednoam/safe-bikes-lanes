@@ -1,6 +1,7 @@
 // Frontend for the family bike router. Routing runs fully in the browser
 // (see router.ts); class colors mirror pipeline/config.py.
 import type {
+  ExpressionSpecification,
   GeoJSONSource,
   LngLat,
   Map as MLMap,
@@ -19,6 +20,7 @@ import {
   STYLE_URL,
   VENDORED_FONT_STACK,
 } from "./basemap.js";
+import { maplibregl } from "./maplibre.js";
 import { downloadOffline } from "./tilecache.js";
 import type { NativeFix } from "./native.js";
 import {
@@ -148,8 +150,6 @@ import type {
   RouteSummary,
 } from "./types.js";
 
-declare const maplibregl: typeof import("maplibre-gl");
-
 interface NominatimResult {
   display_name: string;
   lon: string;
@@ -240,7 +240,7 @@ const TICK_INK_DARK = "rgba(236,240,244,0.85)";
 const isTick = (m: ClassMark): boolean => m.scale > 1;
 
 /** A line width that grows with zoom from `lo` to `hi` and is scaled per class. */
-function classWidth(lo: number, hi: number, scale = 1): unknown {
+function classWidth(lo: number, hi: number, scale = 1): ExpressionSpecification {
   const byClass = (base: number): unknown => [
     "*",
     base * scale,
@@ -251,7 +251,15 @@ function classWidth(lo: number, hi: number, scale = 1): unknown {
       1,
     ],
   ];
-  return ["interpolate", ["linear"], ["zoom"], 12, byClass(lo), 16, byClass(hi)];
+  return [
+    "interpolate",
+    ["linear"],
+    ["zoom"],
+    12,
+    byClass(lo),
+    16,
+    byClass(hi),
+  ] as ExpressionSpecification;
 }
 
 /** Every layer that draws a class mark over the network. */
@@ -2672,7 +2680,7 @@ map.on("load", () => {
     ],
     paint: {
       "line-color": ["get", "color"],
-      "line-width": classWidth(1.2, 3.5) as number,
+      "line-width": classWidth(1.2, 3.5),
       "line-opacity": 0.75,
     },
   });
@@ -2688,7 +2696,7 @@ map.on("load", () => {
     ],
     paint: {
       "line-color": ["get", "color"],
-      "line-width": classWidth(1.2, 3.5) as number,
+      "line-width": classWidth(1.2, 3.5),
       "line-opacity": 0.75,
       "line-dasharray": [2, 1.4],
     },
@@ -2705,7 +2713,7 @@ map.on("load", () => {
       layout: m.round ? { "line-cap": "round" } : {},
       paint: {
         "line-color": MARK_INK,
-        "line-width": classWidth(1.2, 3.5, m.scale) as number,
+        "line-width": classWidth(1.2, 3.5, m.scale),
         "line-dasharray": m.dash,
         "line-opacity": 0.75,
       },
@@ -6208,7 +6216,7 @@ function applyBasemap(): void {
     // over photos the lanes need contrast: dark halo + thicker, solid lines
     vis("network-casing", aerial && netOn);
     const [lo, hi] = aerial ? [2.0, 5.0] : [1.2, 3.5];
-    const width: unknown = classWidth(lo, hi);
+    const width = classWidth(lo, hi);
     for (const m of CLASS_MARKS) {
       const id = `network-mark-${m.id}`;
       if (map.getLayer(id) === undefined) continue;

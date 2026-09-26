@@ -301,11 +301,11 @@ test("re-weighting repaints the map, so it can't contradict the list", async ({ 
     .toBeGreaterThan(0);
 
   const topScore = async (): Promise<number> =>
-    page.evaluate(() => {
+    page.evaluate(async () => {
       const src = window._map?.getSource("build") as
-        | { _data?: GeoJSON.FeatureCollection }
+        | { getData(): Promise<GeoJSON.FeatureCollection> }
         | undefined;
-      const feats = src?._data?.features ?? [];
+      const feats = (await src?.getData())?.features ?? [];
       return Math.max(
         ...feats.map((f) => Number((f.properties as { score?: number } | null)?.score ?? 0)),
       );
@@ -322,11 +322,11 @@ test("re-weighting repaints the map, so it can't contradict the list", async ({ 
 
   // and the list's leader is the map's leader
   const listLeader = await page.locator(".build-row").first().getAttribute("data-pid");
-  const paintedLeader = await page.evaluate(() => {
+  const paintedLeader = await page.evaluate(async () => {
     const src = window._map?.getSource("build") as
-      | { _data?: GeoJSON.FeatureCollection }
+      | { getData(): Promise<GeoJSON.FeatureCollection> }
       | undefined;
-    const feats = src?._data?.features ?? [];
+    const feats = (await src?.getData())?.features ?? [];
     let best = { pid: "", score: -1 };
     for (const f of feats) {
       const p = f.properties as { pid?: string; score?: number } | null;
@@ -435,12 +435,12 @@ test("a what-if never reaches the next plan, or the ride", async ({ page }) => {
   await page.waitForFunction(() => window._map !== undefined, null, { timeout: budget(60_000) });
   await expect(page.locator(".option-card").first()).toBeVisible({ timeout: budget(90_000) });
   const drawn = (): Promise<string> =>
-    page.evaluate(() => {
+    page.evaluate(async () => {
       const src = window._map?.getSource("route") as
-        | { _data?: GeoJSON.FeatureCollection }
+        | { getData(): Promise<GeoJSON.FeatureCollection> }
         | undefined;
       return JSON.stringify(
-        (src?._data?.features ?? []).flatMap((f) =>
+        ((await src?.getData())?.features ?? []).flatMap((f) =>
           f.geometry.type === "LineString" ? f.geometry.coordinates : [],
         ),
       );

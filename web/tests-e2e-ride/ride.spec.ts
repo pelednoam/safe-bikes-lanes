@@ -38,9 +38,9 @@ async function startRide(page: Page, hash = DAVIS_KENDALL): Promise<[number, num
     timeout: 90_000,
   });
   await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 30_000 });
-  const path = await page.evaluate(() => {
-    const src = window._map?.getSource("route") as { _data?: GeoJSON.FeatureCollection } | undefined;
-    return (src?._data?.features ?? []).flatMap((f) =>
+  const path = await page.evaluate(async () => {
+    const src = window._map?.getSource("route") as { getData(): Promise<GeoJSON.FeatureCollection> } | undefined;
+    return ((await src?.getData())?.features ?? []).flatMap((f) =>
       f.geometry.type === "LineString" ? (f.geometry.coordinates as [number, number][]) : [],
     );
   });
@@ -168,9 +168,9 @@ test("Escape doesn't wipe the trip mid-ride", async ({ page }) => {
   await page.waitForTimeout(300);
   // route, markers and permalink all survive; the ride is still on
   expect(await page.evaluate(() => window.location.hash)).toBe(before);
-  const coords = await page.evaluate(() => {
-    const src = window._map?.getSource("route") as { _data?: GeoJSON.FeatureCollection } | undefined;
-    return (src?._data?.features ?? []).length;
+  const coords = await page.evaluate(async () => {
+    const src = window._map?.getSource("route") as { getData(): Promise<GeoJSON.FeatureCollection> } | undefined;
+    return ((await src?.getData())?.features ?? []).length;
   });
   expect(coords).toBeGreaterThan(0);
   await expect(page.locator("#nav-banner")).toBeVisible();

@@ -7,7 +7,7 @@
     // loading every installed @types package by default, so this says so.
     // Only here: src/ runs in a browser, and tsconfig.json leaving Node's types
     // out is what keeps a Node API from typechecking in app code.
-    "types": ["node"]
+    "types": ["node", "geojson"]
   },
   "include": [
     "src/**/*.ts",

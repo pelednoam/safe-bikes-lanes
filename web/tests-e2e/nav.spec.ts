@@ -39,11 +39,11 @@ async function startNav(page: Page): Promise<void> {
 
 /** Coordinates along the selected route, so simulated fixes follow it. */
 async function routeCoords(page: Page): Promise<[number, number][]> {
-  return page.evaluate(() => {
+  return page.evaluate(async () => {
     const src = window._map?.getSource("route") as
-      | { _data?: GeoJSON.FeatureCollection }
+      | { getData(): Promise<GeoJSON.FeatureCollection> }
       | undefined;
-    const fc = src?._data;
+    const fc = await src?.getData();
     if (!fc) return [];
     return fc.features.flatMap((f) =>
       f.geometry.type === "LineString" ? (f.geometry.coordinates as [number, number][]) : [],
@@ -139,11 +139,11 @@ test("ridden progress is dimmed behind the rider", async ({ page, context }) => 
   await expect
     .poll(
       () =>
-        page.evaluate(() => {
+        page.evaluate(async () => {
           const src = window._map?.getSource("route-done") as
-            | { _data?: GeoJSON.Feature<GeoJSON.LineString> }
+            | { getData(): Promise<GeoJSON.Feature<GeoJSON.LineString>> }
             | undefined;
-          return src?._data?.geometry?.coordinates?.length ?? 0;
+          return (await src?.getData())?.geometry?.coordinates?.length ?? 0;
         }),
       { timeout: 15_000 },
     )
@@ -192,11 +192,11 @@ test("the safety network can be toggled off and on mid-ride", async ({ page, con
   await expect
     .poll(
       () =>
-        page.evaluate(() => {
+        page.evaluate(async () => {
           const src = window._map?.getSource("network") as
-            | { _data?: GeoJSON.FeatureCollection }
+            | { getData(): Promise<GeoJSON.FeatureCollection> }
             | undefined;
-          return src?._data?.features?.length ?? 0;
+          return (await src?.getData())?.features?.length ?? 0;
         }),
       { timeout: 15_000 },
     )

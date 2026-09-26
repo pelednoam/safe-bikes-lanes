@@ -1,4 +1,5 @@
 import { CARTO_ATTRIBUTION, CARTO_MAXZOOM, CARTO_TILES, createBasemap, STYLE_URL, VENDORED_FONT_STACK, } from "./basemap.js";
+import { maplibregl } from "./maplibre.js";
 import { downloadOffline } from "./tilecache.js";
 import { askForRideNotifications, isNativeApp, isNewerAppVersion, keepScreenOn, lastNativeSpeechError, locationAdvice, minimizeApp, nativeLocationAllowed, nativeSpeak, nativeStopSpeech, onAndroidBack, rideLocationState, setSystemBarsDark, startDownload, startBackgroundWatcher, stopBackgroundWatcher, webVoiceCount, } from "./native.js";
 import { GEOCODE_DEBOUNCE_MS, geocodeDelayMs, matchScore, metresBetween, rank as rankSearch, describe as describeRow, worthGeocoding, } from "./search.js";
@@ -96,7 +97,15 @@ function classWidth(lo, hi, scale = 1) {
             1,
         ],
     ];
-    return ["interpolate", ["linear"], ["zoom"], 12, byClass(lo), 16, byClass(hi)];
+    return [
+        "interpolate",
+        ["linear"],
+        ["zoom"],
+        12,
+        byClass(lo),
+        16,
+        byClass(hi),
+    ];
 }
 /** Every layer that draws a class mark over the network. */
 const NETWORK_MARK_LAYERS = CLASS_MARKS.map((m) => `network-mark-${m.id}`);

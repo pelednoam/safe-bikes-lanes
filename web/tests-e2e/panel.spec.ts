@@ -52,10 +52,10 @@ test("on a phone held sideways, the route is framed above the sheet", async ({ p
   await page.setViewportSize({ width: 844, height: 390 });
   await planned(page);
   await page.waitForTimeout(2500); // the fit animates
-  const lowest = await page.evaluate(() => {
+  const lowest = await page.evaluate(async () => {
     const map = window._map;
-    const src = map?.getSource("route") as { _data?: GeoJSON.FeatureCollection } | undefined;
-    const ys = (src?._data?.features ?? []).flatMap((f) =>
+    const src = map?.getSource("route") as { getData(): Promise<GeoJSON.FeatureCollection> } | undefined;
+    const ys = ((await src?.getData())?.features ?? []).flatMap((f) =>
       f.geometry.type === "LineString"
         ? f.geometry.coordinates.map((c) => map?.project(c as [number, number]).y ?? 0)
         : [],

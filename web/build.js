@@ -1,4 +1,5 @@
 import { CARTO_ATTRIBUTION, CARTO_GLYPHS, CARTO_MAXZOOM, CARTO_TILES, createBasemap, } from "./basemap.js";
+import { maplibregl } from "./maplibre.js";
 import { fmtDist } from "./units.js";
 const CLASS_WORDS = {
     path: "off-street path",
@@ -412,7 +413,7 @@ function frame(pid) {
             [Math.max(...lons), Math.max(...lats)],
         ], { padding: pad, maxZoom: 16, duration: 600 });
         pin?.remove();
-        pin = new window.maplibregl.Marker({ color: "#12833f" })
+        pin = new maplibregl.Marker({ color: "#12833f" })
             .setLngLat(coords[Math.floor(coords.length / 2)])
             .addTo(map);
     }
@@ -595,7 +596,7 @@ async function start() {
             });
         }
     }
-    const map = new window.maplibregl.Map({
+    const map = new maplibregl.Map({
         container: "map",
         // Carto's vector positron rather than their raster light_all, which now
         // comes back with "API KEY REQUIRED" stamped across the image.
@@ -623,7 +624,7 @@ async function start() {
         zoom: 11,
     });
     window._map = map;
-    map.addControl(new window.maplibregl.NavigationControl({}), "top-right");
+    map.addControl(new maplibregl.NavigationControl({}), "top-right");
     map.on("load", () => {
         map.addSource("projects", { type: "geojson", data: fc });
         const basemap = createBasemap(map, () => map.getStyle().layers.find((l) => l.id !== "ground")?.id);

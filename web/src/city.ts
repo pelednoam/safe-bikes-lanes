@@ -21,14 +21,14 @@ import {
 } from "./basemap.js";
 import { fillSegmentPhoto, segmentHtml } from "./segment.js";
 import type { SegmentProps } from "./segment.js";
-import type * as maplibregl from "maplibre-gl";
 import type { Map as MLMap } from "maplibre-gl";
+
+import { maplibregl } from "./maplibre.js";
 
 declare global {
   interface Window {
     __CITY__?: string;
     _map?: MLMap;
-    maplibregl: typeof import("maplibre-gl");
   }
 }
 
@@ -638,7 +638,7 @@ async function start(): Promise<void> {
   document.title = `${city.name} — where to build for family biking`;
   summarise(city);
 
-  const map = new window.maplibregl.Map({
+  const map = new maplibregl.Map({
     container: "map",
     // Label-free: the city's own streets are the subject, and the basemap's
     // labels compete with them. Carto's vector positron-nolabels rather than
@@ -675,7 +675,7 @@ async function start(): Promise<void> {
     fitBoundsOptions: { padding: framePadding() },
   });
   window._map = map;
-  map.addControl(new window.maplibregl.NavigationControl({}), "top-right");
+  map.addControl(new maplibregl.NavigationControl({}), "top-right");
 
   map.on("load", () => {
     addLayers(map, city);
@@ -694,7 +694,7 @@ async function start(): Promise<void> {
     // The street card, in the route planner's own words (src/segment.ts), plus
     // what this page knows that it doesn't: which piece of the network the
     // street belongs to, and whether you can leave it.
-    const popup = new window.maplibregl.Popup({ closeButton: false, closeOnClick: false });
+    const popup = new maplibregl.Popup({ closeButton: false, closeOnClick: false });
     let photoTimer: number | undefined;
     let openFor = "";
 

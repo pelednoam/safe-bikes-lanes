@@ -17,14 +17,11 @@ rm -f dist/data/graph.json
 cp build.css dist/
 cp -r build dist/build
 cp -r fonts dist/fonts
-cp node_modules/maplibre-gl/dist/maplibre-gl.js dist/
-cp node_modules/maplibre-gl/dist/maplibre-gl.css dist/
-# point the app build at the bundled MapLibre instead of unpkg
-sed -i.bak \
-  -e 's|https://unpkg.com/maplibre-gl@[0-9.]*/dist/maplibre-gl.css|maplibre-gl.css|' \
-  -e 's|https://unpkg.com/maplibre-gl@[0-9.]*/dist/maplibre-gl.js|maplibre-gl.js|' \
-  dist/index.html
-rm -f dist/index.html.bak
+# MapLibre: the ES module the pages import, the chunk it shares with its worker,
+# the worker, and the stylesheet (see src/maplibre.ts)
+for f in maplibre-gl.mjs maplibre-gl-shared.mjs maplibre-gl-worker.mjs maplibre-gl.css; do
+  cp "node_modules/maplibre-gl/dist/$f" dist/
+done
 # app build version (git tag in CI; "dev" locally) for the in-app updater
 printf '{"version": "%s"}\n' "${APP_VERSION:-dev}" > dist/version.json
 

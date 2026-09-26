@@ -82,13 +82,40 @@ describe("the offline shell", () => {
   });
 
   it("precaches everything the page itself loads", () => {
-    // maplibre-gl.js is loaded by a plain <script src> in index.html, not imported
-    // by app.ts — so the module walker could never see it, and it was missing from
-    // the precache while the module list was being carefully checked. A first
-    // offline load failed before app.js even ran.
+    // MapLibre used to be loaded by a plain <script src> in index.html, not
+    // imported by app.ts, so the module walker could never see it, and it was
+    // missing from the precache while the module list was being carefully
+    // checked. A first offline load failed before app.js even ran. It is imported
+    // now; the stylesheet still comes this way.
     const assets = precachedAssets();
     const missing = pageAssets().filter((a) => !assets.includes(a));
     expect(missing, "index.html loads these, and offline they would 404").toEqual([]);
+  });
+
+  it("precaches every file MapLibre loads, as well as the one the app imports", () => {
+    // MapLibre 6 is ES modules: maplibre-gl.mjs imports a shared chunk and starts
+    // a worker from its own URL, neither of which the walker above can see. They
+    // are read from the installed package, so a MapLibre release that splits its
+    // bundle differently fails here rather than on a first offline load.
+    const main = readFileSync(join(WEB, "node_modules/maplibre-gl/dist/maplibre-gl.mjs"), "utf8");
+    const loaded = [...main.matchAll(/(maplibre-gl-[\w-]+\.mjs)/g)]
+      .map((m) => m[1] as string)
+      .filter((f) => !f.includes("-dev")); // the development build's, never served
+    expect(loaded, "maplibre-gl.mjs no longer names its chunks; update this test").toContain(
+      "maplibre-gl-worker.mjs",
+    );
+    const assets = precachedAssets();
+    const missing = [...new Set(["maplibre-gl.mjs", ...loaded])].filter(
+      (f) => !assets.includes(f),
+    );
+    expect(missing, "MapLibre loads these, and offline they would 404").toEqual([]);
+    // and each is actually vendored next to the pages, for the site and the app
+    const pkg = readFileSync(join(WEB, "package.json"), "utf8");
+    const assemble = readFileSync(join(WEB, "scripts/assemble.sh"), "utf8");
+    for (const f of new Set(["maplibre-gl.mjs", ...loaded])) {
+      expect(pkg, `npm run vendor does not copy ${f}`).toContain(f);
+      expect(assemble, `the app bundle does not include ${f}`).toContain(f);
+    }
   });
 
   it("precaches app.js itself, and the page that loads it", () => {

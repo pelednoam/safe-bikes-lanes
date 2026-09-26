@@ -98,11 +98,11 @@ async function holdLocation(page: Page, granted: boolean): Promise<void> {
 
 /** The coordinates of the route currently drawn. */
 async function drawnRoute(page: Page): Promise<[number, number][]> {
-  return page.evaluate(() => {
+  return page.evaluate(async () => {
     const src = window._map?.getSource("route") as
-      | { _data?: GeoJSON.FeatureCollection }
+      | { getData(): Promise<GeoJSON.FeatureCollection> }
       | undefined;
-    return (src?._data?.features ?? []).flatMap((f) =>
+    return ((await src?.getData())?.features ?? []).flatMap((f) =>
       f.geometry.type === "LineString" ? (f.geometry.coordinates as [number, number][]) : [],
     );
   });
@@ -251,11 +251,11 @@ test("closing the reach map while it loads is not a crash", async ({ page }) => 
   await settled(page);
   expect(errors).toEqual([]);
   // and nothing was painted for a reach map that is no longer open
-  const shed = await page.evaluate(() => {
+  const shed = await page.evaluate(async () => {
     const src = window._map?.getSource("shed") as
-      | { _data?: GeoJSON.FeatureCollection }
+      | { getData(): Promise<GeoJSON.FeatureCollection> }
       | undefined;
-    return src?._data?.features.length ?? 0;
+    return (await src?.getData())?.features.length ?? 0;
   });
   expect(shed).toBe(0);
 });

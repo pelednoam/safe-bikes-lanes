@@ -141,11 +141,11 @@ test("a ride ends cleanly even when storage is full", async ({ page }) => {
   test.slow();
   await installRider(page);
   await planned(page);
-  const path = await page.evaluate(() => {
+  const path = await page.evaluate(async () => {
     const src = window._map?.getSource("route") as
-      | { _data?: GeoJSON.FeatureCollection }
+      | { getData(): Promise<GeoJSON.FeatureCollection> }
       | undefined;
-    return (src?._data?.features ?? []).flatMap((f) =>
+    return ((await src?.getData())?.features ?? []).flatMap((f) =>
       f.geometry.type === "LineString" ? (f.geometry.coordinates as [number, number][]) : [],
     );
   });

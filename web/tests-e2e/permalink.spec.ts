@@ -16,11 +16,11 @@ type Page = import("@playwright/test").Page;
 test.describe.configure({ timeout: 180_000 });
 
 async function drawnRoute(page: Page): Promise<[number, number][]> {
-  return page.evaluate(() => {
+  return page.evaluate(async () => {
     const src = window._map?.getSource("route") as
-      | { _data?: GeoJSON.FeatureCollection }
+      | { getData(): Promise<GeoJSON.FeatureCollection> }
       | undefined;
-    return (src?._data?.features ?? []).flatMap((f) =>
+    return ((await src?.getData())?.features ?? []).flatMap((f) =>
       f.geometry.type === "LineString" ? (f.geometry.coordinates as [number, number][]) : [],
     );
   });

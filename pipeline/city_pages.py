@@ -432,7 +432,6 @@ PAGE_TEMPLATE = """<!doctype html>
 <link rel="stylesheet" href="../maplibre-gl.css">
 <link rel="stylesheet" href="../city.css">
 <meta name="city-slug" content="{slug}">
-<script src="../maplibre-gl.js"></script>
 </head>
 <body>
 <div id="map"></div>
