@@ -303,7 +303,9 @@ const manifestReady = dataReady
 })
     .catch((err) => {
     const errBox = el("error");
-    errBox.textContent = `failed to load routing tiles: ${String(err)}`;
+    console.warn("routing tiles failed to load", err);
+    errBox.textContent =
+        "Couldn't load the route map. Check your connection, then reload the page.";
     errBox.style.display = "block";
     dataProgress();
 });
@@ -619,6 +621,38 @@ function setPoint(kind, lngLat) {
 // ---------------------------------------------------------------------------
 // routing
 // ---------------------------------------------------------------------------
+/** What went wrong, in words for a parent rather than for whoever wrote the
+ * router. Its messages ("start and end snap to the same intersection", "no
+ * path found", "failed to load routing tiles: TypeError: Failed to fetch")
+ * reached the screen as they were. The router keeps its own wording, which its
+ * tests and logs rely on; this only decides what is shown. */
+function plainError(err) {
+    const raw = err instanceof Error ? err.message : String(err);
+    // the round trip's own messages are already written for people
+    if (/try another distance/i.test(raw))
+        return `${raw.charAt(0).toUpperCase()}${raw.slice(1)}.`;
+    if (/same intersection/i.test(raw)) {
+        return ("The start and the destination are the same spot. " +
+            "Pick a destination a little further away.");
+    }
+    if (/no path found|no route/i.test(raw)) {
+        return ("There's no way to ride between these two points on the streets we have mapped. " +
+            "Try a spot on a nearby street for either end.");
+    }
+    if (/too far from the mapped/i.test(raw)) {
+        return ("That spot is too far from any street we have mapped. " +
+            "Pick a point on or next to a street.");
+    }
+    if (/isn't mapped|unmapped/i.test(raw)) {
+        return ("This area isn't mapped for routing yet — the map covers Cambridge, Somerville " +
+            "and the towns around them.");
+    }
+    if (/fetch|network|load|TypeError/i.test(raw)) {
+        return "Couldn't download the map needed for this route. Check your connection and try again.";
+    }
+    console.warn("route failed", err);
+    return "Something went wrong planning this route. Try again, or pick a slightly different spot.";
+}
 async function requestRoute() {
     if (!end)
         return;
@@ -637,8 +671,11 @@ async function requestRoute() {
         }
         catch {
             loading.style.display = "none";
+            // there has been no "📍 From" control to tap for a while: name the ones
+            // that are actually on screen
             errBox.textContent =
-                "Couldn't get your location — tap \u201c\ud83d\udccd From\u201d to set a start, or enable location access.";
+                "Couldn't find where you are. Type a start in \u201cYour location\u201d, tap 🗺 to " +
+                    "pick it on the map, or allow location access.";
             errBox.style.display = "block";
             return;
         }
@@ -697,7 +734,7 @@ async function requestRoute() {
         selectedId = null;
         renderOptions();
         clearOptionChips();
-        errBox.textContent = err instanceof Error ? err.message : String(err);
+        errBox.textContent = plainError(err);
         errBox.style.display = "block";
     }
     finally {
@@ -776,7 +813,7 @@ async function requestLoop() {
         }
     }
     catch (err) {
-        errBox.textContent = err instanceof Error ? err.message : String(err);
+        errBox.textContent = plainError(err);
         errBox.style.display = "block";
     }
     finally {

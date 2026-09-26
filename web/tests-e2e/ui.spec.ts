@@ -371,6 +371,43 @@ test.describe("at night", () => {
   });
 });
 
+test.describe("when something goes wrong", () => {
+  const developerWords = /snap|intersection|no path found|TypeError|failed to load|routing tiles/i;
+
+  test("a trip to the same spot says so in plain words", async ({ page }) => {
+    // two points a few feet apart, which the router snaps to one intersection
+    await boot(page, "#s=-71.122258,42.396748&e=-71.12226,42.39675&m=young_kids");
+    const err = page.locator("#error");
+    await expect(err).toBeVisible({ timeout: budget(30_000) });
+    await expect(err).not.toContainText(developerWords);
+    await expect(err).toContainText(/same spot/i);
+  });
+
+  test("a map that will not download is not reported as a TypeError", async ({ page }) => {
+    await page.route("**/data/tiles/manifest.json", (r) => r.abort());
+    await page.goto("/");
+    const err = page.locator("#error");
+    await expect(err).toBeVisible({ timeout: budget(30_000) });
+    await expect(err).not.toContainText(developerWords);
+    await expect(err).toContainText(/connection/i);
+  });
+
+  test("no location points at controls that exist", async ({ page }) => {
+    // it said to tap "📍 From", a control the panel has not had for a while
+    await page.addInitScript(() => {
+      navigator.geolocation.getCurrentPosition = (_ok, fail): void => {
+        fail?.({ code: 1, message: "denied" } as GeolocationPositionError);
+      };
+    });
+    await boot(page, "#c=-71.105,42.383,14");
+    await page.locator("#map").click({ position: { x: 800, y: 400 } });
+    const err = page.locator("#error");
+    await expect(err).toBeVisible({ timeout: budget(30_000) });
+    await expect(err).not.toContainText("From”");
+    await expect(err).toContainText("Your location");
+  });
+});
+
 test.describe("at a desk", () => {
   test("the data banner is centred over the map, not over the panel", async ({ page }) => {
     await page.setViewportSize({ width: 820, height: 800 });
