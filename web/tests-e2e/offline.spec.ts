@@ -76,7 +76,7 @@ test("a downloaded route draws its map with the network cut", async ({ page, con
   test.slow();
   // Watch the first load, while the cache is still empty and tiles really do
   // come off the network. This is the only moment the spread is observable:
-  // once they are cached the worker answers without a request being made.
+  // once they are cached the tile cache answers without a request being made.
   const askedHosts = new Set<string>();
   page.on("request", (r) => {
     if (r.url().endsWith(".mvt")) askedHosts.add(new URL(r.url()).hostname);
@@ -94,14 +94,14 @@ test("a downloaded route draws its map with the network cut", async ({ page, con
   const zooms = [...new Set(mvt.map((u) => /\/v1\/(\d+)\//.exec(u)?.[1]))].sort();
   expect(zooms, "cached zooms").toEqual(["13", "14"]);
 
-  // One host, because the service worker folds Carto's four onto this one when
-  // it looks a tile up. Caching them under whichever host answered would make
-  // most of the route unfindable later.
+  // One host, because the tile cache (tilecache.ts) folds Carto's four onto
+  // this one when it looks a tile up. Caching them under whichever host
+  // answered would make most of the route unfindable later.
   const hosts = [...new Set(mvt.map((u) => new URL(u).hostname))];
   expect(hosts).toEqual(["tiles-a.basemaps.cartocdn.com"]);
 
   // ...while the map itself asks several hosts for the same tiles. That gap is
-  // the whole reason the worker rewrites the key, and it is what makes the
+  // the whole reason the cache rewrites the key, and it is what makes the
   // offline check below meaningful rather than accidental: with the two sides
   // unreconciled, roughly three quarters of these lookups would miss.
   expect(

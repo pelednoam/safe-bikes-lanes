@@ -22,6 +22,8 @@
 
 import type { LayerSpecification, Map as MLMap, StyleSpecification } from "maplibre-gl";
 
+import { cachedStyle, installTileCache } from "./tilecache.js";
+
 export type BasemapTheme = "light" | "dark";
 
 /**
@@ -35,9 +37,9 @@ export type BasemapTheme = "light" | "dark";
  * never answers at all.
  *
  * Carto serves these from four hosts and MapLibre picks one per tile; the
- * service worker folds them back into a single cache key (see tileKey in
- * sw.js), so an offline route cached against one host is found whichever host
- * is asked for next.
+ * tile cache folds them back into a single key (see tileKey in tilecache.ts),
+ * so an offline route cached against one host is found whichever host is asked
+ * for next.
  */
 export const CARTO_TILES = [
   "https://tiles-a.basemaps.cartocdn.com/vectortiles/carto.streets/v1/{z}/{x}/{y}.mvt",
@@ -55,7 +57,9 @@ export const CARTO_MAXZOOM = 14;
  * VENDORED_FONT_STACK for why the planner cannot use it. */
 export const CARTO_GLYPHS = "https://tiles.basemaps.cartocdn.com/fonts/{fontstack}/{range}.pbf";
 
-const STYLE_URL: Record<BasemapTheme, string> = {
+/** The planner's two basemaps. Exported for the offline download, which has to
+ * store both: a rider can switch to night mode halfway through a ride. */
+export const STYLE_URL: Record<BasemapTheme, string> = {
   light: "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
   dark: "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
 };
@@ -72,8 +76,9 @@ export const NOLABEL_STYLE_URL: Record<BasemapTheme, string> = {
 };
 
 /**
- * The one glyph stack this app ships (web/fonts/glyphs, Noto Sans, Latin +
- * Latin-1).
+ * The one glyph stack this app ships (web/fonts/glyphs, Noto Sans: Latin,
+ * Latin-1 and Extended-A, general punctuation, and the box/symbol ranges that
+ * hold trail-difficulty marks — see ASSETS in sw.js).
  *
  * A style gets exactly one `glyphs` URL, and this app's has to stay the
  * vendored one: ride-mode street names are drawn from a symbol layer and have
@@ -123,10 +128,19 @@ function themeLayers(
   return out;
 }
 
-async function fetchStyle(url: string): Promise<StyleSpecification> {
-  const resp = await fetch(url);
-  if (!resp.ok) throw new Error(`carto style ${resp.status}`);
-  return (await resp.json()) as StyleSpecification;
+/** The style from Carto, or the copy kept from the last time it was fetched —
+ * otherwise a cold start with no signal has tiles downloaded and nothing to
+ * paint them with. See cachedStyle. */
+function fetchStyle(url: string): Promise<StyleSpecification> {
+  return cachedStyle<StyleSpecification>(url);
+}
+
+type AddProtocol = Parameters<typeof installTileCache>[1];
+
+/** MapLibre's addProtocol, from the global build every page loads. */
+function globalAddProtocol(): AddProtocol | undefined {
+  const lib = (globalThis as { maplibregl?: { addProtocol?: AddProtocol } }).maplibregl;
+  return lib?.addProtocol;
 }
 
 export interface Basemap {
@@ -181,6 +195,10 @@ export interface BasemapOptions {
    * layers collide. Defaults to "bm", which the planner and its tests expect. */
   prefix?: string;
   fetchJson?: (url: string) => Promise<StyleSpecification>;
+  /** Load the vector tiles through the offline tile cache (tilecache.ts).
+   * Defaults to on: it is what makes a downloaded route draw with no signal,
+   * in the web app and the Android app alike. */
+  tileCache?: boolean;
 }
 
 export function createBasemap(
@@ -193,6 +211,13 @@ export function createBasemap(
   const labelsOnly = options.labelsOnly ?? false;
   const prefix = options.prefix ?? "bm";
   const fetchJson = options.fetchJson ?? fetchStyle;
+  // Here rather than at each call site because every page that draws Carto's
+  // tiles builds its basemap through this, right after constructing its map —
+  // before the first tile is asked for, which is when it has to be in place.
+  const addProtocol = globalAddProtocol();
+  if ((options.tileCache ?? true) && addProtocol !== undefined && "setTransformRequest" in map) {
+    installTileCache(map, addProtocol);
+  }
   const installed = new Map<BasemapTheme, { all: string[]; labels: Set<string> }>();
   const inflight = new Map<BasemapTheme, Promise<void>>();
   /** The most recent show() request, re-applied when the label layers land. */

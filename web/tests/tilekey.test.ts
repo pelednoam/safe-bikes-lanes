@@ -1,37 +1,22 @@
-// The service worker's tile cache key.
+// The tile cache key.
 //
 // Carto serves vector tiles from tiles-a…d and MapLibre picks one per tile, by
 // coordinate — measured on the real app, an even split across all four. The
-// offline download names tiles-a for every tile it stores, so unless the worker
+// offline download names tiles-a for every tile it stores, so unless the cache
 // folds the four hosts onto one when it looks a tile up, roughly three quarters
 // of a fully downloaded route is unfindable. The download still reports
 // success; the map is just patchy an hour later on a road with no signal.
 //
-// sw.js cannot be imported: it is a service worker, and registering listeners
-// on `self` at module scope throws under Node. So the function is read out of
-// the file the browser actually gets, the same way offline-shell.test.ts checks
-// the precache list against the import graph.
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-
+// This used to be read out of sw.js, back when the service worker was the only
+// reader of the tile cache. The page reads the cache itself now (tilecache.ts),
+// which is what lets the Android app, where there is no worker, read it too.
 import { describe, expect, it } from "vitest";
 
-const WEB = join(dirname(fileURLToPath(import.meta.url)), "..");
-
-function tileKeyFromSource(): (url: string) => string {
-  const sw = readFileSync(join(WEB, "sw.js"), "utf8");
-  const fn = /function tileKey\(requestUrl\) \{[\s\S]*?\n\}/.exec(sw);
-  expect(fn?.[0], "could not find tileKey in sw.js").toBeTruthy();
-  // eslint-disable-next-line @typescript-eslint/no-implied-eval
-  return new Function(`${fn?.[0] ?? ""}; return tileKey;`)() as (url: string) => string;
-}
+import { tileKey } from "../src/tilecache.js";
 
 const TILE = "/vectortiles/carto.streets/v1/14/4956/6057.mvt";
 
-describe("the service worker's tile cache key", () => {
-  const tileKey = tileKeyFromSource();
-
+describe("the tile cache key", () => {
   it("folds Carto's four tile hosts onto the one the download stores", () => {
     const keys = ["a", "b", "c", "d"].map((s) =>
       tileKey(`https://tiles-${s}.basemaps.cartocdn.com${TILE}`),
@@ -48,7 +33,7 @@ describe("the service worker's tile cache key", () => {
   });
 
   it("leaves every other host alone", () => {
-    // The same cache holds the aerial imagery and the styles; rewriting a host
+    // The same caches hold the aerial imagery and the styles; rewriting a host
     // that has no siblings would key them under something nothing asks for.
     for (const url of [
       "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",

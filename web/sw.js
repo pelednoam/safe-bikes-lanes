@@ -36,6 +36,7 @@ const ASSETS = [
   "search.js",
   "segment.js",
   "sharecard.js",
+  "tilecache.js",
   "tiles.js",
   "types.js",
   "units.js",
@@ -47,9 +48,15 @@ const ASSETS = [
   "fonts/BarlowSemiCondensed-600.woff2",
   "fonts/BarlowSemiCondensed-700.woff2",
   // map label glyphs: street names while navigating come from a symbol layer,
-  // which needs these even when the ride is offline
+  // which needs these even when the ride is offline. 8192-8447 is general
+  // punctuation (’ – … “ ”), in ordinary names like "St. Paul’s"; the two after
+  // it hold the trail-difficulty marks (■ ♦) the network names MTB trails by.
+  // A range that 404s drops a tile's labels, not just the one character.
   "fonts/glyphs/Noto Sans Regular/0-255.pbf",
   "fonts/glyphs/Noto Sans Regular/256-511.pbf",
+  "fonts/glyphs/Noto Sans Regular/8192-8447.pbf",
+  "fonts/glyphs/Noto Sans Regular/9472-9727.pbf",
+  "fonts/glyphs/Noto Sans Regular/9728-9983.pbf",
   "data/tiles/manifest.json",
   "data/nettiles/manifest.json",
   "data/pois.geojson",
@@ -64,52 +71,70 @@ self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(ASSETS)));
 });
 
+/** Every version of the app shell's cache is named this, and nothing else is.
+ * The shell is the only thing a new build replaces; every other cache holds
+ * the rider's data — maps downloaded for a ride, styles, browsed tiles — and
+ * belongs to them, not to the build that happened to write it. */
+const SHELL_PREFIX = "family-bike-router-";
+
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches
       .keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+      // Only older shells. This used to delete everything that was not the
+      // current shell, so every deploy silently threw away the offline maps
+      // riders had downloaded — found on the road, with no signal.
+      .then((keys) =>
+        Promise.all(
+          keys
+            .filter((k) => k.startsWith(SHELL_PREFIX) && k !== CACHE)
+            .map((k) => caches.delete(k)),
+        ),
+      )
       // take control of open pages so the update reaches them at once
       .then(() => self.clients.claim()),
   );
 });
 
+// Map caches. The same names, and the same rules, as tilecache.ts, which owns
+// them: the page reads and fills them itself, in the Android app too, where
+// there is no worker at all.
+//   TILE_CACHE    routes the rider downloaded. Read here, never written or
+//                 trimmed: they go when the rider says, not when we need room.
+//   BROWSE_CACHE  what was seen while browsing. Bounded, oldest out first.
 const TILE_CACHE = "bike-tiles-v1";
-// tile.openstreetmap.org stays listed only so basemap tiles cached by an older
-// build still serve offline; nothing requests it any more. basemaps.cartocdn.com
-// is now the vector *styles* rather than raster tiles — Carto stamps "API KEY
-// REQUIRED" across those — while tiles(-a…d).basemaps.cartocdn.com serve the
-// TileJSON and the .mvt tiles themselves.
-const TILE_HOSTS = [
-  "tile.openstreetmap.org",
-  "basemaps.cartocdn.com",
-  "tiles.basemaps.cartocdn.com",
-  "tiles-a.basemaps.cartocdn.com",
-  "tiles-b.basemaps.cartocdn.com",
-  "tiles-c.basemaps.cartocdn.com",
-  "tiles-d.basemaps.cartocdn.com",
-  "tiles.arcgis.com",
-];
+const BROWSE_CACHE = "bike-tiles-browse-v1";
+const BROWSE_MAX = 1500;
+const TRIM_EVERY = 25;
 
-/**
- * One cache key per tile, whichever of Carto's four hosts served it.
- *
- * MapLibre spreads vector tiles across tiles-a…d by tile coordinate, so the
- * host for a given tile is not ours to predict. Keying on the URL as requested
- * would store up to four copies of the same tile and, worse, let a route
- * pre-cached against one host miss on all the others — an offline ride with
- * most of its map absent while the download had reported success.
- */
-function tileKey(requestUrl) {
-  const url = new URL(requestUrl);
-  // Anchored to Carto's own hosts, not to anything merely beginning
-  // "tiles-b.": this is only ever called for hosts in TILE_HOSTS today, but a
-  // rule that rewrites somebody else's host is a trap for whoever adds one.
-  url.hostname = url.hostname.replace(
-    /^tiles-[a-d]\.basemaps\.cartocdn\.com$/,
-    "tiles-a.basemaps.cartocdn.com",
-  );
-  return url.toString();
+// Carto's vector tiles and styles are deliberately absent: the page loads them
+// through its own cache (tilecache.ts), and handling them here as well would
+// store every tile twice. What is left is what the city and build pages draw
+// from elsewhere — Carto's glyph server and aerial imagery — and
+// tile.openstreetmap.org, only so raster tiles an older build cached still
+// serve offline; nothing requests it any more.
+const TILE_HOSTS = ["tile.openstreetmap.org", "tiles.basemaps.cartocdn.com", "tiles.arcgis.com"];
+
+/** A downloaded copy first, then a browsed one. */
+async function lookup(key) {
+  for (const name of [TILE_CACHE, BROWSE_CACHE]) {
+    const hit = await (await caches.open(name)).match(key);
+    if (hit !== undefined) return hit;
+  }
+  return undefined;
+}
+
+let putsSinceTrim = 0;
+
+/** Keep a browsed resource, and every so often drop the oldest beyond
+ * BROWSE_MAX. Keys list in insertion order, so the front is the oldest. */
+async function rememberBrowsed(key, resp) {
+  const cache = await caches.open(BROWSE_CACHE);
+  await cache.put(key, resp);
+  if (++putsSinceTrim < TRIM_EVERY) return;
+  putsSinceTrim = 0;
+  const keys = await cache.keys();
+  for (const k of keys.slice(0, Math.max(0, keys.length - BROWSE_MAX))) await cache.delete(k);
 }
 
 /** The app shell must never be served stale: bypass the HTTP cache so the
@@ -123,46 +148,105 @@ function isShell(url) {
   );
 }
 
+/**
+ * How long a same-origin request gets before a cached copy is served instead.
+ *
+ * Network-first on its own has no answer for one bar of signal: a request that
+ * neither arrives nor fails holds the page blank at startup, or a mid-ride
+ * reroute waiting on a routing tile, until the browser gives up on it —
+ * a minute or more — with the answer sitting in the cache the whole time.
+ * Long enough that a slow connection that is working still wins, which is what
+ * keeps a stale shell off a phone that is online.
+ */
+const NETWORK_TIMEOUT_MS = 4000;
+
+/**
+ * Pages that were themselves served from cache after a timeout. Their shell
+ * requests are answered from the same cache, without racing the network: a
+ * cached index.html running a freshly fetched app.js, or the reverse, is two
+ * builds glued together — a broken app, not a slightly old one. The cached
+ * page's own network fetch refreshes the cache behind it, so the next load
+ * is new. Kept in memory only; a restarted worker simply races again.
+ */
+const staleClients = new Set();
+
+/** Network-first with a timeout. Whatever the network sends is cached for
+ * next time, even when it arrives after the cache has already answered. */
+function networkFirst(event, req) {
+  const network = fetch(req);
+  // Clone before anything reads the body, and keep the worker alive until the
+  // copy is stored: after a timeout the page has its answer and nothing else
+  // would wait for this.
+  event.waitUntil(
+    network
+      .then((resp) => {
+        if (!resp.ok) return undefined;
+        const clone = resp.clone();
+        return caches.open(CACHE).then((cache) => cache.put(event.request, clone));
+      })
+      .catch(() => undefined),
+  );
+  const cached = () => caches.match(event.request);
+  return new Promise((resolve) => {
+    let answered = false;
+    const answer = (resp) => {
+      if (answered) return;
+      answered = true;
+      clearTimeout(timer);
+      resolve(resp);
+    };
+    const timer = setTimeout(() => {
+      void cached().then((hit) => {
+        // Nothing cached: keep waiting — a late answer beats none.
+        if (hit === undefined) return;
+        if (event.request.mode === "navigate" && event.resultingClientId) {
+          staleClients.add(event.resultingClientId);
+        }
+        answer(hit);
+      });
+    }, NETWORK_TIMEOUT_MS);
+    network.then(answer, () => {
+      void cached().then((hit) => answer(hit ?? Response.error()));
+    });
+  });
+}
+
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   if (url.origin === self.location.origin) {
-    const req =
-      event.request.mode === "navigate" || isShell(url)
-        ? new Request(event.request, { cache: "reload" }) // skip HTTP cache
-        : event.request;
-    // network-first: freshest app/data, fall back to cache offline
-    event.respondWith(
-      fetch(req)
-        .then((resp) => {
-          if (resp.ok) {
-            const clone = resp.clone();
-            void caches.open(CACHE).then((cache) => cache.put(event.request, clone));
-          }
-          return resp;
-        })
-        .catch(() => caches.match(event.request).then((c) => c ?? Response.error())),
-    );
+    const shell = event.request.mode === "navigate" || isShell(url);
+    if (shell && event.clientId && staleClients.has(event.clientId)) {
+      event.respondWith(
+        caches.match(event.request).then((hit) => hit ?? networkFirst(event, event.request)),
+      );
+      return;
+    }
+    const req = shell
+      ? new Request(event.request, { cache: "reload" }) // skip HTTP cache
+      : event.request;
+    // network-first: freshest app/data, fall back to cache offline or when the
+    // network is too slow to be worth waiting for
+    event.respondWith(networkFirst(event, req));
     return;
   }
-  // basemap tiles: cache-first (pre-cached along a route by the app, or
-  // opportunistically as you browse), so the map works offline
-  if (TILE_HOSTS.includes(url.hostname)) {
-    const key = tileKey(event.request.url);
+  // Other pages' map resources: cache-first, so what has been seen still draws
+  // offline. Vector tiles are the page's (see TILE_HOSTS).
+  if (TILE_HOSTS.includes(url.hostname) && !url.pathname.endsWith(".mvt")) {
+    const key = event.request.url;
     event.respondWith(
-      caches.open(TILE_CACHE).then((cache) =>
-        cache.match(key).then(
-          (cached) =>
-            cached ??
-            fetch(event.request).then((resp) => {
-              // Don't cache a refusal as if it were a tile: a 403 or a 500
-              // stored here is served from disk for as long as the cache lives,
-              // so one bad minute becomes a permanently broken patch of map.
-              // Opaque responses (status 0) are how no-cors image tiles come
-              // back and are still worth keeping.
-              if (resp.ok || resp.type === "opaque") void cache.put(key, resp.clone());
-              return resp;
-            }),
-        ),
+      lookup(key).then(
+        (cached) =>
+          cached ??
+          fetch(event.request).then((resp) => {
+            // Only a readable success. A 403 or a 500 stored here would be
+            // served from disk for as long as it lived, turning one bad minute
+            // into a permanently broken patch of map; and an opaque response
+            // (a no-cors fetch) stores a body nothing can read. Nothing in the
+            // app makes no-cors requests any more — MapLibre fetches with CORS
+            // — so there is nothing to keep one for.
+            if (resp.ok) event.waitUntil(rememberBrowsed(key, resp.clone()));
+            return resp;
+          }),
       ),
     );
   }

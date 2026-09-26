@@ -16,8 +16,10 @@ import {
   CARTO_MAXZOOM,
   CARTO_TILES,
   createBasemap,
+  STYLE_URL,
   VENDORED_FONT_STACK,
 } from "./basemap.js";
+import { downloadOffline } from "./tilecache.js";
 import type { NativeFix } from "./native.js";
 import {
   askForRideNotifications,
@@ -517,12 +519,16 @@ void constructionReady.then(() => {
   }
 });
 
-const poisReady: Promise<void> = dataReady
+/** pois.geojson, fetched and parsed once. The loop planner reads its features
+ * and the map's POI layer draws the same collection; each used to load the
+ * 786 KB file for itself. null when it could not be loaded. */
+const poisData: Promise<{ features: PoiFeature[] } | null> = dataReady
   .then(() => loadJson<{ features: PoiFeature[] }>("pois.geojson"))
-  .then((fc) => {
-    pois = fc.features;
-  })
-  .catch(() => undefined);
+  .catch(() => null);
+
+const poisReady: Promise<void> = poisData.then((fc) => {
+  if (fc) pois = fc.features;
+});
 
 function getSource(id: string): GeoJSONSource {
   const src = map.getSource(id);
@@ -2794,10 +2800,10 @@ map.on("load", () => {
   // by viewport (see refreshNetworkTiles); only POIs (needed by the loop
   // planner) load eagerly here; the heavy heatmap/elevation/lane overlays load
   // the first time their toggle is turned on (see ensureLayer).
-  void dataReady
-    .then(() => loadJson<GeoJSON.GeoJSON>("pois.geojson"))
+  void poisData
     .then((d) => {
-      (map.getSource("pois") as GeoJSONSource).setData(d);
+      // the same collection the loop planner reads (see poisData)
+      if (d) (map.getSource("pois") as GeoJSONSource).setData(d as unknown as GeoJSON.GeoJSON);
     })
     .catch(() => undefined)
     .finally(() => dataProgress());
@@ -5232,10 +5238,10 @@ map.on("mousedown", pauseFollowForInput);
 
 // ---------------------------------------------------------------------------
 // offline: pre-cache basemap tiles along the selected route (zooms 13-16,
-// ~1-tile corridor) into the service worker's tile cache
+// ~1-tile corridor), and both basemap styles, into the page's own tile cache —
+// see tilecache.ts, which is also what reads them back, with or without a
+// service worker
 // ---------------------------------------------------------------------------
-
-const TILE_CACHE = "bike-tiles-v1";
 
 function tileXY(lon: number, lat: number, z: number): [number, number] {
   const n = 2 ** z;
@@ -5251,7 +5257,7 @@ function routeTileUrls(track: Track): string[] {
   // when a rider flips theme halfway through an offline ride.
   //
   // Carto serves these from tiles-a…d and MapLibre picks a subdomain per tile,
-  // so these are written against tiles-a and the service worker canonicalises
+  // so these are written against tiles-a and the tile cache canonicalises
   // every sibling host onto it. Caching whichever host we happened to name
   // would leave three quarters of a ride uncached.
   //
@@ -5291,34 +5297,19 @@ el<HTMLButtonElement>("offline-btn").addEventListener("click", () => {
   const btn = el<HTMLButtonElement>("offline-btn");
   const urls = routeTileUrls(buildTrack(sel.payload));
   btn.disabled = true;
-  let done = 0;
-  void caches
-    .open(TILE_CACHE)
-    .then(async (cache) => {
-      const pool = 6;
-      const queue = [...urls];
-      const worker = async (): Promise<void> => {
-        for (;;) {
-          const url = queue.shift();
-          if (url === undefined) return;
-          try {
-            if ((await cache.match(url)) === undefined) {
-              // A real CORS fetch, not mode:"no-cors". MapLibre has to read
-              // these tiles as bytes, and an opaque response stores a body it
-              // can never parse — the ride would report itself cached and still
-              // come up blank. Carto answers with access-control-allow-origin:*.
-              const resp = await fetch(url);
-              if (resp.ok) await cache.put(url, resp);
-            }
-          } catch {
-            // offline mid-download or a missing tile: skip
-          }
-          done++;
-          btn.textContent = `⬇ ${done}/${urls.length}…`;
-        }
-      };
-      await Promise.all(Array.from({ length: pool }, worker));
-      btn.textContent = "✓ offline ready";
+  // Both themes' styles, not just the one showing: without a style a cold
+  // start offline has the tiles and nothing to paint them with, and a rider
+  // may well switch to night mode on the way home.
+  void downloadOffline(urls, [STYLE_URL.light, STYLE_URL.dark], (done, total) => {
+    btn.textContent = `⬇ ${done}/${total}…`;
+  })
+    .then(({ failed }) => {
+      // Say so when part of the route did not arrive, rather than "ready" over
+      // a map that will have holes in it.
+      btn.textContent = failed === 0 ? "✓ offline ready" : `⚠ ${failed} of ${urls.length} tiles missing`;
+    })
+    .catch(() => {
+      btn.textContent = "offline download failed";
     })
     .finally(() => {
       btn.disabled = false;
@@ -5545,10 +5536,12 @@ if ("serviceWorker" in navigator) {
         await r.unregister();
       }
       try {
+        // Only the stale shell a worker left behind. The bike-tiles* and
+        // bike-styles* caches are the rider's downloaded offline maps, which
+        // the app reads itself (tilecache.ts) — deleting them here, as this
+        // once did on every launch, made "⬇ Offline map" a no-op in the app.
         for (const k of await caches.keys()) {
-          if (k.startsWith("family-bike-router") || k.startsWith("bike-tiles")) {
-            await caches.delete(k);
-          }
+          if (k.startsWith("family-bike-router")) await caches.delete(k);
         }
       } catch {
         // caches API unavailable in this webview — nothing to clear
