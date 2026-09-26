@@ -6,7 +6,7 @@
 // sub-graph, and boundary nodes carry a stable GLOBAL id so tiles stitch
 // together seamlessly when adjacent ones are loaded.
 
-import type { GraphData } from "./router.js";
+import type { GraphData, GraphEdge } from "./router.js";
 import type { ProtectionClass } from "./types.js";
 
 export interface BBox {
@@ -37,9 +37,7 @@ interface RawTile {
   nodes: [number, number, number][];
   nodeIds: number[];
   names: string[];
-  edges: [
-    number, number, number, number, number, number, number, number, number, number,
-  ][];
+  edges: GraphEdge[];
   geoms: number[][];
 }
 
@@ -260,7 +258,9 @@ export class TileStore {
           e[7],
           e[8],
           e[9],
-        ]);
+          // the street's own class, a global index like e[3]; absent in old tiles
+          ...(e[10] === undefined ? [] : [e[10]]),
+        ] as GraphEdge);
       }
     }
     return { nodes, names, classes, edges, geoms };

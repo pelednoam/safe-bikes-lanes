@@ -201,6 +201,8 @@ export class TileStore {
                     e[7],
                     e[8],
                     e[9],
+                    // the street's own class, a global index like e[3]; absent in old tiles
+                    ...(e[10] === undefined ? [] : [e[10]]),
                 ]);
             }
         }

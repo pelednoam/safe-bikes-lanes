@@ -124,6 +124,20 @@ describe("TileStore", () => {
     expect(Number.isFinite(summary?.meters)).toBe(true);
   });
 
+  it("carries each edge's own-street class through the merge", async () => {
+    const withRoad: Edge = [0, 1, 70, 0, 0, -1, 1, 0, 0, 0];
+    const tile = { ...TILE_0_0, edges: [[...withRoad, 0], e(1, 0)] };
+    const manifest = { ...MANIFEST, tiles: ["0_0"] };
+    const store = new TileStore(<T,>(name: string): Promise<T> =>
+      Promise.resolve((name === "tiles/manifest.json" ? manifest : tile) as T),
+    );
+    await store.loadManifest();
+    await store.ensure({ west: 0.1, south: 0.4, east: 0.95, north: 0.6 }, 0);
+    const g = store.assemble();
+    expect(g.edges[0]?.[10]).toBe(0);
+    expect(g.edges[1]?.length).toBe(10); // an old tile's edge stays ten fields
+  });
+
   it("still reads a snapshot published before the full class table existed", async () => {
     const store = new TileStore(fetcher([]));
     await store.loadManifest();

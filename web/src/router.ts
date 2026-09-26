@@ -21,14 +21,17 @@ import type {
 } from "./types.js";
 
 /** Raw shape of graph.json v2.
- * edges: [u, v, len_m, clsIdx, nameIdx, geomIdx, crashFactor, pen_m, climb_m, busy01] */
+ * edges: [u, v, len_m, clsIdx, nameIdx, geomIdx, crashFactor, pen_m, climb_m, busy01,
+ *         roadClsIdx?] — roadClsIdx is the street's own class without its bike
+ * facility (absent from snapshots built before it existed). */
+export type GraphEdge = [
+  number, number, number, number, number, number, number, number, number, number, number?,
+];
 export interface GraphData {
   nodes: [number, number, number][];
   names: string[];
   classes: ProtectionClass[];
-  edges: [
-    number, number, number, number, number, number, number, number, number, number,
-  ][];
+  edges: GraphEdge[];
   geoms: number[][];
 }
 
@@ -452,9 +455,7 @@ export class Router {
         w[i] = up;
         return;
       }
-      let mult = profile.mult[cls];
-      if (e[9] === 1 && cls === "lane") mult = profile.busyLane;
-      if (e[9] === 1 && cls === "buffered") mult = profile.busyBuffered;
+      let mult = this.classMult(profile, e, cls);
       if (avoid?.has(cls)) mult = Math.max(mult, AVOID_TYPE_MULT);
       let wi = e[2] * mult * e[6] + e[7] * profile.penScale;
       if (preferFlat) wi += this.hillPen[i] as number;
@@ -463,6 +464,22 @@ export class Router {
       w[i] = wi;
     });
     return w;
+  }
+
+  /** Per-metre multiplier of riding an edge of class `cls` (pipeline
+   * build_graph.facility_multiplier, which prices graph.pkl the same way).
+   * On a busy road paint buys little: lanes have their own price, and a
+   * sharrow — a marking, not a space — costs what the busy road costs. And a
+   * marking never costs more than its street without it (e[10], the street's
+   * own class): a painted lane must not make a quiet street costlier. */
+  private classMult(profile: RiderProfile, e: GraphEdge, cls: ProtectionClass): number {
+    let mult = profile.mult[cls];
+    if (e[9] === 1 && cls === "lane") mult = profile.busyLane;
+    if (e[9] === 1 && cls === "buffered") mult = profile.busyBuffered;
+    if (e[9] === 1 && cls === "sharrow") mult = profile.mult.busy_street;
+    const road = e[10] === undefined ? undefined : this.g.classes[e[10]];
+    if (road !== undefined) mult = Math.min(mult, profile.mult[road]);
+    return mult;
   }
 
   /** Ride-equivalent cost of walking each edge (class-independent: pushing a
@@ -948,9 +965,7 @@ export class Router {
       const e = this.g.edges[ei];
       if (!e) continue;
       const cls = this.g.classes[e[3]] ?? "quiet_street";
-      let mult = yk.mult[cls];
-      if (e[9] === 1 && cls === "lane") mult = yk.busyLane;
-      if (e[9] === 1 && cls === "buffered") mult = yk.busyBuffered;
+      let mult = this.classMult(yk, e, cls);
       if (walkFlags?.[pi] === true) mult = 1.3; // pushing the bike is calm
       len += e[2];
       cost += e[2] * mult * e[6] + e[7];

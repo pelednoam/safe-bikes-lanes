@@ -1,9 +1,10 @@
-import type { ProfileId } from "../src/types.js";
+import type { ProfileId, ProtectionClass } from "../src/types.js";
 // Behavior tests for the in-browser router on small synthetic graphs.
 import { beforeEach, describe, expect, it } from "vitest";
 import { setUnits } from "../src/units.js";
 
 import { buildCues, PROFILES, Router, toGPX, routeCacheKey } from "../src/router.js";
+import type { GraphEdge } from "../src/router.js";
 import type { PoiFeature } from "../src/types.js";
 
 /*
@@ -381,6 +382,60 @@ describe("avoid lane types", () => {
       from, to, "young_kids", false, undefined, new Set(["lane", "quiet_street"]),
     )[0];
     expect(res?.payload.summary.explanation?.join(" ")).toMatch(/no better alternative exists/);
+  });
+});
+
+describe("markings are priced against the street they are painted on", () => {
+  /* 0 --marked street (100 m)-- 1   vs   0 --detour (60 m + 60 m via 2)-- 1 */
+  const classes: ProtectionClass[] = [
+    "lane", "quiet_street", "sharrow", "busy_street", "moderate_street",
+  ];
+  function router(direct: GraphEdge, detourCls: number): Router {
+    const dlon = 1 / (111_320 * Math.cos((42.38 * Math.PI) / 180));
+    const [, , len, cls, , , , , , busy, road] = direct;
+    const back: GraphEdge =
+      road === undefined
+        ? [1, 0, len, cls, 1, -1, 1, 0, 0, busy]
+        : [1, 0, len, cls, 1, -1, 1, 0, 0, busy, road];
+    return new Router({
+      nodes: [
+        [-71.1, 42.38, 10],
+        [-71.1 + 100 * dlon, 42.38, 10],
+        [-71.0995, 42.3804, 10],
+      ],
+      names: ["", "Marked St", "Detour"],
+      classes,
+      edges: [
+        direct,
+        back,
+        [0, 2, 60, detourCls, 2, -1, 1, 0, 0, 0],
+        [2, 0, 60, detourCls, 2, -1, 1, 0, 0, 0],
+        [2, 1, 60, detourCls, 2, -1, 1, 0, 0, 0],
+        [1, 2, 60, detourCls, 2, -1, 1, 0, 0, 0],
+      ],
+      geoms: [],
+    });
+  }
+  const from: [number, number] = [-71.1, 42.38];
+  const to: [number, number] = [-71.1 + 100 / (111_320 * Math.cos((42.38 * Math.PI) / 180)), 42.38];
+
+  it("a painted lane never makes a quiet street costlier", () => {
+    // lane on a quiet street (roadClsIdx 1): 100 m at 1.4 beats 120 m of quiet
+    // street at 1.4; priced as a bare lane (3.0) it lost to the detour
+    const r = router([0, 1, 100, 0, 1, -1, 1, 0, 0, 0, 1], 1);
+    expect(r.routeOptions(from, to, "young_kids")[0]?.payload.summary.meters).toBe(100);
+  });
+
+  it("a sharrow on a busy road costs the busy road", () => {
+    // 100 m of arterial with sharrows was 6.0 a metre, cheaper than 120 m of a
+    // moderate street at 8.0; it is 25.0, the arterial's own price
+    const r = router([0, 1, 100, 2, 1, -1, 1, 0, 0, 1, 3], 4);
+    expect(r.routeOptions(from, to, "young_kids")[0]?.payload.summary.meters).toBe(120);
+  });
+
+  it("a snapshot without the street's own class prices as before", () => {
+    const r = router([0, 1, 100, 0, 1, -1, 1, 0, 0, 0], 1);
+    expect(r.routeOptions(from, to, "young_kids")[0]?.payload.summary.meters).toBe(120);
   });
 });
 
