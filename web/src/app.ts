@@ -119,6 +119,7 @@ import { Lane, planOptions, type RoutePrefs, type Ticket, withUpgraded } from ".
 import { type SpeakPriority, SpeechQueue } from "./speech.js";
 import { loopRejoinPoint, payloadLength, rejoinOption } from "./rejoin.js";
 import { decodePlan, encodePlan } from "./permalink.js";
+import { downloadBlob, PreparedImage, shareImage } from "./share.js";
 import { readItem, readJson, removeItem, trimRecord, writeItem } from "./storage.js";
 import { DeferredReload, ScreenLock, type WakeLockApi } from "./lifecycle.js";
 import { drawRideCard, drawTotalsCard, rideShareText, totalsShareText } from "./sharecard.js";
@@ -1381,12 +1382,7 @@ el<HTMLButtonElement>("gpx").addEventListener("click", () => {
   const sel = options.find((o) => o.id === selectedId);
   if (!sel) return;
   const gpx = toGPX(sel.payload, `Family bike route (${sel.label})`);
-  const blob = new Blob([gpx], { type: "application/gpx+xml" });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = "family-bike-route.gpx";
-  a.click();
-  URL.revokeObjectURL(a.href);
+  downloadBlob(new Blob([gpx], { type: "application/gpx+xml" }), "family-bike-route.gpx");
 });
 
 el<HTMLButtonElement>("print-cues").addEventListener("click", () => {
@@ -3203,11 +3199,7 @@ el<HTMLButtonElement>("from-pick").addEventListener("click", () => {
 el<HTMLButtonElement>("backup-save").addEventListener("click", () => {
   const backup = exportBackup(new Date().toISOString());
   const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = `family-bike-router-backup-${new Date().toISOString().slice(0, 10)}.json`;
-  a.click();
-  URL.revokeObjectURL(a.href);
+  downloadBlob(blob, `family-bike-router-backup-${new Date().toISOString().slice(0, 10)}.json`);
   const places = listPlaces().length;
   el<HTMLDivElement>("backup-note").textContent =
     `Backed up ${places} saved place${places === 1 ? "" : "s"} and your marks.`;
@@ -3853,31 +3845,36 @@ function showRideOnMap(ride: RideSummary): void {
   }
 }
 
-/** Share text + a rendered PNG card via the native share sheet; falls back to
- * downloading the image and copying the text. */
-function shareContent(text: string, imagePromise: Promise<Blob>, filename: string): void {
-  void imagePromise
-    .then((blob) => {
-      const file = new File([blob], filename, { type: "image/png" });
-      const payload = { text, files: [file] };
-      if (typeof navigator.canShare === "function" && navigator.canShare(payload)) {
-        return navigator.share(payload).catch(() => undefined);
-      }
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = filename;
-      a.click();
-      URL.revokeObjectURL(a.href);
-      return navigator.clipboard.writeText(text).catch(() => undefined);
-    })
-    .catch(() => {
-      // canvas unavailable: share/copy the text alone
-      if (typeof navigator.share === "function") {
-        void navigator.share({ text }).catch(() => undefined);
-      } else {
-        void navigator.clipboard.writeText(text).catch(() => undefined);
-      }
-    });
+/** Share a stats card from a tap (see share.ts): the share sheet when the card
+ * is ready and the browser has one, otherwise the picture saved and the text
+ * copied — with the button saying so, instead of nothing happening. */
+function shareCard(text: string, image: PreparedImage, filename: string, btn: HTMLElement): void {
+  void shareImage(text, image, filename, {
+    canShare: typeof navigator.canShare === "function" ? (d) => navigator.canShare(d) : undefined,
+    share: typeof navigator.share === "function" ? (d) => navigator.share(d) : undefined,
+    copy: (t) => navigator.clipboard.writeText(t),
+    download: (b, f) => downloadBlob(b, f),
+    tell: (message) => {
+      const prev = btn.textContent;
+      btn.textContent = `✓ ${message}`;
+      window.setTimeout(() => {
+        btn.textContent = prev;
+      }, 2500);
+    },
+  });
+}
+
+/** Cards drawn ahead of the tap, so share() can run inside it. */
+let totalsCard: PreparedImage | null = null;
+const rideCards = new Map<string, PreparedImage>();
+
+function rideCard(ride: RideSummary): PreparedImage {
+  let card = rideCards.get(ride.id);
+  if (card === undefined) {
+    card = new PreparedImage(drawRideCard(ride));
+    rideCards.set(ride.id, card);
+  }
+  return card;
 }
 
 function renderRides(): void {
@@ -3916,8 +3913,12 @@ function renderRides(): void {
     const shareBtn = document.createElement("button");
     shareBtn.textContent = "📤";
     shareBtn.title = "share this ride (stats card + text)";
+    // drawn as soon as a finger lands on it; usually ready by the click
+    shareBtn.addEventListener("pointerdown", () => {
+      rideCard(ride);
+    });
     shareBtn.addEventListener("click", () => {
-      shareContent(rideShareText(ride), drawRideCard(ride), "bike-ride.png");
+      shareCard(rideShareText(ride), rideCard(ride), "bike-ride.png", shareBtn);
     });
     actions.appendChild(shareBtn);
     const rm = document.createElement("button");
@@ -3932,6 +3933,10 @@ function renderRides(): void {
 
 el<HTMLButtonElement>("rides-btn").addEventListener("click", () => {
   renderRides();
+  // the totals card is drawn while the list is read, not after the tap
+  const rides = loadRides();
+  rideCards.clear();
+  totalsCard = rides.length > 0 ? new PreparedImage(drawTotalsCard(rideTotals(rides, new Date()))) : null;
   el<HTMLDialogElement>("rides").showModal();
 });
 el<HTMLButtonElement>("rides-close").addEventListener("click", () => {
@@ -3939,7 +3944,8 @@ el<HTMLButtonElement>("rides-close").addEventListener("click", () => {
 });
 el<HTMLButtonElement>("rides-share").addEventListener("click", () => {
   const totals = rideTotals(loadRides(), new Date());
-  shareContent(totalsShareText(totals), drawTotalsCard(totals), "bike-stats.png");
+  totalsCard ??= new PreparedImage(drawTotalsCard(totals));
+  shareCard(totalsShareText(totals), totalsCard, "bike-stats.png", el("rides-share"));
 });
 
 el<HTMLButtonElement>("rides-clear").addEventListener("click", () => {

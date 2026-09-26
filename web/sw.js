@@ -40,6 +40,7 @@ const ASSETS = [
   "router.js",
   "search.js",
   "segment.js",
+  "share.js",
   "sharecard.js",
   "speech.js",
   "storage.js",
