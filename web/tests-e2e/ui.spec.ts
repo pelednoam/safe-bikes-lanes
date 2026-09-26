@@ -465,8 +465,15 @@ test.describe("safety classes without colour", () => {
   test("the legend explains the marks and the construction symbol", async ({ page }) => {
     await boot(page);
     const legend = page.locator("#legend");
-    await expect(legend.locator("svg.swatch")).toHaveCount(9); // 8 classes + construction
+    // 9 classes (alley/service is drawn as a quiet street) + construction
+    await expect(legend.locator("svg.swatch")).toHaveCount(10);
     await expect(legend).toContainText("construction");
+    // safest first: unpaved paths belong between quiet streets and painted lanes,
+    // not after busy streets, where they arrived when the class was added
+    const order = ((await legend.textContent()) ?? "").replace(/\s+/g, " ");
+    const at = (label: string): number => order.indexOf(label);
+    expect(at("quiet street")).toBeLessThan(at("unpaved path"));
+    expect(at("unpaved path")).toBeLessThan(at("painted lane"));
   });
 
   test("construction looks like neither a safety colour nor a place", async ({ page }) => {

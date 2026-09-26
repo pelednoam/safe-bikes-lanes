@@ -5,11 +5,15 @@ export const CLASS_LABELS = {
     buffered: "buffered lane",
     quiet_street: "quiet street",
     service: "alley/service",
+    // In safety order, like the rest: the legend and the about table are built
+    // by walking this object, and unpaved paths (a kid's cost of 2.0, between a
+    // quiet street's 1.4 and a painted lane's 3.0) were appended after busy
+    // streets, reading as the most dangerous class on the map.
+    unpaved: "unpaved path",
     lane: "painted lane",
     sharrow: "sharrow",
     moderate_street: "moderate street",
     busy_street: "busy street",
-    unpaved: "unpaved path",
 };
 /** What each class means for riding with kids, in plain words. */
 export const CLASS_SAFETY = {
