@@ -162,3 +162,27 @@ test("a ride ends cleanly even when storage is full", async ({ page }) => {
   await expect(page.locator("#nav-banner")).toBeHidden();
   expect(await page.evaluate(() => document.body.classList.contains("navigating"))).toBe(false);
 });
+
+test("after a ride, Back leaves the ride behind instead of doing nothing", async ({ page }) => {
+  // Each ride pushed a history entry to catch an accidental Back, and ending
+  // the ride never took it off: the next Back only popped it.
+  await installRider(page);
+  await planned(page);
+  const before = await page.evaluate(() => window.location.hash);
+  await startRide(page);
+  await page.locator("#nav-exit").click();
+  await page.locator("#nav-ask-yes").click();
+  await expect(page.locator("#nav-banner")).toBeHidden();
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () => (history.state as { navigating?: boolean } | null)?.navigating === true,
+        ),
+      { message: "the ride's history entry is still the current one" },
+    )
+    .toBe(false);
+  // and the link still describes the trip on screen
+  expect(await page.evaluate(() => window.location.hash)).toBe(before);
+  await expect(page.locator(".option-card").first()).toBeVisible();
+});

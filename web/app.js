@@ -14,6 +14,7 @@ import { withRetry } from "./retry.js";
 import { Lane, planOptions, withUpgraded } from "./planner.js";
 import { SpeechQueue } from "./speech.js";
 import { loopRejoinPoint, payloadLength, rejoinOption } from "./rejoin.js";
+import { decodePlan, encodePlan } from "./permalink.js";
 import { readItem, readJson, removeItem, trimRecord, writeItem } from "./storage.js";
 import { DeferredReload, ScreenLock } from "./lifecycle.js";
 import { drawRideCard, drawTotalsCard, rideShareText, totalsShareText } from "./sharecard.js";
@@ -1256,92 +1257,94 @@ el("print-cues").addEventListener("click", () => {
 // ---------------------------------------------------------------------------
 // URL hash permalinks: #s=lon,lat&e=lon,lat&m=profile&f=1
 // ---------------------------------------------------------------------------
+/** The hash this page last wrote or read, so a hashchange can tell a link
+ * pasted in from the page's own bookkeeping. */
+let lastHash = "";
+function lngLatOf(m) {
+    const p = m.getLngLat();
+    return [p.lng, p.lat];
+}
 function updateHash() {
-    if (!start)
+    const hash = encodePlan({
+        // "from where you are" stays that, for whoever opens the link
+        start: start === null ? null : fromCurrent ? "here" : lngLatOf(start),
+        end: loopParams === null && end !== null ? lngLatOf(end) : null,
+        loop: loopParams,
+        profile: profileId,
+        flat: preferFlat,
+        walkM: walkMaxM,
+        avoid: [...avoidTypes],
+        option: selectedId === "safest" || selectedId === "balanced" || selectedId === "direct"
+            ? selectedId
+            : null,
+    });
+    if (hash === null)
         return;
-    const s = start.getLngLat();
-    const base = `s=${s.lng.toFixed(6)},${s.lat.toFixed(6)}&m=${profileId}` +
-        (preferFlat ? "&f=1" : "") +
-        (walkMaxM > 0 ? `&wk=${walkMaxM}` : "") +
-        (avoidTypes.size > 0 ? `&x=${[...avoidTypes].join(",")}` : "");
-    let h;
-    if (loopParams !== null) {
-        h = `${base}&l=${loopParams.km},${loopParams.kind}`;
-    }
-    else if (end) {
-        const d = end.getLngLat();
-        h =
-            `${base}&e=${d.lng.toFixed(6)},${d.lat.toFixed(6)}` +
-                (selectedId !== null && selectedId !== "loop" ? `&o=${selectedId}` : "");
-    }
-    else {
-        return;
-    }
-    history.replaceState(null, "", `#${h}`);
+    lastHash = hash;
+    // history.state kept: mid-ride this entry is the one the ride pushed
+    history.replaceState(history.state, "", `#${hash}`);
 }
 function parseHash() {
-    const params = new URLSearchParams(window.location.hash.slice(1));
-    const parse = (v) => {
-        if (v === null)
-            return null;
-        const parts = v.split(",").map(Number);
-        const [lng, lat] = parts;
-        if (parts.length !== 2 || lng === undefined || lat === undefined)
-            return null;
-        if (Number.isNaN(lng) || Number.isNaN(lat))
-            return null;
-        return [lng, lat];
-    };
-    const m = params.get("m");
-    const legacy = { kids: "young_kids", solo: "solo" };
-    const mapped = m !== null ? (legacy[m] ?? m) : null;
-    if (mapped === "young_kids" || mapped === "older_kids" || mapped === "solo") {
-        profileId = mapped;
-        const radio = document.querySelector(`input[name=profile][value=${mapped}]`);
+    lastHash = window.location.hash.replace(/^#/, "");
+    const link = decodePlan(window.location.hash);
+    if (link.profile !== null) {
+        profileId = link.profile;
+        const radio = document.querySelector(`input[name=profile][value=${link.profile}]`);
         if (radio)
             radio.checked = true;
     }
-    if (params.get("f") === "1") {
+    if (link.flat) {
         preferFlat = true;
         el("prefer-flat").checked = true;
     }
-    const wk = params.get("wk");
-    if (wk !== null) {
-        walkMaxM = wk === "1" ? 500 : Math.max(0, Math.min(2000, Number(wk) || 0));
+    if (link.walkM !== null) {
+        walkMaxM = link.walkM;
         el("walk-max").value = String(walkMaxM);
     }
-    const x = params.get("x");
-    if (x !== null) {
+    if (link.avoid !== null) {
         const valid = new Set(AVOIDABLE.map(([c]) => c));
-        avoidTypes = new Set(x.split(",").filter((t) => valid.has(t)));
+        avoidTypes = new Set(link.avoid.filter((t) => valid.has(t)));
         for (const [cls] of AVOIDABLE) {
             el(`avoid-${cls}`).checked = avoidTypes.has(cls);
         }
         syncAvoidSummary();
     }
-    const o = params.get("o");
-    if (o === "safest" || o === "balanced" || o === "direct")
-        pendingSelect = o;
-    const s = parse(params.get("s"));
-    const e = parse(params.get("e"));
-    const l = params.get("l");
-    if (s && l !== null) {
+    if (link.option !== null)
+        pendingSelect = link.option;
+    const s = link.start;
+    if (s !== null && link.loop !== null) {
         // shared loop: restore controls, place the start, and re-plan it
-        const [kmRaw, kind] = l.split(",");
-        const km = Number(kmRaw);
-        if (km > 0 && kind) {
-            el("loop-dist").value = String(Math.round(fromMeters(km * 1000) * 10) / 10);
-            el("loop-stop").value = kind;
-            start = makeMarker(s, "#2b83ba", "start");
-            void requestLoop();
-            return;
+        el("loop-dist").value = String(Math.round(fromMeters(link.loop.km * 1000) * 10) / 10);
+        el("loop-stop").value = link.loop.kind;
+        if (s !== "here") {
+            fromCurrent = false;
+            // one start pin, even if the load-time locate put one down already
+            if (start)
+                start.setLngLat(s);
+            else
+                start = makeMarker(s, "#2b83ba", "start");
         }
+        syncOD();
+        void requestLoop();
+        return;
     }
-    if (s)
+    // "here" leaves the start as the rider's own location, found when routing
+    if (s !== null && s !== "here")
         setPoint("start", s);
-    if (e)
-        setPoint("end", e);
+    if (link.end)
+        setPoint("end", link.end);
 }
+// A link pasted into a tab that already has the app open changes only the
+// hash, which reloads nothing: the old trip stayed on screen and the link did
+// nothing at all. Follow it — unless it is this page's own write coming back
+// (see lastHash), or a ride is under way, which a link does not replace.
+window.addEventListener("hashchange", () => {
+    const now = window.location.hash.replace(/^#/, "");
+    if (now === lastHash || navActive)
+        return;
+    resetPlan(false);
+    parseHash();
+});
 // share: Web Share API on mobile, clipboard elsewhere
 el("share").addEventListener("click", () => {
     const url = window.location.href;
@@ -3021,7 +3024,9 @@ el("backup-file").addEventListener("change", () => {
     });
     el("backup-file").value = "";
 });
-el("reset").addEventListener("click", () => {
+/** Clear the trip: pins, options, drawn route — and the link, unless the
+ * link is what is being followed. */
+function resetPlan(clearLink = true) {
     // withdraw anything still planning: it would otherwise finish and draw the
     // trip just cleared back onto an empty map
     routeLane.cancel();
@@ -3030,6 +3035,8 @@ el("reset").addEventListener("click", () => {
     end?.remove();
     poiMarker?.remove();
     start = end = poiMarker = null;
+    loopParams = null;
+    endWhatIf();
     clearOptionChips();
     fromCurrent = true;
     activeField = "end";
@@ -3044,8 +3051,12 @@ el("reset").addEventListener("click", () => {
     getSource("alts").setData(emptyFC());
     el("summary").style.display = "none";
     el("error").style.display = "none";
-    history.replaceState(null, "", "#");
-});
+    if (!clearLink)
+        return;
+    lastHash = "";
+    history.replaceState(history.state, "", "#");
+}
+el("reset").addEventListener("click", () => resetPlan());
 el("swap").addEventListener("click", () => {
     if (!start || !end)
         return;
@@ -4742,6 +4753,12 @@ function exitNav() {
     // a new build that arrived mid-ride is loaded now the ride is over
     if (swReload.waiting)
         window.setTimeout(() => swReload.idle(), RELOAD_AFTER_RIDE_MS);
+    // The ride pushed a history entry to catch Back; left there, the next Back
+    // after the ride only popped it, and did nothing a rider could see.
+    if (history.state?.navigating === true) {
+        navHistoryUnwinding = true;
+        history.back();
+    }
 }
 /** Mid-ride detour: reroute to the nearest kid stop of a kind, remembering
  * the original destination for the resume button. */
@@ -4965,9 +4982,18 @@ el("nav-recenter").addEventListener("click", () => {
     navUserZoom = false; // hand the zoom back to the follow camera
     setRecentreNeeded(false);
 });
+/** Set while exitNav steps back over the ride's history entry. */
+let navHistoryUnwinding = false;
 window.addEventListener("popstate", () => {
-    if (!navActive)
+    if (!navActive) {
+        if (navHistoryUnwinding) {
+            navHistoryUnwinding = false;
+            // back on the entry from before the ride, whose link may be older than
+            // the plan now on screen (a reroute rewrote the ride's own entry)
+            updateHash();
+        }
         return;
+    }
     // stay on the ride and ask, rather than silently leaving it
     history.pushState({ navigating: true }, "");
     askDuringRide("End the ride?", exitNav);

@@ -31,6 +31,7 @@ const ASSETS = [
   "lifecycle.js",
   "native.js",
   "nav.js",
+  "permalink.js",
   "places.js",
   "planner.js",
   "rejoin.js",
