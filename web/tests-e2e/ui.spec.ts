@@ -548,6 +548,12 @@ test.describe("the workspace and the city pages", () => {
 });
 
 test.describe("when something goes wrong", () => {
+  // These fail requests with page.route, which a service worker's own fetches
+  // bypass: once the new worker claims the page, the "failed" manifest simply
+  // loads through it and no error ever appears. Block the worker so the failure
+  // being tested is the one that happens (dataload.spec does the same).
+  test.use({ serviceWorkers: "block" });
+
   const developerWords = /snap|intersection|no path found|TypeError|failed to load|routing tiles/i;
 
   test("a trip to the same spot says so in plain words", async ({ page }) => {
