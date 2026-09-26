@@ -8,8 +8,10 @@ from build_graph import (
     angle_diff,
     classify_osm,
     classify_road,
+    climb_along,
     facility_multiplier,
     parse_maxspeed_mph,
+    profile_points,
     safer,
 )
 
@@ -296,3 +298,19 @@ def test_contraflow_streets_get_their_bike_direction() -> None:
     assert classify_osm(g.get_edge_data(4, 3)[0])[0] == "lane"
     # idempotent: a street that already runs both ways is left alone
     assert add_contraflow_edges(g) == 0
+
+
+def test_climb_is_summed_along_the_way() -> None:
+    assert climb_along([0, 5, 10, 5, 0]) == 10  # over a hill, level ends
+    assert climb_along([0, 0.5, 1.0, 1.5, 2.0]) == 2.0  # a steady grade, all of it
+    assert climb_along([5.0, 0.0]) == 0.0  # downhill is free
+    # DEM noise on level ground does not add up to a hill
+    assert climb_along([0.0, 0.4, -0.3, 0.3, -0.2, 0.4, 0.0]) == 0.0
+    # never less than the net rise
+    assert climb_along([0.0, 0.6]) == pytest.approx(0.6)
+
+
+def test_profile_points_keep_both_ends() -> None:
+    pts = profile_points([(-71.1, 42.38), (-71.098, 42.38)], 35.0)
+    assert pts[0] == (-71.1, 42.38) and pts[-1] == (-71.098, 42.38)
+    assert len(pts) >= 5  # ~165 m at one sample per ~35 m

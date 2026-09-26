@@ -418,6 +418,48 @@ def facility_multiplier(
 # geometry helpers
 # ---------------------------------------------------------------------------
 
+CLIMB_STEP_M: Final[float] = 35.0  # terrain is ~14 m/pixel; one sample per few
+CLIMB_DEAD_BAND_M: Final[float] = 1.0  # rises smaller than this are DEM noise
+
+
+def profile_points(coords: list[tuple[float, float]], step: float) -> list[tuple[float, float]]:
+    """Points along a lon/lat polyline, no more than ~`step` metres apart,
+    first and last vertex included."""
+    out: list[tuple[float, float]] = []
+    for (x1, y1), (x2, y2) in itertools.pairwise(coords):
+        dx = (x2 - x1) * 111_320 * math.cos(math.radians(y1))
+        dy = (y2 - y1) * 110_540
+        n = max(1, round(math.hypot(dx, dy) / step))
+        out.extend((x1 + (x2 - x1) * i / n, y1 + (y2 - y1) * i / n) for i in range(n))
+    out.append(coords[-1])
+    return out
+
+
+def climb_along(elevations: list[float], dead_band: float = CLIMB_DEAD_BAND_M) -> float:
+    """Metres climbed riding a profile from its first sample to its last.
+
+    Summed along the way, not taken from the ends: a street over a hill whose
+    ends are level used to count as flat (climb 0), which is exactly the street
+    a parent choosing "prefer flat" most needs to avoid. A rise only counts
+    once it clears a small dead band from the last low point — the terrain is
+    ~14 m/pixel and every pixel step of noise would otherwise add up — and the
+    total is never less than the net rise from end to end.
+    """
+    if not elevations:
+        return 0.0
+    ref = elevations[0]
+    climbed = 0.0
+    for e in elevations[1:]:
+        if e > ref + dead_band:
+            climbed += e - ref
+            ref = e
+        elif e < ref - dead_band:
+            ref = e
+    if elevations[-1] > ref:
+        climbed += elevations[-1] - ref
+    return climbed
+
+
 def bearing_near(line: LineString, pt: Point, chord: float = 6.0) -> float:
     """Bearing (0-180) of `line` around the point nearest to `pt`."""
     d = line.project(pt)
@@ -779,6 +821,34 @@ def acquire_osm(bbox: tuple[float, float, float, float]) -> nx.MultiDiGraph:
     return G
 
 
+def edge_climb(
+    graph: nx.MultiDiGraph,
+    u: Any,
+    v: Any,
+    data: Mapping[str, Any],
+    elev: Mapping[Any, float],
+    sampler: Any,
+) -> float:
+    """Climb riding edge u->v, sampled along its geometry (see climb_along)."""
+    geom = data.get("geometry")
+    if not isinstance(geom, LineString):
+        coords = [
+            (float(graph.nodes[u]["x"]), float(graph.nodes[u]["y"])),
+            (float(graph.nodes[v]["x"]), float(graph.nodes[v]["y"])),
+        ]
+    else:
+        coords = [(float(x), float(y)) for x, y in geom.coords]
+        ux, uy = float(graph.nodes[u]["x"]), float(graph.nodes[u]["y"])
+        # geometry keeps the way's direction; ride it from u
+        if abs(coords[-1][0] - ux) + abs(coords[-1][1] - uy) < abs(coords[0][0] - ux) + abs(
+            coords[0][1] - uy
+        ):
+            coords.reverse()
+    pts = profile_points(coords, CLIMB_STEP_M)
+    heights = [elev[u], *(sampler.elevation(x, y) for x, y in pts[1:-1]), elev[v]]
+    return climb_along(heights)
+
+
 def build() -> None:
     mem("start")
     print("downloading OSM (bike + footpaths) ...")
@@ -957,7 +1027,7 @@ def build() -> None:
             return config.SIGNALIZED_BUSY_CROSSING_PENALTY_M
         return config.UNSIGNALIZED_BUSY_CROSSING_PENALTY_M
 
-    # node elevations -> per-edge climb (positive rise along travel direction)
+    # node elevations; per-edge climb is sampled along each edge below
     print("sampling node elevations (AWS terrain tiles) ...")
     sampler = ElevationSampler()
     elev: dict[int, float] = {}
@@ -973,7 +1043,7 @@ def build() -> None:
         if not (row["cls"] == "busy_street" or row["road_busy"]):
             pen = (node_penalty(u) + node_penalty(v)) / 2
         data = G.edges[u, v, k]
-        data["climb"] = round(max(0.0, elev[v] - elev[u]), 2)
+        data["climb"] = round(edge_climb(G, u, v, data, elev, sampler), 2)
         data["xpen"] = round(pen, 1)
         data["road_busy"] = bool(row["road_busy"])
         # exact crash count, not just the derived factor: the where-to-build

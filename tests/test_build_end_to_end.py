@@ -339,3 +339,36 @@ def test_a_footpath_meeting_a_road_mid_block_is_joined_to_it(
     assert sum(p["length"] for p in pieces) == pytest.approx(170.0, rel=0.05)
     assert all(p["name"] == "Road St" for p in pieces)
     assert g.edges[9, 1, 0]["geometry"].coords[0] == (-71.0990, 42.3801)
+
+
+class HillSampler:
+    """A 20 m ridge along 42.381 N, level ground at 42.380."""
+
+    def elevation(self, _lon: float, lat: float) -> float:
+        return max(0.0, 20.0 - abs(lat - 42.381) * 20_000)
+
+
+def test_a_street_over_a_hill_is_not_flat(
+    sandbox: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Climb came from the two ends of an edge, so a street that goes over a
+    hill and comes down to the same height counted as climb 0 both ways."""
+    from shapely.geometry import LineString
+
+    def hilly() -> nx.MultiDiGraph:
+        g = tiny_osm()
+        over = [(-71.1000, 42.3800), (-71.0990, 42.3810), (-71.0980, 42.3800)]
+        g.edges[1, 2, 0]["geometry"] = LineString(over)
+        g.edges[2, 1, 0]["geometry"] = LineString(over[::-1])
+        return g
+
+    monkeypatch.setattr(build_graph, "acquire_osm", lambda _bbox: hilly())
+    monkeypatch.setattr(build_graph, "ElevationSampler", lambda: HillSampler())
+    build_graph.build()
+    with (sandbox / "graph.pkl").open("rb") as fh:
+        g: nx.MultiDiGraph = pickle.load(fh)
+    # up 20 m and down again, whichever way it is ridden
+    assert g.edges[1, 2, 0]["climb"] == pytest.approx(20.0, abs=2.0)
+    assert g.edges[2, 1, 0]["climb"] == pytest.approx(20.0, abs=2.0)
+    # and a level street is still level
+    assert g.edges[3, 6, 0]["climb"] == 0.0
