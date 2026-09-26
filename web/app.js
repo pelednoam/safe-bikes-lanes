@@ -1,5 +1,5 @@
 import { CARTO_ATTRIBUTION, CARTO_MAXZOOM, CARTO_TILES, createBasemap, VENDORED_FONT_STACK, } from "./basemap.js";
-import { isNativeApp, isNewerAppVersion, lastNativeSpeechError, nativeSpeak, startDownload, startBackgroundWatcher, stopBackgroundWatcher, webVoiceCount, } from "./native.js";
+import { isNativeApp, isNewerAppVersion, lastNativeSpeechError, minimizeApp, nativeSpeak, onAndroidBack, startDownload, startBackgroundWatcher, stopBackgroundWatcher, webVoiceCount, } from "./native.js";
 import { GEOCODE_DEBOUNCE_MS, geocodeDelayMs, matchScore, metresBetween, rank as rankSearch, describe as describeRow, worthGeocoding, } from "./search.js";
 import { CLASS_LABELS, cautionsHtml, clearPhotoCache, esc, FACILITY_CLASSES, nearestMapillary, fillSegmentPhoto as fillPhotoSlot, GRADE_COLORS, segmentHtml, } from "./segment.js";
 import { bearingDeg, buildAlerts, buildManeuvers, buildTrack, distM, snapToTrack, sunsetTime, trackBearingAhead, trackSlice, } from "./nav.js";
@@ -4734,6 +4734,46 @@ window.addEventListener("popstate", () => {
     // stay on the ride and ask, rather than silently leaving it
     history.pushState({ navigating: true }, "");
     askDuringRide("End the ride?", exitNav);
+});
+// Android's Back in the app. The popstate guard above is the website's; in the
+// APK Back never reached it, so mid-ride it went home, it never closed a dialog,
+// and on Android 7–11 it closed the app, stopping GPS and the voice with it.
+// Now it puts away whatever is on top, asks before leaving a ride, and otherwise
+// sends the app to the background the way Home does.
+onAndroidBack(() => {
+    const dialogs = document.querySelectorAll("dialog[open]");
+    const topDialog = dialogs[dialogs.length - 1];
+    if (topDialog !== undefined) {
+        topDialog.close();
+        return;
+    }
+    const popupClose = document.querySelector(".maplibregl-popup-close-button");
+    if (popupClose !== null) {
+        popupClose.click();
+        return;
+    }
+    if (el("nav-stops").getAttribute("aria-expanded") === "true") {
+        stopsOpen(false);
+        return;
+    }
+    if (el("nav-ask").style.display === "block") {
+        closeAsk(); // Back answers "no"
+        return;
+    }
+    if (navActive) {
+        askDuringRide("End the ride?", exitNav);
+        return;
+    }
+    if (document.body.classList.contains("searching")) {
+        document.activeElement?.blur();
+        leaveSearchMode(false);
+        return;
+    }
+    if (shedMode) {
+        exitShedMode();
+        return;
+    }
+    minimizeApp();
 });
 map.on("dragstart", () => {
     if (navActive) {

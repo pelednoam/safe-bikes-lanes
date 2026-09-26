@@ -23,7 +23,9 @@ import {
   isNativeApp,
   isNewerAppVersion,
   lastNativeSpeechError,
+  minimizeApp,
   nativeSpeak,
+  onAndroidBack,
   startDownload,
   startBackgroundWatcher,
   stopBackgroundWatcher,
@@ -5041,6 +5043,47 @@ window.addEventListener("popstate", () => {
   // stay on the ride and ask, rather than silently leaving it
   history.pushState({ navigating: true }, "");
   askDuringRide("End the ride?", exitNav);
+});
+
+// Android's Back in the app. The popstate guard above is the website's; in the
+// APK Back never reached it, so mid-ride it went home, it never closed a dialog,
+// and on Android 7–11 it closed the app, stopping GPS and the voice with it.
+// Now it puts away whatever is on top, asks before leaving a ride, and otherwise
+// sends the app to the background the way Home does.
+onAndroidBack(() => {
+  const dialogs = document.querySelectorAll<HTMLDialogElement>("dialog[open]");
+  const topDialog = dialogs[dialogs.length - 1];
+  if (topDialog !== undefined) {
+    topDialog.close();
+    return;
+  }
+  const popupClose = document.querySelector<HTMLButtonElement>(".maplibregl-popup-close-button");
+  if (popupClose !== null) {
+    popupClose.click();
+    return;
+  }
+  if (el<HTMLButtonElement>("nav-stops").getAttribute("aria-expanded") === "true") {
+    stopsOpen(false);
+    return;
+  }
+  if (el<HTMLDivElement>("nav-ask").style.display === "block") {
+    closeAsk(); // Back answers "no"
+    return;
+  }
+  if (navActive) {
+    askDuringRide("End the ride?", exitNav);
+    return;
+  }
+  if (document.body.classList.contains("searching")) {
+    (document.activeElement as HTMLElement | null)?.blur();
+    leaveSearchMode(false);
+    return;
+  }
+  if (shedMode) {
+    exitShedMode();
+    return;
+  }
+  minimizeApp();
 });
 
 map.on("dragstart", () => {

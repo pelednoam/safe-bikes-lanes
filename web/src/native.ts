@@ -137,6 +137,52 @@ export async function stopBackgroundWatcher(id: string): Promise<void> {
   await plugin.removeWatcher({ id }).catch(() => undefined);
 }
 
+/** A registered native plugin, or null on the web or if registering throws. */
+function nativePlugin<T>(name: string): T | null {
+  const cap = window.Capacitor;
+  if (!cap || !cap.isNativePlatform()) return null;
+  try {
+    return cap.registerPlugin<T>(name);
+  } catch {
+    return null;
+  }
+}
+
+// ── Android's Back ─────────────────────────────────────────────────────────
+
+interface ListenerHandle {
+  remove(): Promise<void>;
+}
+
+interface AppPlugin {
+  addListener(
+    event: "backButton",
+    listener: (event: { canGoBack: boolean }) => void,
+  ): Promise<ListenerHandle>;
+  minimizeApp(): Promise<void>;
+}
+
+/** Take over Android's Back button and gesture. Returns false where there is
+ * no native App plugin (the website), so the caller keeps its web fallback.
+ *
+ * Without a listener, Capacitor hands Back to the WebView's history and, when
+ * that is empty, to Android — which on Android 7–11 finishes the activity, and
+ * with it the plugins keeping GPS and the voice alive mid-ride. The web code's
+ * pushState guard never ran in the app at all. */
+export function onAndroidBack(handler: () => void): boolean {
+  const plugin = nativePlugin<AppPlugin>("App");
+  if (plugin === null || typeof plugin.addListener !== "function") return false;
+  void plugin.addListener("backButton", () => handler()).catch(() => undefined);
+  return true;
+}
+
+/** Send the app to the background, as Home would, rather than closing it. */
+export function minimizeApp(): void {
+  const plugin = nativePlugin<AppPlugin>("App");
+  if (plugin === null || typeof plugin.minimizeApp !== "function") return;
+  void plugin.minimizeApp().catch(() => undefined);
+}
+
 /** Start a file download (the APK update).
  *
  * This used to go through the Capacitor Browser plugin, which opens a Chrome
