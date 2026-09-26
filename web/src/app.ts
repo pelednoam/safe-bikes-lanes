@@ -49,6 +49,7 @@ import {
   nearestMapillary,
   fillSegmentPhoto as fillPhotoSlot,
   GRADE_COLORS,
+  GRADE_TEXT,
   segmentHtml,
 } from "./segment.js";
 import type { Maneuver, RideAlert, Track } from "./nav.js";
@@ -961,6 +962,7 @@ function renderOptionChips(): void {
     const chip = document.createElement("div");
     chip.className = "opt-chip" + (o.id === selectedId ? " sel" : "");
     chip.style.setProperty("--g", GRADE_COLORS[o.grade]);
+    chip.style.setProperty("--gt", GRADE_TEXT[o.grade]);
     chip.textContent = `${o.grade} · ${o.payload.summary.minutes} min`;
     chip.title = `${o.label}: ${o.gradeReason}`;
     // reachable and pressable from a keyboard, like the cards they mirror
@@ -1102,6 +1104,7 @@ function renderOptions(): void {
     const badge = document.createElement("b");
     badge.className = "grade";
     badge.style.background = GRADE_COLORS[o.grade];
+    badge.style.color = GRADE_TEXT[o.grade];
     badge.textContent = o.grade;
     card.appendChild(badge);
     // name on its own line, the numbers on a second — a single run-on string
@@ -1199,7 +1202,7 @@ function renderRibbon(option: RouteOption): void {
     );
     if (seg.crossing) {
       crossings.push(
-        `<text x="${x.toFixed(2)}" y="22" font-size="9" fill="#a33">▲<title>busy crossing</title></text>`,
+        `<text x="${x.toFixed(2)}" y="23" font-size="11" fill="#a33">▲<title>busy crossing</title></text>`,
       );
     }
     linePts.push(`${x.toFixed(2)},${ey(seg.e0).toFixed(1)}`);
@@ -1211,8 +1214,8 @@ function renderRibbon(option: RouteOption): void {
     rects.join("") +
     crossings.join("") +
     `<polyline points="${linePts.join(" ")}" fill="none" stroke="#666" stroke-width="1.4"/>` +
-    `<text x="0" y="40" font-size="8" fill="#999">${fmtClimb(eMax)}</text>` +
-    `<text x="0" y="68" font-size="8" fill="#999">${fmtClimb(eMin)}</text>` +
+    `<text x="0" y="41" font-size="11" fill="currentColor" opacity=".7">${fmtClimb(eMax)}</text>` +
+    `<text x="0" y="69" font-size="11" fill="currentColor" opacity=".7">${fmtClimb(eMin)}</text>` +
     `</svg>`;
 }
 
@@ -1605,7 +1608,7 @@ function renderPlacesAndRecent(): void {
     const clear = document.createElement("button");
     clear.textContent = "clear history";
     clear.title = "clear recent routes";
-    clear.style.cssText = "margin-top:4px;padding:1px 8px;font-size:11px";
+    clear.style.cssText = "margin-top:4px;padding:1px 8px;font-size:13px";
     clear.addEventListener("click", () => {
       clearRecent();
       renderPlacesAndRecent();
@@ -1875,6 +1878,7 @@ async function gradeSearchResults(
     if (mine !== gradeGen) return;
     row.badge.textContent = hit.grade;
     row.badge.style.background = GRADE_COLORS[hit.grade];
+    row.badge.style.color = GRADE_TEXT[hit.grade];
     row.badge.title = `Safest route here grades ${hit.grade}`;
     row.badge.setAttribute("aria-label", `safest route grades ${hit.grade}`);
     row.sub.textContent = `${fmtDist(hit.meters)} · ${hit.minutes} min by the safest way`;
@@ -5108,9 +5112,9 @@ const LAYER_DEFAULTS: Record<string, boolean> = {
   "show-lanes": false,
   "show-access": false,
   "show-build": false,
-  // dark-mode is deliberately absent. It follows the system setting and belongs
-  // to the rider, not to the map: resetting the layers on a night ride should
-  // not white out the screen.
+  // dark-mode is deliberately absent. It is the rider's setting, not a map
+  // layer: resetting the layers on a night ride should not white out the
+  // screen.
 };
 
 el<HTMLButtonElement>("layers-reset").addEventListener("click", () => {
@@ -5330,8 +5334,8 @@ el<HTMLButtonElement>("offline-btn").addEventListener("click", () => {
 });
 
 // ---------------------------------------------------------------------------
-// dark mode (night rides): dark basemap + dark UI, persisted; defaults to the
-// system color scheme
+// dark mode (night rides): dark basemap + dark UI, persisted; light until
+// the rider turns it on, whatever the system theme (see applyDark below)
 // ---------------------------------------------------------------------------
 
 function applyBasemap(): void {

@@ -198,6 +198,108 @@ test.describe("the edges of a real phone", () => {
   });
 });
 
+/** WCAG contrast of two computed CSS colours ("rgb(…)" / "rgba(…)"). */
+function contrast(a: string, b: string): number {
+  const lum = (c: string): number => {
+    const [r, g, bl] = (c.match(/[\d.]+/g) ?? []).map(Number).map((v) => v / 255);
+    const f = (v: number): number => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+    return 0.2126 * f(r ?? 0) + 0.7152 * f(g ?? 0) + 0.0722 * f(bl ?? 0);
+  };
+  const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
+  return ((hi ?? 0) + 0.05) / ((lo ?? 0) + 0.05);
+}
+
+test.describe("read outdoors", () => {
+  test.use({ viewport: PHONE, isMobile: true, hasTouch: true });
+
+  test("the grade letters can be read on their colours", async ({ page }) => {
+    await routed(page);
+    const pairs = await page.evaluate(() =>
+      [...document.querySelectorAll<HTMLElement>(".option-card .grade, .opt-chip")].map((e) => {
+        const s = getComputedStyle(e);
+        return { text: e.textContent ?? "", fg: s.color, bg: s.backgroundColor, px: s.fontSize };
+      }),
+    );
+    expect(pairs.length).toBeGreaterThan(3);
+    for (const p of pairs) {
+      expect(contrast(p.fg, p.bg), `"${p.text}" ${p.fg} on ${p.bg}`).toBeGreaterThanOrEqual(4.5);
+      expect(parseFloat(p.px), `"${p.text}" is ${p.px}`).toBeGreaterThanOrEqual(13);
+    }
+  });
+
+  test("no text in the panel or on the dock is too small to read", async ({ page }) => {
+    await routed(page);
+    await page.evaluate(() => {
+      for (const d of document.querySelectorAll<HTMLDetailsElement>("#panel details")) d.open = true;
+      document.body.classList.add("navigating"); // the dock, too
+    });
+    const tiny = await page.evaluate(() => {
+      const out: string[] = [];
+      const roots = [document.getElementById("panel"), document.getElementById("ride-dock")];
+      for (const root of roots) {
+        if (root === null) continue;
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        for (let n = walker.nextNode(); n !== null; n = walker.nextNode()) {
+          const text = (n.textContent ?? "").trim();
+          const e = n.parentElement;
+          if (text === "" || e === null) continue;
+          const r = e.getBoundingClientRect();
+          if (r.width <= 1 || r.height <= 1) continue; // not on screen (or screen-reader only)
+          const px = parseFloat(getComputedStyle(e).fontSize);
+          if (px < 11 || (px < 12 && !e.closest("#ride-dock"))) out.push(`${text.slice(0, 24)} ${px}px`);
+        }
+      }
+      return out;
+    });
+    // the panel's floor is 12 px; the dock's labels sit under a 24 px icon on a
+    // 64 px button and get 11
+    expect(tiny).toEqual([]);
+  });
+});
+
+test.describe("at night", () => {
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem("darkMode", "1"));
+  });
+
+  test("native controls, links and buttons follow dark mode", async ({ page }) => {
+    await boot(page);
+    // the round-trip distance, stop and preference fields were white boxes
+    const field = await page
+      .locator("#loop-dist")
+      .evaluate((e) => ({ scheme: getComputedStyle(e).colorScheme, bg: getComputedStyle(e).backgroundColor }));
+    expect(field.scheme).toContain("dark");
+    expect(contrast(field.bg, "rgb(255,255,255)"), "the field is still white").toBeGreaterThan(3);
+
+    const primary = await page
+      .locator("#loop-btn")
+      .evaluate((e) => [getComputedStyle(e).color, getComputedStyle(e).backgroundColor]);
+    expect(contrast(primary[0] ?? "", primary[1] ?? "")).toBeGreaterThanOrEqual(4.5);
+
+    const ctrl = await page
+      .locator(".maplibregl-ctrl-group")
+      .first()
+      .evaluate((e) => getComputedStyle(e).backgroundColor);
+    expect(contrast(ctrl, "rgb(255,255,255)"), "MapLibre's buttons are still white").toBeGreaterThan(3);
+
+    await page.locator("#about-top").click();
+    const link = await page
+      .locator("#about a")
+      .first()
+      .evaluate((e) => getComputedStyle(e).color);
+    const dialogBg = await page.locator("#about").evaluate((e) => getComputedStyle(e).backgroundColor);
+    expect(contrast(link, dialogBg)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  test("the layer list says what dark mode actually does", async ({ page }) => {
+    // it claimed to follow the system setting; the code deliberately does not
+    await boot(page);
+    await expect(page.locator("label.toggle", { hasText: "dark mode" })).not.toContainText(
+      /system setting at first/,
+    );
+  });
+});
+
 test.describe("at a desk", () => {
   test("the data banner is centred over the map, not over the panel", async ({ page }) => {
     await page.setViewportSize({ width: 820, height: 800 });

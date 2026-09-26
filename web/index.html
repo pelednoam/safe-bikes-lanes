@@ -57,8 +57,11 @@
     --s-lane:#fee08b; --s-shar:#fdae61; --s-mod:#f46d43; --s-busy:#d73027;
     --accent:#12833f; --accent-hi:#0e6c33; --accent-soft:rgba(26,152,80,.12);
 
-    --ink:#111619; --muted:#5c6a72; --line:rgba(17,22,25,.11);
-    --surface:rgba(255,255,255,.86); --solid:#ffffff; --field:rgba(17,22,25,.05);
+    /* --muted at 6.6:1 on white rather than 5.6, and the panel a little less
+       see-through: small grey text over a busy map, read outdoors, lost to
+       both at once */
+    --ink:#111619; --muted:#4f5c64; --line:rgba(17,22,25,.11);
+    --surface:rgba(255,255,255,.93); --solid:#ffffff; --field:rgba(17,22,25,.05);
     --shadow: 0 1px 2px rgba(10,14,18,.07), 0 12px 32px -10px rgba(10,14,18,.25);
     --r-sm:9px; --r-md:13px; --r-lg:19px; --r-pill:999px;
 
@@ -73,7 +76,7 @@
   body.dark {
     color-scheme: dark;
     --ink:#e9eef1; --muted:#93a1aa; --line:rgba(255,255,255,.13);
-    --surface:rgba(19,23,27,.84); --solid:#13171b; --field:rgba(255,255,255,.07);
+    --surface:rgba(19,23,27,.92); --solid:#13171b; --field:rgba(255,255,255,.07);
     --shadow: 0 1px 2px rgba(0,0,0,.5), 0 14px 34px -10px rgba(0,0,0,.6);
     --hover:rgba(255,255,255,.10); --accent:#2aa35a; --accent-hi:#36b768;
     --accent-soft:rgba(102,189,99,.16);
@@ -127,6 +130,22 @@
   #panel .hint { color:var(--muted); font-size:13px; margin:0 0 12px; }
   body.dark .maplibregl-popup-content { background:var(--solid); color:var(--ink);
     border-radius:var(--r-md); }
+  /* Dark mode used to stop at this page's own chrome. Links kept the browser's
+     blue (1.9:1 on the dark dialog), the primary button kept white on a green
+     that is 3.2:1, and MapLibre's controls and attribution stayed white boxes
+     on a black map — at night, the brightest things on the screen. */
+  body.dark a { color:#8ab4f8; }
+  body.dark button.primary { background:#1e7f45; border-color:#1e7f45; }
+  body.dark button.primary:hover { background:#1a6f3c; border-color:#1a6f3c; }
+  body.dark .maplibregl-ctrl-group { background:var(--solid); box-shadow:0 0 0 1px var(--line); }
+  body.dark .maplibregl-ctrl-group button + button { border-top-color:var(--line); }
+  body.dark .maplibregl-ctrl button .maplibregl-ctrl-icon { filter:invert(1) hue-rotate(180deg); }
+  body.dark .maplibregl-ctrl-attrib,
+  body.dark .maplibregl-ctrl-attrib.maplibregl-compact { background:rgba(19,23,27,.8); color:var(--ink); }
+  body.dark .maplibregl-ctrl-attrib a { color:var(--ink); }
+  body.dark .maplibregl-ctrl-attrib-button { filter:invert(1); }
+  body.dark .maplibregl-ctrl-scale { background:rgba(19,23,27,.7); color:var(--ink);
+    border-color:var(--ink); }
   body.dark .maplibregl-popup-tip { border-top-color:var(--solid) !important;
                                     border-bottom-color:var(--solid) !important; }
   .maplibregl-popup-content { border-radius:var(--r-md); font-family:var(--font);
@@ -157,14 +176,14 @@
   .search-text > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   /* how safe the way there is, before you commit to going: a destination across
      an arterial is a D while you are still reading the list */
-  .search-sub { color:var(--muted); font-size:11.5px; line-height:1.25;
+  .search-sub { color:var(--muted); font-size:13px; line-height:1.3;
                 overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .search-grade {
     flex:none; width:24px; height:24px; border-radius:6px; display:grid; place-items:center;
-    font-family:var(--font-cond); font-weight:700; font-size:14px; color:#fff;
+    font-family:var(--font-cond); font-weight:700; font-size:14px; color:var(--ink);
     background:var(--line);
   }
-  .search-row button { margin:0; padding:3px 9px; font-size:12px; }
+  .search-row button { margin:0; padding:3px 9px; font-size:13px; }
 
   /* ── Rider mode: a segmented control, not radio dots ───────────────── */
   #modes {
@@ -191,7 +210,7 @@
   /* ── Route options — the selected one is the hero ──────────────────── */
   #options { margin:12px 0 4px; }
   .options-head {
-    color:var(--muted); font-size:10.5px; font-weight:600; letter-spacing:.08em;
+    color:var(--muted); font-size:12px; font-weight:700; letter-spacing:.07em;
     text-transform:uppercase; margin-bottom:7px;
   }
   .option-card {
@@ -205,7 +224,7 @@
     box-shadow:inset 0 0 0 1.5px var(--accent); padding:13px 12px;
   }
   .option-card .grade {
-    flex:none; color:#fff; border-radius:10px; width:30px; height:30px;
+    flex:none; color:var(--ink); border-radius:10px; width:30px; height:30px;
     display:inline-flex; align-items:center; justify-content:center;
     font-family:var(--font-cond); font-weight:700; font-size:19px; line-height:1;
   }
@@ -213,7 +232,7 @@
   .opt-body { display:flex; flex-direction:column; gap:1px; min-width:0; }
   .opt-name { font-weight:600; font-size:14.5px; }
   .option-card.selected .opt-name {
-    font-size:11px; font-weight:700; letter-spacing:.09em; text-transform:uppercase;
+    font-size:12.5px; font-weight:700; letter-spacing:.07em; text-transform:uppercase;
     color:var(--muted);
   }
   .opt-stats { color:var(--muted); font-size:13px; font-variant-numeric:tabular-nums; }
@@ -229,7 +248,7 @@
   }
   .fp-head {
     display:flex; justify-content:space-between; align-items:baseline;
-    font-size:10.5px; font-weight:600; letter-spacing:.08em; text-transform:uppercase;
+    font-size:12px; font-weight:700; letter-spacing:.07em; text-transform:uppercase;
     color:var(--muted); margin-bottom:8px;
   }
   #classbar { display:flex; height:13px; border-radius:7px; overflow:hidden; margin:0; }
@@ -243,7 +262,7 @@
   .stat b { font-variant-numeric:tabular-nums; font-weight:600; font-size:14.5px; }
 
   .caution { color:var(--caution); margin:3px 0; font-size:13.5px; }
-  .caution a { font-size:12px; }
+  .caution a { font-size:13px; }
   .all-clear { color:var(--ok); margin:3px 0; font-weight:500; }
   #why { margin-top:10px; }
   #why ul { margin:7px 0 0; padding-left:16px; }
@@ -285,7 +304,7 @@
   .pref-head { font-weight:600; margin-top:12px; font-size:13.5px; }
   .row { display:flex; gap:7px; }
   .footer { margin-top:12px; display:flex; gap:7px; flex-wrap:wrap; }
-  .footer button { font-size:12.5px; }
+  .footer button { font-size:13.5px; }
   #error { color:var(--caution); display:none; margin-top:8px; font-weight:500; }
   /* The wait here is mostly the map downloading — about 90 tiles for an
      ordinary trip — and a motionless line of text through all of it read as a
@@ -303,7 +322,7 @@
     margin-top:8px; padding:8px 10px;
     background:var(--field); border:1px solid var(--line); border-radius:var(--r-md);
   }
-  #loop-row .or { color:var(--muted); font-size:12.5px; }
+  #loop-row .or { color:var(--muted); font-size:13.5px; }
   /* not full width, even when it wraps onto its own line: a round trip is an
      alternative to "where to", not the headline action of the panel */
   #loop-row button { margin:0; width:auto; flex:0 0 auto; }
@@ -339,8 +358,10 @@
   .section[open] > summary::before, #why[open] summary::before { transform:rotate(45deg); }
 
   .opt-chip {
-    background:var(--g); color:#fff; font-size:11px; font-weight:700;
-    padding:3px 9px; border-radius:var(--r-pill); white-space:nowrap; cursor:pointer;
+    /* 13 px, and a letter colour chosen per grade (GRADE_TEXT): 11 px white on
+       orange was unreadable in sunlight */
+    background:var(--g); color:var(--gt, #111619); font-size:13px; font-weight:700;
+    padding:4px 10px; border-radius:var(--r-pill); white-space:nowrap; cursor:pointer;
     box-shadow:0 1px 5px rgba(10,14,18,.45); border:2px solid transparent;
     font-family:var(--font); font-variant-numeric:tabular-nums;
   }
@@ -350,7 +371,7 @@
   /* right padding clears the absolutely-positioned close button, which sat on
      top of the commit id — the one part of this line someone would read out */
   .build-stamp { margin:0 0 12px; padding:7px 40px 7px 9px; border-radius:8px;
-    background:var(--field, rgba(17,22,25,.05)); font-size:12px; color:var(--muted, #5c6a72);
+    background:var(--field, rgba(17,22,25,.05)); font-size:13px; color:var(--muted, #5c6a72);
     line-height:1.45; }
   .build-stamp .stale-build { color:var(--s-busy, #d73027); font-weight:600; }
   #about, #rides, #hazard {
@@ -375,7 +396,7 @@
   #about td, #about th, #rides td, #rides th {
     border-bottom:1px solid var(--line); padding:5px 7px;
     text-align:left; font-variant-numeric:tabular-nums; }
-  #rides td button { margin:0 2px 0 0; padding:2px 8px; font-size:12px; }
+  #rides td button { margin:0 2px 0 0; padding:2px 8px; font-size:13px; }
   #about-close, #rides-close, #hazard-close { position:absolute; top:12px; right:14px; margin:0; }
   #about ol { padding-left:18px; } #about li { margin:5px 0; }
   /* the phone sizing rule only covered input[type=search], so the hazard note
@@ -446,8 +467,10 @@
     border:1px solid var(--line); box-shadow:var(--shadow);
   }
   .dock-btn .dock-icon { font-size:24px; line-height:1; }
-  .dock-btn .dock-label { font-size:9.5px; font-weight:600; letter-spacing:-.01em;
-                          color:var(--muted); line-height:1;
+  /* the ink colour, and 11 px: 9.5 px grey was the one thing on the dock that
+     could not be read at arm's length */
+  .dock-btn .dock-label { font-size:11px; font-weight:700; letter-spacing:-.01em;
+                          color:var(--ink); line-height:1;
                           max-width:60px; overflow:hidden; text-overflow:ellipsis;
                           white-space:nowrap; }
   .dock-btn.danger { color:var(--s-busy); }
@@ -465,7 +488,7 @@
   @media (max-width: 380px) {
     .dock-btn { width:54px; height:54px; }
     .dock-btn .dock-icon { font-size:21px; }
-    .dock-btn .dock-label { font-size:9px; max-width:52px; }
+    .dock-btn .dock-label { font-size:11px; max-width:52px; }
   }
   /* opens upward from the dock, so the thumb doesn't cover it */
   #nav-stops-menu {
@@ -482,27 +505,27 @@
   }
   #nav-stops-menu button {
     display:flex; flex-direction:column; align-items:center; gap:3px;
-    min-width:58px; min-height:56px; margin:0; padding:6px; font-size:10.5px; font-weight:600;
+    min-width:58px; min-height:56px; margin:0; padding:6px; font-size:12px; font-weight:600;
   }
   #nav-stops-menu button span { font-size:22px; line-height:1; }
   /* Layer groups. The point is that a rider can see at a glance which of these
      are about their ride and which are a planner's analysis — before, the two
      were interleaved in one list of twelve. */
   .layer-head { display:flex; align-items:center; justify-content:space-between;
-                margin:2px 0 8px; font-size:11.5px; color:var(--muted); }
-  .layer-head button { margin:0; padding:2px 9px; font-size:11.5px; min-height:0; }
+                margin:2px 0 8px; font-size:12.5px; color:var(--muted); }
+  .layer-head button { margin:0; padding:2px 9px; font-size:12.5px; min-height:0; }
   .layer-group { margin-bottom:13px; }
-  .layer-group h4 { margin:0 0 5px; font-size:11px; font-weight:700; letter-spacing:.07em;
+  .layer-group h4 { margin:0 0 5px; font-size:12px; font-weight:700; letter-spacing:.07em;
                     text-transform:uppercase; color:var(--muted); }
   .layer-group .toggle { margin-bottom:5px; }
   .layer-group .toggle small { display:block; margin-left:25px; color:var(--muted);
-                               font-size:11.5px; line-height:1.3; }
+                               font-size:12.5px; line-height:1.3; }
   .layer-group.planners { border-top:1px solid var(--line); padding-top:11px; }
-  .group-note { margin:0 0 7px; font-size:11.5px; color:var(--muted); line-height:1.35; }
+  .group-note { margin:0 0 7px; font-size:12.5px; color:var(--muted); line-height:1.35; }
   .group-note a { color:var(--accent); }
   #nav-flags { display:flex; gap:6px; justify-content:center; margin-top:7px; }
   #nav-flags button {
-    margin:0; padding:3px 9px; font-size:11.5px; font-weight:600; min-height:0;
+    margin:0; padding:3px 9px; font-size:13px; font-weight:600; min-height:0;
     border-radius:999px; color:var(--muted);
   }
   #nav-flags button.active { color:var(--accent); border-color:var(--accent); }
@@ -539,8 +562,8 @@
   .build-row.selected { border-color:var(--accent); box-shadow:inset 0 0 0 1px var(--accent); }
   .build-rank { font-family:var(--font-cond); font-weight:700; margin-right:6px; }
   .build-where { font-weight:600; }
-  .build-why { color:var(--muted); font-size:12.5px; margin-top:2px; line-height:1.35; }
-  .build-alt { color:var(--muted); font-size:12px; }
+  .build-why { color:var(--muted); font-size:13px; margin-top:2px; line-height:1.35; }
+  .build-alt { color:var(--muted); font-size:12.5px; }
   #whatif { margin-top:9px; border-top:1px solid var(--line); padding-top:9px; }
   #whatif .row { gap:8px; }
   #whatif-run { flex:1; margin:0; }
@@ -548,7 +571,7 @@
   #whatif-result b { color:var(--ink); }
   .build-badge {
     display:inline-block; margin-right:6px; padding:1px 7px; border-radius:var(--r-pill);
-    background:var(--accent-soft); color:var(--accent); font-size:11px; font-weight:700;
+    background:var(--accent-soft); color:var(--accent); font-size:12px; font-weight:700;
     text-transform:lowercase; letter-spacing:.02em; vertical-align:1px;
   }
   label.wt { display:flex; align-items:center; justify-content:space-between; gap:8px;
@@ -560,7 +583,7 @@
   #nav-classify-q { font-size:13px; color:var(--muted); width:100%; }
   #nav-classify button { display:flex; flex-direction:column; align-items:center; gap:2px;
                          min-width:56px; min-height:52px; margin:0; padding:6px 8px;
-                         font-size:10.5px; font-weight:600; }
+                         font-size:12px; font-weight:600; }
   #nav-classify button span { font-size:19px; line-height:1; }
   #nav-ask { margin-top:9px; border-top:1px solid var(--line); padding-top:9px; }
   #nav-ask-text { font-size:14px; font-weight:600; margin-bottom:7px; }
@@ -988,7 +1011,7 @@
       <label class="toggle"><input type="checkbox" id="show-aerial"> 🛰 aerial view
         <small>MassGIS 15 cm imagery (2023) — lane paint and flexposts</small></label>
       <label class="toggle"><input type="checkbox" id="dark-mode"> 🌙 dark mode
-        <small>for night rides; follows your system setting at first</small></label>
+        <small>for night rides; stays as you set it, whatever the phone is set to</small></label>
     </div>
 
     <div class="layer-group planners">

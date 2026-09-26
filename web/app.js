@@ -1,7 +1,7 @@
 import { CARTO_ATTRIBUTION, CARTO_MAXZOOM, CARTO_TILES, createBasemap, VENDORED_FONT_STACK, } from "./basemap.js";
 import { isNativeApp, isNewerAppVersion, lastNativeSpeechError, nativeSpeak, startDownload, startBackgroundWatcher, stopBackgroundWatcher, webVoiceCount, } from "./native.js";
 import { GEOCODE_DEBOUNCE_MS, geocodeDelayMs, matchScore, metresBetween, rank as rankSearch, describe as describeRow, worthGeocoding, } from "./search.js";
-import { CLASS_LABELS, cautionsHtml, clearPhotoCache, esc, FACILITY_CLASSES, nearestMapillary, fillSegmentPhoto as fillPhotoSlot, GRADE_COLORS, segmentHtml, } from "./segment.js";
+import { CLASS_LABELS, cautionsHtml, clearPhotoCache, esc, FACILITY_CLASSES, nearestMapillary, fillSegmentPhoto as fillPhotoSlot, GRADE_COLORS, GRADE_TEXT, segmentHtml, } from "./segment.js";
 import { bearingDeg, buildAlerts, buildManeuvers, buildTrack, distM, snapToTrack, sunsetTime, trackBearingAhead, trackSlice, } from "./nav.js";
 import { addHazard, buildReportText, downscalePhoto, getHazardPhoto, HAZARD_LABELS, listHazards, removeHazard, setHazardCategory, } from "./hazards.js";
 import { clearRecent, deletePlace, emojiFor, exportBackup, importBackup, listPlaces, listRecent, pushRecent, savePlace, } from "./places.js";
@@ -810,6 +810,7 @@ function renderOptionChips() {
         const chip = document.createElement("div");
         chip.className = "opt-chip" + (o.id === selectedId ? " sel" : "");
         chip.style.setProperty("--g", GRADE_COLORS[o.grade]);
+        chip.style.setProperty("--gt", GRADE_TEXT[o.grade]);
         chip.textContent = `${o.grade} · ${o.payload.summary.minutes} min`;
         chip.title = `${o.label}: ${o.gradeReason}`;
         // reachable and pressable from a keyboard, like the cards they mirror
@@ -948,6 +949,7 @@ function renderOptions() {
         const badge = document.createElement("b");
         badge.className = "grade";
         badge.style.background = GRADE_COLORS[o.grade];
+        badge.style.color = GRADE_TEXT[o.grade];
         badge.textContent = o.grade;
         card.appendChild(badge);
         // name on its own line, the numbers on a second — a single run-on string
@@ -1041,7 +1043,7 @@ function renderRibbon(option) {
         rects.push(`<rect x="${x.toFixed(2)}" y="0" width="${Math.max(wpx, 0.4).toFixed(2)}" height="12"` +
             ` fill="${fill}"><title>${segLabel}: ${fmtDist(seg.m)}</title></rect>`);
         if (seg.crossing) {
-            crossings.push(`<text x="${x.toFixed(2)}" y="22" font-size="9" fill="#a33">▲<title>busy crossing</title></text>`);
+            crossings.push(`<text x="${x.toFixed(2)}" y="23" font-size="11" fill="#a33">▲<title>busy crossing</title></text>`);
         }
         linePts.push(`${x.toFixed(2)},${ey(seg.e0).toFixed(1)}`);
         x += wpx;
@@ -1052,8 +1054,8 @@ function renderRibbon(option) {
             rects.join("") +
             crossings.join("") +
             `<polyline points="${linePts.join(" ")}" fill="none" stroke="#666" stroke-width="1.4"/>` +
-            `<text x="0" y="40" font-size="8" fill="#999">${fmtClimb(eMax)}</text>` +
-            `<text x="0" y="68" font-size="8" fill="#999">${fmtClimb(eMin)}</text>` +
+            `<text x="0" y="41" font-size="11" fill="currentColor" opacity=".7">${fmtClimb(eMax)}</text>` +
+            `<text x="0" y="69" font-size="11" fill="currentColor" opacity=".7">${fmtClimb(eMin)}</text>` +
             `</svg>`;
 }
 function showSummary(option) {
@@ -1439,7 +1441,7 @@ function renderPlacesAndRecent() {
         const clear = document.createElement("button");
         clear.textContent = "clear history";
         clear.title = "clear recent routes";
-        clear.style.cssText = "margin-top:4px;padding:1px 8px;font-size:11px";
+        clear.style.cssText = "margin-top:4px;padding:1px 8px;font-size:13px";
         clear.addEventListener("click", () => {
             clearRecent();
             renderPlacesAndRecent();
@@ -1701,6 +1703,7 @@ async function gradeSearchResults(rows) {
             return;
         row.badge.textContent = hit.grade;
         row.badge.style.background = GRADE_COLORS[hit.grade];
+        row.badge.style.color = GRADE_TEXT[hit.grade];
         row.badge.title = `Safest route here grades ${hit.grade}`;
         row.badge.setAttribute("aria-label", `safest route grades ${hit.grade}`);
         row.sub.textContent = `${fmtDist(hit.meters)} · ${hit.minutes} min by the safest way`;
@@ -4786,9 +4789,9 @@ const LAYER_DEFAULTS = {
     "show-lanes": false,
     "show-access": false,
     "show-build": false,
-    // dark-mode is deliberately absent. It follows the system setting and belongs
-    // to the rider, not to the map: resetting the layers on a night ride should
-    // not white out the screen.
+    // dark-mode is deliberately absent. It is the rider's setting, not a map
+    // layer: resetting the layers on a night ride should not white out the
+    // screen.
 };
 el("layers-reset").addEventListener("click", () => {
     for (const [id, want] of Object.entries(LAYER_DEFAULTS)) {
@@ -5005,8 +5008,8 @@ el("offline-btn").addEventListener("click", () => {
     });
 });
 // ---------------------------------------------------------------------------
-// dark mode (night rides): dark basemap + dark UI, persisted; defaults to the
-// system color scheme
+// dark mode (night rides): dark basemap + dark UI, persisted; light until
+// the rider turns it on, whatever the system theme (see applyDark below)
 // ---------------------------------------------------------------------------
 function applyBasemap() {
     const dark = document.body.classList.contains("dark");
