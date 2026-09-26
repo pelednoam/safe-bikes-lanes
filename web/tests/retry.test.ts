@@ -35,3 +35,24 @@ describe("withRetry", () => {
     expect(slept).toEqual([]);
   });
 });
+
+describe("withRetry with its own clock", () => {
+  it("really waits between attempts when no clock is injected", async () => {
+    // Every case above passes a fake sleep, so the real one — the only one the
+    // app ever uses — never ran. Zero-length delays keep it fast while still
+    // going through setTimeout.
+    let calls = 0;
+    const started = Date.now();
+    const value = await withRetry(
+      async () => {
+        calls++;
+        if (calls < 3) throw new Error("offline");
+        return "manifest";
+      },
+      { delaysMs: [0] },
+    );
+    expect(value).toBe("manifest");
+    expect(calls).toBe(3);
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+});

@@ -95,3 +95,43 @@ describe("shareImage", () => {
     expect(e.log).toEqual(["copy x", "tell Text copied"]);
   });
 });
+
+describe("downloadBlob in a real browser", () => {
+  it("clicks a download link for the blob, and revokes it only later", async () => {
+    // The browser default — the one GPX, backup and share-card downloads use —
+    // was never run by a test: every case above passes its own env. Node has
+    // URL.createObjectURL but no DOM, so give it the two DOM pieces it touches.
+    const { vi } = await import("vitest");
+    vi.useFakeTimers();
+    const clicked: { href: string; download: string }[] = [];
+    const anchor = {
+      href: "",
+      download: "",
+      click(): void {
+        clicked.push({ href: this.href, download: this.download });
+      },
+    };
+    const g = globalThis as unknown as Record<string, unknown>;
+    const had = { document: g["document"], window: g["window"] };
+    g["document"] = { createElement: (tag: string) => (tag === "a" ? anchor : null) };
+    g["window"] = globalThis;
+    const revoke = vi.spyOn(URL, "revokeObjectURL");
+    try {
+      downloadBlob(new Blob(["<gpx/>"]), "ride.gpx");
+      expect(clicked).toHaveLength(1);
+      expect(clicked[0]?.download).toBe("ride.gpx");
+      expect(clicked[0]?.href).toMatch(/^blob:/);
+      // still readable when WebKit gets round to it...
+      vi.advanceTimersByTime(REVOKE_AFTER_MS - 1);
+      expect(revoke).not.toHaveBeenCalled();
+      // ...and released afterwards, not leaked
+      vi.advanceTimersByTime(1);
+      expect(revoke).toHaveBeenCalledWith(clicked[0]?.href);
+    } finally {
+      revoke.mockRestore();
+      vi.useRealTimers();
+      g["document"] = had.document;
+      g["window"] = had.window;
+    }
+  });
+});
