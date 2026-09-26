@@ -105,6 +105,17 @@ class TileGrid {
 export class TileStore {
   private grid: TileGrid | null = null;
   private classList: ProtectionClass[] = [];
+  /** Every tile fetched this session, never evicted — deliberately, unlike
+   * NetworkTiles. The Router is built over this whole set after
+   * ensureCorridor returns, and a tile missing from the corridor does not fail
+   * loudly: the route goes around the hole, or through worse streets beside it,
+   * and is presented as the safest there is. ensureCorridor cannot keep its
+   * tiles pinned until the caller assembles (its promise settles first, and
+   * a search grades several routes while others load), and app.ts decides to
+   * rebuild by comparing loadedCount, which evicting one tile and loading
+   * another would leave unchanged. Bounding this needs the caller to hold the
+   * pin across the rebuild; until then a long session costs memory, and each
+   * rebuild costs time in proportion (a third of a second for 350 tiles in node). */
   private readonly loaded = new Map<string, RawTile>();
   private readonly inflight = new Map<string, Promise<void>>();
 
@@ -264,14 +275,37 @@ type NetFeature = GeoJSON.Feature<GeoJSON.LineString>;
 /** Viewport loader for the display network. Unlike the routing tiles (loaded
  * along a route's corridor), these load for whatever the map is showing, so
  * the coloured safety network only downloads the streets currently on screen.
- * Tiles fetched once stay cached; visibleFeatures returns just the tiles the
- * viewport covers, bounding what the GL source has to render. */
+ * visibleFeatures returns just the tiles the viewport covers, bounding what the
+ * GL source has to render.
+ *
+ * Tiles stay cached, but not forever. This used to keep every tile it had ever
+ * fetched, so an afternoon of panning around the metro held hundreds of them —
+ * each about 110 KB of JSON before it is parsed — and every one was walked
+ * again whenever the search's street list was rebuilt. It now keeps the
+ * `maxTiles` most recently shown and lets older ones go. That is safe here in
+ * a way it is not for the routing tiles (see TileStore): a caller only ever
+ * reads the tiles of the view it just asked for, which are pinned from the
+ * request until they are read, and a tile let go is simply fetched again (from
+ * the service worker's cache when offline) if the map comes back to it. */
 export class NetworkTiles {
   private grid: TileGrid | null = null;
+  /** In least- to most-recently-shown order: a tile moves to the end each time
+   * a view includes it, so eviction takes from the front. */
   private readonly loaded = new Map<string, NetFeature[]>();
   private readonly inflight = new Map<string, Promise<void>>();
+  /** Tiles a visibleFeatures call has yet to read, counted per tile since
+   * overlapping views share tiles. Never evicted. */
+  private readonly pinned = new Map<string, number>();
 
-  constructor(private readonly fetchJson: <T>(name: string) => Promise<T>) {}
+  constructor(
+    private readonly fetchJson: <T>(name: string) => Promise<T>,
+    private readonly maxTiles = 512,
+  ) {}
+
+  /** Number of tiles held in memory. */
+  get loadedCount(): number {
+    return this.loaded.size;
+  }
 
   async loadManifest(): Promise<void> {
     const m = await this.fetchJson<NetManifest>("nettiles/manifest.json");
@@ -309,9 +343,9 @@ export class NetworkTiles {
 
   loadedStreets(): { name: string; coords: [number, number][] }[] {
     // Rebuilt only when the loaded set changes. This is called on every keystroke,
-    // and `loaded` never shrinks — after a few minutes of panning it holds every
-    // tile ever fetched, so walking it per keystroke would grow into real work
-    // exactly for the reader who has been using the map the longest.
+    // and after a few minutes of panning `loaded` holds up to maxTiles tiles, so
+    // walking it per keystroke would grow into real work exactly for the reader
+    // who has been using the map the longest.
     if (this.streetCache !== null) return this.streetCache;
     // One entry per segment, NOT one per name. Grouping by name merged the four
     // Elm Streets in this region into a single candidate holding all their points,
@@ -334,13 +368,39 @@ export class NetworkTiles {
   async visibleFeatures(box: BBox, margin = 1): Promise<NetFeature[]> {
     if (!this.grid) throw new Error("network manifest not loaded");
     const keys = this.grid.keysForBBox(box, margin);
-    await Promise.all(keys.map((k) => this.fetchTile(k)));
+    for (const k of keys) this.pinned.set(k, (this.pinned.get(k) ?? 0) + 1);
     const out: NetFeature[] = [];
-    for (const k of keys) {
-      const feats = this.loaded.get(k);
-      if (feats) out.push(...feats);
+    try {
+      await Promise.all(keys.map((k) => this.fetchTile(k)));
+      for (const k of keys) {
+        const feats = this.loaded.get(k);
+        if (!feats) continue;
+        out.push(...feats);
+        // shown again, so now the most recent
+        this.loaded.delete(k);
+        this.loaded.set(k, feats);
+      }
+    } finally {
+      for (const k of keys) {
+        const n = (this.pinned.get(k) ?? 1) - 1;
+        if (n > 0) this.pinned.set(k, n);
+        else this.pinned.delete(k);
+      }
     }
+    this.evict();
     return out;
+  }
+
+  /** Let the least recently shown tiles go until at most maxTiles remain,
+   * skipping any a pending view has yet to read. */
+  private evict(): void {
+    if (this.loaded.size <= this.maxTiles) return;
+    for (const k of [...this.loaded.keys()]) {
+      if (this.loaded.size <= this.maxTiles) break;
+      if (this.pinned.has(k)) continue;
+      this.loaded.delete(k);
+      this.streetCache = null; // its streets are no longer on offer
+    }
   }
 }
 

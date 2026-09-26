@@ -4,7 +4,7 @@
 import { describe, expect, it } from "vitest";
 
 import { Router } from "../src/router.js";
-import { bboxOf, NetworkTiles, TileStore } from "../src/tiles.js";
+import { type BBox, bboxOf, NetworkTiles, TileStore } from "../src/tiles.js";
 
 // Toy world, tileDeg=1 from origin (0,0):
 //   tile 0_0: node g0 (0.2,0.5) --quiet-- node g1 (0.9,0.5)   [boundary node]
@@ -248,6 +248,93 @@ describe("NetworkTiles", () => {
     await net.loadManifest();
     const feats = await net.visibleFeatures({ west: 0.3, south: 0.4, east: 0.6, north: 0.6 }, 1);
     expect(feats.length).toBe(5); // 0_0 (4) + 1_0 (1)
+  });
+});
+
+describe("NetworkTiles over a long session", () => {
+  // A strip of 30 tiles, one named street in each, panned across one at a time.
+  const N = 30;
+  const world = (
+    fetched: string[],
+    gate?: { tiles: Set<string>; open: Promise<void> },
+  ): (<T>(name: string) => Promise<T>) => {
+    return async <T,>(name: string): Promise<T> => {
+      fetched.push(name);
+      if (name === "nettiles/manifest.json") {
+        const tiles = Array.from({ length: N }, (_v, c) => `${c}_0`);
+        return { originLon: 0, originLat: 0, tileDeg: 1, tiles } as T;
+      }
+      const key = name.replace("nettiles/", "").replace(".json", "");
+      if (gate?.tiles.has(key)) await gate.open;
+      const c = Number(key.split("_")[0]);
+      return {
+        type: "FeatureCollection",
+        features: [
+          {
+            type: "Feature",
+            properties: { name: `Street ${c}` },
+            geometry: { type: "LineString", coordinates: [[c + 0.2, 0.5], [c + 0.4, 0.5]] },
+          },
+        ],
+      } as T;
+    };
+  };
+  const view = (c0: number, c1 = c0): BBox => ({ west: c0 + 0.3, south: 0.4, east: c1 + 0.6, north: 0.6 });
+
+  it("lets the tiles shown longest ago go, instead of keeping every one", async () => {
+    const fetched: string[] = [];
+    const net = new NetworkTiles(world(fetched), 10);
+    await net.loadManifest();
+    for (let c = 0; c < N; c++) await net.visibleFeatures(view(c), 0);
+    // only the last ten views' streets are still held, and still searchable
+    const held = net.loadedStreets().map((s) => s.name);
+    expect(held).toHaveLength(10);
+    expect(held).toContain("Street 29");
+    expect(held).not.toContain("Street 0");
+    // going back is a fetch again, and the street is back
+    const feats = await net.visibleFeatures(view(0), 0);
+    expect(feats).toHaveLength(1);
+    expect(fetched.filter((f) => f === "nettiles/0_0.json")).toHaveLength(2);
+    expect(net.loadedStreets().map((s) => s.name)).toContain("Street 0");
+  });
+
+  it("keeps what was shown recently, not what was fetched first", async () => {
+    const fetched: string[] = [];
+    const net = new NetworkTiles(world(fetched), 10);
+    await net.loadManifest();
+    for (let c = 1; c < N; c++) {
+      await net.visibleFeatures(view(0), 0); // home, looked at again and again
+      await net.visibleFeatures(view(c), 0);
+    }
+    expect(fetched.filter((f) => f === "nettiles/0_0.json")).toHaveLength(1);
+    expect(net.loadedStreets().map((s) => s.name)).toContain("Street 0");
+  });
+
+  it("never lets go of a tile a pending view has yet to read", async () => {
+    let open = (): void => undefined;
+    const gate = {
+      tiles: new Set(["1_0", "2_0", "3_0", "4_0"]),
+      open: new Promise<void>((resolve) => {
+        open = resolve;
+      }),
+    };
+    const net = new NetworkTiles(world([], gate), 2);
+    await net.loadManifest();
+    // A wide view, bigger than the whole budget. Its first tile lands at once
+    // and becomes the oldest held; the rest are slow to arrive.
+    const wide = net.visibleFeatures(view(0, 4), 0);
+    // meanwhile the map moves on twice, and each move evicts
+    await net.visibleFeatures(view(10, 12), 0);
+    await net.visibleFeatures(view(20, 22), 0);
+    open();
+    expect((await wide).map((f) => f.properties?.["name"])).toEqual([
+      "Street 0",
+      "Street 1",
+      "Street 2",
+      "Street 3",
+      "Street 4",
+    ]);
+    expect(net.loadedCount).toBeLessThanOrEqual(2);
   });
 });
 
