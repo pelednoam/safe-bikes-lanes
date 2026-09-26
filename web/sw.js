@@ -31,6 +31,7 @@ const ASSETS = [
   "native.js",
   "nav.js",
   "places.js",
+  "planner.js",
   "rides.js",
   "router.js",
   "search.js",

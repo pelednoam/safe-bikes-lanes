@@ -10,6 +10,7 @@ import { dataUrl, initDataSource, loadJson, usingRemoteData } from "./data.js";
 import { buildCues, PROFILES, Router, routeCacheKey, toGPX } from "./router.js";
 import { distVoice, fmtDist, fmtClimb, fmtDistTight, fmtSpeed, fromMeters, getUnits, navRound, setUnits, toMeters, unitName, } from "./units.js";
 import { NetworkTiles, TileStore } from "./tiles.js";
+import { Lane } from "./planner.js";
 import { drawRideCard, drawTotalsCard, rideShareText, totalsShareText } from "./sharecard.js";
 // ---------------------------------------------------------------------------
 // constants
@@ -203,6 +204,12 @@ function applyAvoidPoints() {
 }
 let loopParams = null;
 let pendingSelect = null;
+/** Who owns each output while planning waits (see planner.ts): the route
+ * options (a trip, a round trip, a what-if), the reach map, and the letters on
+ * the search list. Every await in their code is followed by a staleness check. */
+const routeLane = new Lane();
+const shedLane = new Lane();
+const gradeLane = new Lane();
 const dataReady = initDataSource();
 // first launch after a website data refresh downloads layers from the site;
 // surface that as progress (native only — bundled loads are instant)
@@ -242,8 +249,13 @@ let builtTileCount = -1;
  * mostly the map downloading — about 90 tiles for an ordinary trip — so the app
  * looked frozen while it was in fact busy and fine. Say which of the two things
  * is happening, and show the one that has a denominator.
+ *
+ * The count is reported to whoever asked for the tiles, per call. It used to be
+ * a module global that only a failed route cleared, so after any successful one
+ * the reach map and search grading reported their own tile loads through the
+ * route's callback, and "Loading the map around your route… 40 of 40" stayed
+ * over the map with nothing loading at all.
  */
-let onTileProgress;
 function showStage(text, sub = "") {
     const box = el("loading");
     box.innerHTML =
@@ -251,7 +263,7 @@ function showStage(text, sub = "") {
             (sub === "" ? "" : `<small>${esc(sub)}</small>`);
     box.style.display = "flex";
 }
-async function ensureRouter(points, padM, margin = 1) {
+async function ensureRouter(points, padM, margin = 1, onProgress) {
     await manifestReady;
     // Corridor, not bounding box: for a cross-metro trip the endpoints' bbox
     // covers most of the map, so we'd download hundreds of tiles to route along
@@ -264,7 +276,7 @@ async function ensureRouter(points, padM, margin = 1) {
     // measurably cheaper but produced a less safe route (50% -> 34% protected
     // on Wellesley->Revere), which is the wrong trade for this app.
     const marginCells = margin + Math.round(padM / 2200);
-    await tiles.ensureCorridor(points, marginCells, onTileProgress);
+    await tiles.ensureCorridor(points, marginCells, onProgress);
     if (tiles.loadedCount === 0)
         return null;
     if (router === null || builtTileCount !== tiles.loadedCount) {
@@ -602,45 +614,78 @@ function setPoint(kind, lngLat) {
 // ---------------------------------------------------------------------------
 // routing
 // ---------------------------------------------------------------------------
+/** Take the route options for a new plan. Whatever was planning before is now
+ * stale and will not write its answer; the loading line is this plan's to show
+ * or not, so an abandoned plan's spinner is taken down here rather than left for
+ * a request that has returned without drawing anything. */
+function beginPlan() {
+    const ticket = routeLane.begin();
+    el("loading").style.display = "none";
+    return ticket;
+}
+/** Where the rider is, as the start, once a location wait is over. Null when
+ * the wait was superseded or withdrawn (Reset, a newer plan) — the start is then
+ * not this plan's to set. Someone else may have put a start down while we
+ * waited, the load-time locate or a tap on the map; that one stands, rather
+ * than a second pin going down on top of it. */
+async function locateStart(ticket, onFail) {
+    if (start !== null)
+        return start;
+    showStage("Finding your location…");
+    let here;
+    try {
+        here = await currentPosition();
+    }
+    catch {
+        if (ticket.stale())
+            return null;
+        el("loading").style.display = "none";
+        const errBox = el("error");
+        errBox.textContent = onFail;
+        errBox.style.display = "block";
+        return null;
+    }
+    if (ticket.stale())
+        return null;
+    if (start === null) {
+        start = makeMarker(here, "#2b83ba", "start");
+        syncOD();
+    }
+    return start;
+}
 async function requestRoute() {
+    const ticket = beginPlan();
     if (!end)
         return;
     await manifestReady;
+    if (ticket.stale())
+        return;
     const errBox = el("error");
     errBox.style.display = "none";
     const loading = el("loading");
     if (!start) {
         if (!fromCurrent)
             return;
-        showStage("Finding your location…");
-        loading.style.display = "block";
-        try {
-            start = makeMarker(await currentPosition(), "#2b83ba", "start");
-            syncOD();
-        }
-        catch {
-            loading.style.display = "none";
-            errBox.textContent =
-                "Couldn't get your location — tap \u201c\ud83d\udccd From\u201d to set a start, or enable location access.";
-            errBox.style.display = "block";
+        const located = await locateStart(ticket, "Couldn't get your location — tap \u201c\ud83d\udccd From\u201d to set a start, or enable location access.");
+        if (located === null)
             return;
-        }
     }
     showStage("Loading the map around your route…");
-    onTileProgress = (done, total) => {
+    const progress = (done, total) => {
         // only once there are enough for the count to mean something
-        if (total > 4)
+        if (total > 4 && !ticket.stale()) {
             showStage("Loading the map around your route…", `${done} of ${total}`);
+        }
     };
     await new Promise((resolve) => setTimeout(resolve, 0));
+    // Reset, or a newer plan, while we yielded: both ends may be gone
+    if (ticket.stale() || !start || !end)
+        return;
     try {
         const s = start.getLngLat();
         const d = end.getLngLat();
         const a = [s.lng, s.lat];
         const b = [d.lng, d.lat];
-        poiMarker?.remove();
-        poiMarker = null;
-        loopParams = null;
         // load the tiles along the corridor, then route; a safe route can detour
         // well outside the straight A–B box, so widen the loaded area once if the
         // first attempt finds nothing.
@@ -648,25 +693,38 @@ async function requestRoute() {
             showStage("Finding the safest way…");
             return r.routeOptions(a, b, profileId, preferFlat, undefined, avoidTypes, walkMaxM);
         };
+        // Computed into a local and only published once this plan is known to be
+        // the current one: `options` is what the cards, the chips and navigation
+        // all read, and an abandoned plan must not have written it.
+        let found = [];
         // a narrow corridor first — it covers ordinary detours and keeps a long
         // trip from pulling a big slice of the map; the retry below widens it
-        let r = await ensureRouter([a, b], 1200, 1);
+        let r = await ensureRouter([a, b], 1200, 1, progress);
+        if (ticket.stale())
+            return;
         try {
             if (!r)
                 throw new Error("unmapped");
-            options = route(r);
-            if (!options.length)
+            found = route(r);
+            if (!found.length)
                 throw new Error("no route");
         }
         catch {
-            r = await ensureRouter([a, b], 5000, 2);
+            r = await ensureRouter([a, b], 5000, 2, progress);
+            if (ticket.stale())
+                return;
             if (!r)
                 throw new Error("this area isn't mapped for routing yet");
-            options = route(r);
+            found = route(r);
         }
-        const fallback = options[0];
+        const fallback = found[0];
         if (!fallback)
             throw new Error("no route found");
+        options = found;
+        // an A-to-B trip replaces a round trip, and its stop
+        poiMarker?.remove();
+        poiMarker = null;
+        loopParams = null;
         const wanted = pendingSelect;
         pendingSelect = null;
         selectOption(wanted !== null && options.some((o) => o.id === wanted) ? wanted : fallback.id);
@@ -675,7 +733,11 @@ async function requestRoute() {
         frameRoute(fallback);
     }
     catch (err) {
-        onTileProgress = undefined;
+        if (ticket.stale())
+            return;
+        poiMarker?.remove();
+        poiMarker = null;
+        loopParams = null;
         options = [];
         selectedId = null;
         renderOptions();
@@ -684,31 +746,29 @@ async function requestRoute() {
         errBox.style.display = "block";
     }
     finally {
-        loading.style.display = "none";
+        // a newer plan owns the loading line now; hiding it would hide theirs
+        if (!ticket.stale())
+            loading.style.display = "none";
     }
 }
 async function requestLoop() {
+    const ticket = beginPlan();
     await manifestReady;
+    if (ticket.stale())
+        return;
     const errBox = el("error");
     errBox.style.display = "none";
     if (!start) {
         // A round trip starts where you are, so find that rather than refusing.
         // Telling someone to "click the map to set a start point first" is asking
         // them to do work the app can do, in answer to a button they just pressed.
-        showStage("Finding your location…");
-        try {
-            start = makeMarker(await currentPosition(), "#2b83ba", "start");
-            syncOD();
-        }
-        catch {
-            el("loading").style.display = "none";
-            errBox.textContent =
-                "Couldn't get your location — tap 🗺 next to the start field to pick where the ride begins.";
-            errBox.style.display = "block";
+        const located = await locateStart(ticket, "Couldn't get your location — tap 🗺 next to the start field to pick where the ride begins.");
+        if (located === null)
             return;
-        }
     }
     await poisReady;
+    if (ticket.stale())
+        return;
     const typed = Number(el("loop-dist").value);
     if (!Number.isFinite(typed) || typed <= 0) {
         errBox.textContent = `How far would you like to ride? Enter a distance in ${unitName()}.`;
@@ -724,18 +784,22 @@ async function requestLoop() {
     const candidates = kind === "none" ? null : kind === "any" ? pois : pois.filter((p) => p.properties.kind === kind);
     const loading = el("loading");
     showStage("Loading the map around you…");
-    onTileProgress = (done, total) => {
-        if (total > 4)
+    const progress = (done, total) => {
+        if (total > 4 && !ticket.stale()) {
             showStage("Loading the map around you…", `${done} of ${total}`);
+        }
     };
     await new Promise((resolve) => setTimeout(resolve, 0));
+    if (ticket.stale() || !start)
+        return;
     try {
         const s = start.getLngLat();
         // a loop can range out to roughly half its length from the start
-        const r = await ensureRouter([[s.lng, s.lat]], targetM / 2, 2);
+        const r = await ensureRouter([[s.lng, s.lat]], targetM / 2, 2, progress);
+        if (ticket.stale())
+            return;
         if (!r)
             throw new Error("this area isn't mapped for routing yet");
-        onTileProgress = undefined;
         showStage(`Finding a ${fmtDistTight(targetM)} loop…`);
         const { option, poi, more } = r.loopRoute([s.lng, s.lat], targetM, candidates, profileId, preferFlat);
         end?.remove();
@@ -759,12 +823,14 @@ async function requestLoop() {
         }
     }
     catch (err) {
+        if (ticket.stale())
+            return;
         errBox.textContent = err instanceof Error ? err.message : String(err);
         errBox.style.display = "block";
     }
     finally {
-        onTileProgress = undefined;
-        loading.style.display = "none";
+        if (!ticket.stale())
+            loading.style.display = "none";
     }
 }
 let optionChips = [];
@@ -1529,7 +1595,6 @@ function showGrading(row) {
 }
 /** Cancels grading when a new search lands: five routes take a moment, and the
  * answers to the last query must not appear against this one's rows. */
-let gradeGen = 0;
 const gradeCache = new Map();
 /** Put the grade of the safest route on each result.
  *
@@ -1544,7 +1609,7 @@ const gradeCache = new Map();
  * parallel would fetch five times over.
  */
 async function gradeSearchResults(rows) {
-    const mine = ++gradeGen;
+    const ticket = gradeLane.begin();
     gradedRows = rows;
     // One snapshot of every routing input, taken before the first await. Reading
     // them per row let a preference change land mid-grade: the key was built from
@@ -1581,7 +1646,7 @@ async function gradeSearchResults(rows) {
         // hand the page back between routes: five Dijkstras in a row on the main
         // thread is a visible stall on a phone
         await new Promise((r) => setTimeout(r, 0));
-        if (mine !== gradeGen)
+        if (ticket.stale())
             return; // a newer search owns the list now
         const key = routeCacheKey({
             from: a,
@@ -1596,7 +1661,7 @@ async function gradeSearchResults(rows) {
         if (hit === undefined) {
             try {
                 const r = await ensureRouter([a, row.lngLat], 1200, 1);
-                if (mine !== gradeGen)
+                if (ticket.stale())
                     return;
                 // routed with the snapshot, so the answer matches the key it is filed
                 // under even if the rider changes a preference while this is running
@@ -1617,12 +1682,12 @@ async function gradeSearchResults(rows) {
             catch {
                 // unroutable, or off the edge of the mapped area: say nothing rather
                 // than showing a letter we can't stand behind
-                if (mine === gradeGen)
+                if (!ticket.stale())
                     clearGrading(row);
                 continue;
             }
         }
-        if (mine !== gradeGen)
+        if (ticket.stale())
             return;
         row.badge.textContent = hit.grade;
         row.badge.style.background = GRADE_COLORS[hit.grade];
@@ -1659,7 +1724,7 @@ function geocoderCandidates(results) {
 function renderSearchResults(rows, target = "end") {
     const box = el("search-results");
     box.innerHTML = "";
-    gradeGen++; // abandon grading for whatever list was here before
+    gradeLane.cancel(); // abandon grading for whatever list was here before
     if (rows.length === 0) {
         box.textContent = "no results in this area";
         return;
@@ -1713,7 +1778,7 @@ function renderSearchResults(rows, target = "end") {
             const field = el(target === "start" ? "from-field" : "search");
             field.value = short;
             field.classList.remove("picking");
-            gradeGen++; // the list is going away; stop routing for it
+            gradeLane.cancel(); // the list is going away; stop routing for it
             if (target === "start")
                 activeField = "end";
             syncOD();
@@ -1767,29 +1832,41 @@ function scheduleGrading(rows) {
 // ---------------------------------------------------------------------------
 // safe-shed (reachability)
 // ---------------------------------------------------------------------------
+/** The reach map for the current centre and budget.
+ *
+ * The slider fires on every step of a drag, and a bigger budget waits on more
+ * tiles than a smaller one — so the flood for a budget already let go of used to
+ * finish last and paint over the one asked for. And closing the reach map while
+ * one waited left it to resume with no centre at all, which crashed. Each call
+ * now owns the reach map only until the next one starts, or the map is closed. */
 async function computeShed() {
-    if (!shedCenter)
+    const center = shedCenter;
+    if (!center)
         return;
+    const ticket = shedLane.begin();
     await manifestReady;
+    if (ticket.stale())
+        return;
     const budgetKm = Number(el("shed-budget").value);
     el("shed-budget-label").textContent = fmtDistTight(budgetKm * 1000);
     // the flood can reach out to the full budget radius from the center
-    const r = await ensureRouter([shedCenter], budgetKm * 1000, 2);
-    if (!r)
+    const r = await ensureRouter([center], budgetKm * 1000, 2);
+    if (ticket.stale() || !shedMode || !r)
         return;
-    const res = r.safeShed(shedCenter, budgetKm * 1000, profileId, preferFlat);
+    const res = r.safeShed(center, budgetKm * 1000, profileId, preferFlat);
     getSource("shed").setData(res.geojson);
     el("shed-info").textContent =
         `${fmtDist(res.reachableKm * 1000)} of streets reachable ` +
             `(${res.pctReachable}% of the network) within a perceived ${fmtDistTight(budgetKm * 1000)}`;
     if (shedMarker)
-        shedMarker.setLngLat(shedCenter);
+        shedMarker.setLngLat(center);
     else {
-        shedMarker = new maplibregl.Marker({ color: "#7c3aed" }).setLngLat(shedCenter).addTo(map);
+        shedMarker = new maplibregl.Marker({ color: "#7c3aed" }).setLngLat(center).addTo(map);
         shedMarker.getElement().title = "reachability center";
     }
 }
 function exitShedMode() {
+    shedLane.cancel(); // a flood still loading tiles is for a map no longer open
     shedMode = false;
     shedCenter = null;
     shedMarker?.remove();
@@ -2895,6 +2972,10 @@ el("backup-file").addEventListener("change", () => {
     el("backup-file").value = "";
 });
 el("reset").addEventListener("click", () => {
+    // withdraw anything still planning: it would otherwise finish and draw the
+    // trip just cleared back onto an empty map
+    routeLane.cancel();
+    el("loading").style.display = "none";
     start?.remove();
     end?.remove();
     poiMarker?.remove();
