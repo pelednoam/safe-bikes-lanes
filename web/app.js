@@ -1,5 +1,5 @@
 import { CARTO_ATTRIBUTION, CARTO_MAXZOOM, CARTO_TILES, createBasemap, VENDORED_FONT_STACK, } from "./basemap.js";
-import { isNativeApp, isNewerAppVersion, lastNativeSpeechError, nativeSpeak, startDownload, startBackgroundWatcher, stopBackgroundWatcher, webVoiceCount, } from "./native.js";
+import { isNativeApp, isNewerAppVersion, lastNativeSpeechError, nativeSpeak, nativeStopSpeech, startDownload, startBackgroundWatcher, stopBackgroundWatcher, webVoiceCount, } from "./native.js";
 import { GEOCODE_DEBOUNCE_MS, geocodeDelayMs, matchScore, metresBetween, rank as rankSearch, describe as describeRow, worthGeocoding, } from "./search.js";
 import { CLASS_LABELS, cautionsHtml, clearPhotoCache, esc, FACILITY_CLASSES, nearestMapillary, fillSegmentPhoto as fillPhotoSlot, GRADE_COLORS, segmentHtml, } from "./segment.js";
 import { bearingDeg, buildAlerts, buildManeuvers, buildTrack, distM, snapToTrack, sunsetTime, trackBearingAhead, trackSlice, } from "./nav.js";
@@ -11,6 +11,7 @@ import { buildCues, PROFILES, Router, routeCacheKey, toGPX } from "./router.js";
 import { distVoice, fmtDist, fmtClimb, fmtDistTight, fmtSpeed, fromMeters, getUnits, navRound, setUnits, toMeters, unitName, } from "./units.js";
 import { NetworkTiles, TileStore } from "./tiles.js";
 import { Lane, withUpgraded } from "./planner.js";
+import { SpeechQueue } from "./speech.js";
 import { drawRideCard, drawTotalsCard, rideShareText, totalsShareText } from "./sharecard.js";
 // ---------------------------------------------------------------------------
 // constants
@@ -3882,75 +3883,81 @@ function vibrate(pattern) {
     if ("vibrate" in navigator)
         navigator.vibrate(pattern);
 }
-const PRIORITY_RANK = { safety: 3, turn: 2, chat: 1 };
-/** Roughly how long a spoken line takes, to space the queue out. */
-const SPEECH_MS_PER_CHAR = 62;
-const SPEECH_MIN_MS = 900;
-let speechQueue = [];
-let speaking = false;
-function speechDuration(text) {
-    return Math.max(SPEECH_MIN_MS, text.length * SPEECH_MS_PER_CHAR);
-}
-function drainSpeech() {
-    if (speaking)
-        return;
-    const next = speechQueue.shift();
-    if (!next)
-        return;
-    speaking = true;
-    const done = () => {
-        speaking = false;
-        drainSpeech();
-    };
-    void nativeSpeak(next.text)
-        .then((spokenNatively) => {
-        if (spokenNatively) {
-            window.setTimeout(done, speechDuration(next.text));
-            return;
-        }
+/** The spoken-guidance queue (see speech.ts). Safety beats navigation beats
+ * encouragement — the old code called cancel() before every utterance, so
+ * whichever line arrived second silenced the first, and the riders' logs showed
+ * "busy street crossing. gather up." being eaten by turn calls (and vice versa)
+ * dozens of times in one ride. */
+const speech = new SpeechQueue({
+    hasNative: isNativeApp,
+    speakNative: nativeSpeak,
+    stopNative: nativeStopSpeech,
+    web: () => {
         // typed as always-present, but a WebView can leave it undefined
         const synth = window.speechSynthesis;
-        if (!synth) {
-            noteVoiceUnavailable();
-            window.setTimeout(done, 0);
-            return;
-        }
-        const utter = new SpeechSynthesisUtterance(next.text);
-        let ended = false;
-        const finish = () => {
-            ended = true;
-            done();
+        if (!synth)
+            return null;
+        return {
+            speak: (line) => {
+                const u = new SpeechSynthesisUtterance(line.text);
+                u.rate = line.rate;
+                u.volume = line.volume;
+                u.onend = line.onEnd;
+                u.onerror = line.onEnd;
+                synth.speak(u);
+            },
+            cancel: () => synth.cancel(),
+            get speaking() {
+                return synth.speaking;
+            },
         };
-        utter.rate = 1.05;
-        utter.onend = finish;
-        utter.onerror = finish;
-        synth.speak(utter);
-        // The WebView's speechSynthesis exists on Android but ships no voices:
-        // speak() returns without a sound, without an error, and without ever
-        // firing onend. Ask whether anything is actually being said rather than
-        // counting voices, which browsers report late on a cold start.
-        window.setTimeout(() => {
-            if (!ended && synth.speaking !== true)
-                noteVoiceUnavailable();
-        }, 400);
-        // belt and braces: some engines never fire onend
-        window.setTimeout(() => {
-            if (speaking)
-                finish();
-        }, speechDuration(next.text) + 1500);
-    })
-        .catch(done);
-}
+    },
+}, { setTimeout: (fn, ms) => window.setTimeout(fn, ms) }, () => noteVoiceUnavailable());
 /** Say a line and report which engine actually said it.
  *
  * "I can't hear it" has several causes that look identical from the saddle —
  * no engine installed, media volume down, audio on a Bluetooth device in a
  * pannier — and none of them announce themselves. This turns the question into
  * an answer before the ride rather than after it. */
-async function runVoiceTest() {
+function runVoiceTest() {
     const box = el("voice-status");
     const line = "Voice test. In 200 meters, turn left onto the path.";
     box.textContent = "testing…";
+    if (!isNativeApp()) {
+        browserVoiceTest(box, line);
+        return;
+    }
+    void nativeVoiceTest(box, line);
+}
+/** In a browser, speak first and judge afterwards. iOS Safari speaks only when
+ * the utterance is started inside the tap, and it reports no voices at all until
+ * something has been spoken — so counting voices first, as this used to, told
+ * every iPhone "this phone has no usable voice" and never tried. */
+function browserVoiceTest(box, line) {
+    const synth = window.speechSynthesis;
+    if (!synth) {
+        box.textContent = "✗ this browser has no voice — watch the screen for turns.";
+        return;
+    }
+    const utter = new SpeechSynthesisUtterance(line);
+    utter.rate = 1.05;
+    let started = false;
+    utter.onstart = () => {
+        started = true;
+    };
+    synth.speak(utter);
+    window.setTimeout(() => {
+        const voices = webVoiceCount();
+        box.textContent =
+            started || synth.speaking
+                ? `▶ spoken by the browser${voices > 0 ? ` (${voices} voices)` : ""}. ` +
+                    "A browser only talks while the screen is on, so keep this page open " +
+                    "on screen while you ride — navigating keeps the screen awake for you."
+                : "✗ nothing was spoken. Check the phone isn't on silent and the media " +
+                    "volume is up, then test again.";
+    }, 800);
+}
+async function nativeVoiceTest(box, line) {
     if (await nativeSpeak(line)) {
         box.textContent =
             "✓ spoken by the phone's own voice engine — the one that keeps working " +
@@ -3971,15 +3978,13 @@ async function runVoiceTest() {
     const utter = new SpeechSynthesisUtterance(line);
     utter.rate = 1.05;
     window.speechSynthesis.speak(utter);
-    box.textContent = isNativeApp()
-        ? `▶ spoken by the browser engine (${voices} voices), but the app's own ` +
+    box.textContent =
+        `▶ spoken by the browser engine (${voices} voices), but the app's own ` +
             `engine failed${err !== null ? `: ${err}` : ""} — that's the one that ` +
-            "works with the screen off, so turns would go quiet in your pocket."
-        : `▶ spoken by the browser (${voices} voices). In the phone app a native ` +
-            "engine is used instead, so it keeps talking with the screen off.";
+            "works with the screen off, so turns would go quiet in your pocket.";
 }
 el("voice-test").addEventListener("click", () => {
-    void runVoiceTest();
+    runVoiceTest();
 });
 /** Told the rider once this ride that there is no voice. */
 let voiceWarned = false;
@@ -3999,25 +4004,12 @@ function noteVoiceUnavailable() {
 function speak(text, priority = "turn") {
     if (navMuted)
         return;
-    // drop encouragement when there's real guidance waiting, and never let a
-    // lower-priority line delay a safety call
-    if (priority === "chat" && speechQueue.length > 0)
-        return;
-    if (speechQueue.some((u) => u.text === text))
-        return;
-    speechQueue.push({ text, priority });
-    speechQueue = speechQueue
-        .map((u, i) => ({ u, i }))
-        .sort((a, b) => PRIORITY_RANK[b.u.priority] - PRIORITY_RANK[a.u.priority] || a.i - b.i)
-        .map(({ u }) => u);
-    drainSpeech();
+    speech.speak(text, priority);
 }
-/** Abandon anything queued (ride over, or muted). */
+/** Abandon anything queued or being said, on every engine (ride over, or
+ * muted). */
 function clearSpeech() {
-    speechQueue = [];
-    speaking = false;
-    if ("speechSynthesis" in window)
-        window.speechSynthesis.cancel();
+    speech.clear();
 }
 function rebuildNavFromSelected() {
     const sel = options.find((o) => o.id === selectedId);
@@ -4547,6 +4539,11 @@ async function startNav() {
     // label-free basemap, our own upright labels, and the network dimmed behind
     // the route — all of which applyBasemap decides from navActive
     applyBasemap();
+    // Said before anything is awaited. iOS lets a page speak only once speech was
+    // started inside a tap, and the tap is over at the first await — this used to
+    // come after the wake lock and the GPS watcher, which on an iPhone meant a
+    // silent ride and a false "no voice on this phone" warning.
+    speak("navigation started", "chat");
     try {
         wakeLock = await navigator.wakeLock.request("screen");
     }
@@ -4566,10 +4563,8 @@ async function startNav() {
     // absorb one Back press: on Android the hardware button is a thumb-brush from
     // ending the ride, and there was no guard of any kind
     history.pushState({ navigating: true }, "");
-    speak("navigation started", "chat");
 }
 function exitNav() {
-    finishAndSaveRide();
     navActive = false;
     // the stops menu belongs to the ride; left open it floated over the planner
     stopsOpen(false);
@@ -4590,7 +4585,10 @@ function exitNav() {
     navStopAnimation();
     navDot?.remove();
     navDot = null;
+    // the ride's own queue goes first, so the line that closes it is not
+    // cancelled the moment it starts ("ride saved…" was queued, then cleared)
     clearSpeech();
+    finishAndSaveRide();
     document.body.classList.remove("navigating");
     el("nav-banner").style.display = "none";
     map.setLayoutProperty("route-done", "visibility", "none");
@@ -4720,6 +4718,8 @@ el("nav-hazard").addEventListener("click", () => {
     });
 }
 el("nav-btn").addEventListener("click", () => {
+    // first, inside the tap: without it an iPhone never speaks this page load
+    speech.unlock();
     void startNav();
 });
 el("nav-exit").addEventListener("click", () => {

@@ -134,6 +134,15 @@ export async function nativeSpeak(text) {
         return false;
     }
 }
+/** Silence the native voice mid-line. Muting, or ending a ride, used to cancel
+ * only the WebView's engine — which on Android is never the one talking — so
+ * the phone went on reading the turn out after the rider had asked it to stop. */
+export function nativeStopSpeech() {
+    const plugin = ttsPlugin();
+    if (plugin === null)
+        return;
+    void plugin.stop().catch(() => undefined);
+}
 /** Voices the WebView itself can offer. Zero on Android, which is the point. */
 export function webVoiceCount() {
     if (!("speechSynthesis" in window))
