@@ -8,12 +8,17 @@ import {
   fmtDist,
   fmtDistTight,
   fmtSpeed,
+  fmtSpeedRound,
   fromMeters,
   getUnits,
+  lengthVoice,
+  milestoneM,
+  milestoneVoice,
   navRound,
   setUnits,
   toMeters,
   unitName,
+  unitShort,
 } from "../src/units.js";
 
 describe("imperial, which is the default here", () => {
@@ -119,6 +124,40 @@ describe("the preference itself", () => {
     expect(fmtClimb(0)).toBe("0 ft");
     setUnits("metric");
     expect(fmtClimb(89)).toBe("89 m");
+  });
+
+  it("speaks a stretch's length in the rider's unit, never as 'now'", () => {
+    // "entering a busy street for 100 meters" and "ride saved. 5.2 kilometers"
+    // were spoken to riders who read miles everywhere else on screen
+    setUnits("imperial");
+    expect(lengthVoice(100)).toBe("330 feet");
+    expect(lengthVoice(5)).toBe("20 feet"); // 16 ft, to the nearest ten
+    expect(lengthVoice(8369)).toBe("5.2 miles");
+    expect(lengthVoice(1609.344)).toBe("1 mile");
+    setUnits("metric");
+    expect(lengthVoice(100)).toBe("100 meters");
+    expect(lengthVoice(5200)).toBe("5.2 kilometers");
+    expect(lengthVoice(1000)).toBe("1 kilometer");
+    expect(lengthVoice(2)).toBe("10 meters");
+  });
+
+  it("counts ride milestones in the rider's unit", () => {
+    setUnits("imperial");
+    expect(milestoneM()).toBeCloseTo(1609.344, 3);
+    expect(milestoneVoice(1)).toBe("1 mile done");
+    expect(milestoneVoice(3)).toBe("3 miles done");
+    setUnits("metric");
+    expect(milestoneM()).toBe(1000);
+    expect(milestoneVoice(2)).toBe("2 kilometers done");
+  });
+
+  it("gives the banner a whole-number speed and a short unit", () => {
+    setUnits("imperial");
+    expect(fmtSpeedRound(5)).toBe("11 mph");
+    expect(unitShort()).toBe("mi");
+    setUnits("metric");
+    expect(fmtSpeedRound(5)).toBe("18 km/h");
+    expect(unitShort()).toBe("km");
   });
 
   it("survives storage being unavailable", () => {

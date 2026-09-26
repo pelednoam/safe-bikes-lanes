@@ -63,10 +63,16 @@ test("a whole ride: guidance, progress and arrival", async ({ page }) => {
   }
   // arrival is announced and the ride is recorded
   expect(log.spoken.join(" | ")).toMatch(/arrived/i);
+  // in the unit the rider reads — miles by default. Everything on screen said
+  // miles while the voice said "you have arrived. 4.1 kilometers", "1 kilometer
+  // done", "entering a busy street for 100 meters".
+  const arrival = log.spoken.find((s) => /nicely done/i.test(s)) ?? "";
+  expect(arrival).toMatch(/\b(miles?|feet)\b/);
+  for (const line of log.spoken) expect(line).not.toMatch(/kilomet|\bmeters?\b/i);
   // the big slot says the word; the line below names where you are, and the
   // stale speed reading is cleared
   await expect(page.locator("#nav-dist")).toContainText(/arrived/i, { timeout: 10_000 });
-  await expect(page.locator("#nav-remaining")).toContainText(/km ridden/);
+  await expect(page.locator("#nav-remaining")).toContainText(/\d (mi|ft) ridden/);
   await expect(page.locator("#nav-speed")).toHaveText("");
 });
 
@@ -249,7 +255,7 @@ test("joining a route part-way doesn't machine-gun the milestones", async ({ pag
   );
   await page.waitForTimeout(600);
   const spoken = await page.evaluate(() => window.__rider.spoken);
-  const chimes = spoken.filter((s) => /kilometers? done/i.test(s));
+  const chimes = spoken.filter((s) => /(miles?|kilometers?) done/i.test(s));
   expect(chimes.length).toBeLessThanOrEqual(1);
 });
 

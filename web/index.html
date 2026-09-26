@@ -57,8 +57,11 @@
     --s-lane:#fee08b; --s-shar:#fdae61; --s-mod:#f46d43; --s-busy:#d73027;
     --accent:#12833f; --accent-hi:#0e6c33; --accent-soft:rgba(26,152,80,.12);
 
-    --ink:#111619; --muted:#5c6a72; --line:rgba(17,22,25,.11);
-    --surface:rgba(255,255,255,.86); --solid:#ffffff; --field:rgba(17,22,25,.05);
+    /* --muted at 6.6:1 on white rather than 5.6, and the panel a little less
+       see-through: small grey text over a busy map, read outdoors, lost to
+       both at once */
+    --ink:#111619; --muted:#4f5c64; --line:rgba(17,22,25,.11);
+    --surface:rgba(255,255,255,.93); --solid:#ffffff; --field:rgba(17,22,25,.05);
     --shadow: 0 1px 2px rgba(10,14,18,.07), 0 12px 32px -10px rgba(10,14,18,.25);
     --r-sm:9px; --r-md:13px; --r-lg:19px; --r-pill:999px;
 
@@ -66,10 +69,16 @@
     --bg:var(--solid); --fg:var(--ink); --border:var(--line);
     --btn-bg:var(--field); --hover:rgba(17,22,25,.08); --sel-bg:var(--accent-soft);
     --caution:#b3261e; --ok:#12833f;
+    /* native controls — inputs, selects, sliders, scrollbars — follow the
+       page's theme, not the browser's default white */
+    color-scheme: light;
+    --tick-ink:rgba(17,22,25,.82);
   }
   body.dark {
+    color-scheme: dark;
+    --tick-ink:rgba(236,240,244,.85);
     --ink:#e9eef1; --muted:#93a1aa; --line:rgba(255,255,255,.13);
-    --surface:rgba(19,23,27,.84); --solid:#13171b; --field:rgba(255,255,255,.07);
+    --surface:rgba(19,23,27,.92); --solid:#13171b; --field:rgba(255,255,255,.07);
     --shadow: 0 1px 2px rgba(0,0,0,.5), 0 14px 34px -10px rgba(0,0,0,.6);
     --hover:rgba(255,255,255,.10); --accent:#2aa35a; --accent-hi:#36b768;
     --accent-soft:rgba(102,189,99,.16);
@@ -83,13 +92,30 @@
   :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
 
   /* ── Panel ─────────────────────────────────────────────────────────── */
+  /* Insets: viewport-fit=cover hands this page the whole screen, including
+     what sits under the status bar, the notch or Dynamic Island, and — in
+     landscape — the side the camera is on. The iOS home-screen app draws its
+     status bar translucent over the page, and Android 15+ runs the app edge to
+     edge. Everything pinned to an edge adds the inset for that edge. */
   #panel {
-    position:absolute; top:12px; left:12px; z-index:5; width:346px;
+    position:absolute; z-index:5; width:346px;
+    top:calc(12px + env(safe-area-inset-top)); left:calc(12px + env(safe-area-inset-left));
     background:var(--surface); color:var(--ink);
     -webkit-backdrop-filter:blur(22px) saturate(1.6); backdrop-filter:blur(22px) saturate(1.6);
     border:1px solid var(--line); border-radius:var(--r-lg); box-shadow:var(--shadow);
     padding:14px; font-size:14.5px; line-height:1.45;
-    max-height:calc(100% - 24px); overflow-y:auto; overscroll-behavior:contain;
+    max-height:calc(100% - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+    overflow-y:auto; overscroll-behavior:contain;
+  }
+  .maplibregl-ctrl-top-right { top:env(safe-area-inset-top); right:env(safe-area-inset-right); }
+  .maplibregl-ctrl-top-left { top:env(safe-area-inset-top); left:env(safe-area-inset-left); }
+  .maplibregl-ctrl-bottom-left { left:env(safe-area-inset-left); }
+  .maplibregl-ctrl-bottom-right { right:env(safe-area-inset-right); }
+  /* Present to a screen reader, absent from the screen. */
+  .sr-only {
+    position:absolute !important; width:1px !important; height:1px !important;
+    padding:0 !important; margin:-1px !important; overflow:hidden !important;
+    clip:rect(0 0 0 0) !important; white-space:nowrap !important; border:0 !important;
   }
   #panel h1 {
     font-size:16px; font-weight:700; letter-spacing:-.012em; margin:0 0 3px;
@@ -106,6 +132,22 @@
   #panel .hint { color:var(--muted); font-size:13px; margin:0 0 12px; }
   body.dark .maplibregl-popup-content { background:var(--solid); color:var(--ink);
     border-radius:var(--r-md); }
+  /* Dark mode used to stop at this page's own chrome. Links kept the browser's
+     blue (1.9:1 on the dark dialog), the primary button kept white on a green
+     that is 3.2:1, and MapLibre's controls and attribution stayed white boxes
+     on a black map — at night, the brightest things on the screen. */
+  body.dark a { color:#8ab4f8; }
+  body.dark button.primary { background:#1e7f45; border-color:#1e7f45; }
+  body.dark button.primary:hover { background:#1a6f3c; border-color:#1a6f3c; }
+  body.dark .maplibregl-ctrl-group { background:var(--solid); box-shadow:0 0 0 1px var(--line); }
+  body.dark .maplibregl-ctrl-group button + button { border-top-color:var(--line); }
+  body.dark .maplibregl-ctrl button .maplibregl-ctrl-icon { filter:invert(1) hue-rotate(180deg); }
+  body.dark .maplibregl-ctrl-attrib,
+  body.dark .maplibregl-ctrl-attrib.maplibregl-compact { background:rgba(19,23,27,.8); color:var(--ink); }
+  body.dark .maplibregl-ctrl-attrib a { color:var(--ink); }
+  body.dark .maplibregl-ctrl-attrib-button { filter:invert(1); }
+  body.dark .maplibregl-ctrl-scale { background:rgba(19,23,27,.7); color:var(--ink);
+    border-color:var(--ink); }
   body.dark .maplibregl-popup-tip { border-top-color:var(--solid) !important;
                                     border-bottom-color:var(--solid) !important; }
   .maplibregl-popup-content { border-radius:var(--r-md); font-family:var(--font);
@@ -136,35 +178,41 @@
   .search-text > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   /* how safe the way there is, before you commit to going: a destination across
      an arterial is a D while you are still reading the list */
-  .search-sub { color:var(--muted); font-size:11.5px; line-height:1.25;
+  .search-sub { color:var(--muted); font-size:13px; line-height:1.3;
                 overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .search-grade {
     flex:none; width:24px; height:24px; border-radius:6px; display:grid; place-items:center;
-    font-family:var(--font-cond); font-weight:700; font-size:14px; color:#fff;
+    font-family:var(--font-cond); font-weight:700; font-size:14px; color:var(--ink);
     background:var(--line);
   }
-  .search-row button { margin:0; padding:3px 9px; font-size:12px; }
+  .search-row button { margin:0; padding:3px 9px; font-size:13px; }
 
   /* ── Rider mode: a segmented control, not radio dots ───────────────── */
   #modes {
     display:flex; gap:2px; background:var(--field); border-radius:var(--r-pill);
     padding:3px; margin:10px 0;
   }
-  #modes label {
-    flex:1; margin:0; text-align:center; padding:7px 4px; border-radius:var(--r-pill);
-    font-size:13.5px; font-weight:600; color:var(--muted); cursor:pointer;
+  #modes label { flex:1; display:flex; margin:0; cursor:pointer; position:relative; }
+  #modes label > span {
+    flex:1; display:flex; align-items:center; justify-content:center;
+    padding:7px 4px; border-radius:var(--r-pill);
+    font-size:13.5px; font-weight:600; color:var(--muted);
     white-space:nowrap; transition:background .16s ease, color .16s ease;
   }
-  #modes input { position:absolute; opacity:0; width:0; height:0; }
-  #modes label:has(input:checked) {
+  /* visually gone but still focusable and still a radio to assistive tech */
+  #modes input { position:absolute; opacity:0; width:1px; height:1px; margin:0; }
+  #modes input:checked + span {
     background:var(--solid); color:var(--ink); box-shadow:0 1px 3px rgba(10,14,18,.16);
   }
-  #modes label:hover:not(:has(input:checked)) { color:var(--ink); }
+  /* the radios are invisible, so without this a keyboard user moving through
+     them saw nothing move */
+  #modes input:focus-visible + span { outline:2px solid var(--accent); outline-offset:1px; }
+  #modes label:hover > input:not(:checked) + span { color:var(--ink); }
 
   /* ── Route options — the selected one is the hero ──────────────────── */
   #options { margin:12px 0 4px; }
   .options-head {
-    color:var(--muted); font-size:10.5px; font-weight:600; letter-spacing:.08em;
+    color:var(--muted); font-size:12px; font-weight:700; letter-spacing:.07em;
     text-transform:uppercase; margin-bottom:7px;
   }
   .option-card {
@@ -178,7 +226,7 @@
     box-shadow:inset 0 0 0 1.5px var(--accent); padding:13px 12px;
   }
   .option-card .grade {
-    flex:none; color:#fff; border-radius:10px; width:30px; height:30px;
+    flex:none; color:var(--ink); border-radius:10px; width:30px; height:30px;
     display:inline-flex; align-items:center; justify-content:center;
     font-family:var(--font-cond); font-weight:700; font-size:19px; line-height:1;
   }
@@ -186,7 +234,7 @@
   .opt-body { display:flex; flex-direction:column; gap:1px; min-width:0; }
   .opt-name { font-weight:600; font-size:14.5px; }
   .option-card.selected .opt-name {
-    font-size:11px; font-weight:700; letter-spacing:.09em; text-transform:uppercase;
+    font-size:12.5px; font-weight:700; letter-spacing:.07em; text-transform:uppercase;
     color:var(--muted);
   }
   .opt-stats { color:var(--muted); font-size:13px; font-variant-numeric:tabular-nums; }
@@ -202,7 +250,7 @@
   }
   .fp-head {
     display:flex; justify-content:space-between; align-items:baseline;
-    font-size:10.5px; font-weight:600; letter-spacing:.08em; text-transform:uppercase;
+    font-size:12px; font-weight:700; letter-spacing:.07em; text-transform:uppercase;
     color:var(--muted); margin-bottom:8px;
   }
   #classbar { display:flex; height:13px; border-radius:7px; overflow:hidden; margin:0; }
@@ -216,7 +264,7 @@
   .stat b { font-variant-numeric:tabular-nums; font-weight:600; font-size:14.5px; }
 
   .caution { color:var(--caution); margin:3px 0; font-size:13.5px; }
-  .caution a { font-size:12px; }
+  .caution a { font-size:13px; }
   .all-clear { color:var(--ok); margin:3px 0; font-weight:500; }
   #why { margin-top:10px; }
   #why ul { margin:7px 0 0; padding-left:16px; }
@@ -228,9 +276,25 @@
                      padding-top:8px; }
   .sketchy-row { display:flex; justify-content:space-between; align-items:center; margin:3px 0; }
   .sketchy-row button { margin:0; padding:2px 8px; font-size:12px; }
-  .legend { display:grid; grid-template-columns:14px auto; gap:5px 8px; margin-top:10px;
+  .legend { display:grid; grid-template-columns:36px auto; gap:5px 8px; margin-top:10px;
             align-items:center; font-size:13px; color:var(--muted); }
-  .legend i { width:14px; height:5px; border-radius:3px; display:inline-block; }
+  .legend > span { display:flex; align-items:center; }
+  svg.swatch { display:inline-block; vertical-align:middle; flex:none; }
+  /* The class bar carries each class's map mark as a pattern (CLASS_MARKS in
+     app.ts), so it can be read without telling its greens from its reds. */
+  #classbar i.pat-lane {
+    background-image:repeating-linear-gradient(90deg, rgba(17,22,25,.8) 0 5px, transparent 5px 9px);
+    background-size:100% 2px; background-position:0 50%; background-repeat:no-repeat; }
+  #classbar i.pat-sharrow {
+    background-image:radial-gradient(circle, rgba(17,22,25,.85) 1.4px, transparent 1.9px);
+    background-size:6px 100%; background-repeat:repeat-x; }
+  #classbar i.pat-moderate_street {
+    background-image:repeating-linear-gradient(90deg, rgba(17,22,25,.8) 0 1.5px, transparent 1.5px 8px); }
+  #classbar i.pat-busy_street {
+    background-image:repeating-linear-gradient(90deg, rgba(17,22,25,.85) 0 1.5px, transparent 1.5px 4px); }
+  #class-key { display:flex; flex-wrap:wrap; gap:3px 10px; margin-top:7px;
+               font-size:12.5px; color:var(--muted); }
+  #class-key span { display:inline-flex; align-items:center; gap:4px; white-space:nowrap; }
   .tool-row { display:flex; gap:7px; align-items:center; flex-wrap:wrap; margin:8px 0; }
   .tool-row select, #walk-max {
     padding:5px 8px; border-radius:var(--r-sm); border:1px solid var(--line);
@@ -258,7 +322,7 @@
   .pref-head { font-weight:600; margin-top:12px; font-size:13.5px; }
   .row { display:flex; gap:7px; }
   .footer { margin-top:12px; display:flex; gap:7px; flex-wrap:wrap; }
-  .footer button { font-size:12.5px; }
+  .footer button { font-size:13.5px; }
   #error { color:var(--caution); display:none; margin-top:8px; font-weight:500; }
   /* The wait here is mostly the map downloading — about 90 tiles for an
      ordinary trip — and a motionless line of text through all of it read as a
@@ -276,7 +340,7 @@
     margin-top:8px; padding:8px 10px;
     background:var(--field); border:1px solid var(--line); border-radius:var(--r-md);
   }
-  #loop-row .or { color:var(--muted); font-size:12.5px; }
+  #loop-row .or { color:var(--muted); font-size:13.5px; }
   /* not full width, even when it wraps onto its own line: a round trip is an
      alternative to "where to", not the headline action of the panel */
   #loop-row button { margin:0; width:auto; flex:0 0 auto; }
@@ -312,8 +376,10 @@
   .section[open] > summary::before, #why[open] summary::before { transform:rotate(45deg); }
 
   .opt-chip {
-    background:var(--g); color:#fff; font-size:11px; font-weight:700;
-    padding:3px 9px; border-radius:var(--r-pill); white-space:nowrap; cursor:pointer;
+    /* 13 px, and a letter colour chosen per grade (GRADE_TEXT): 11 px white on
+       orange was unreadable in sunlight */
+    background:var(--g); color:var(--gt, #111619); font-size:13px; font-weight:700;
+    padding:4px 10px; border-radius:var(--r-pill); white-space:nowrap; cursor:pointer;
     box-shadow:0 1px 5px rgba(10,14,18,.45); border:2px solid transparent;
     font-family:var(--font); font-variant-numeric:tabular-nums;
   }
@@ -323,14 +389,17 @@
   /* right padding clears the absolutely-positioned close button, which sat on
      top of the commit id — the one part of this line someone would read out */
   .build-stamp { margin:0 0 12px; padding:7px 40px 7px 9px; border-radius:8px;
-    background:var(--field, rgba(17,22,25,.05)); font-size:12px; color:var(--muted, #5c6a72);
+    background:var(--field, rgba(17,22,25,.05)); font-size:13px; color:var(--muted, #5c6a72);
     line-height:1.45; }
   .build-stamp .stale-build { color:var(--s-busy, #d73027); font-weight:600; }
   #about, #rides, #hazard {
     /* without border-box the 24 px padding pushed #hazard to 398 px on a 390 px
        phone, so the dialog hung off the side of the screen */
     box-sizing:border-box;
-    max-width:560px; width:calc(100% - 40px); max-height:85vh;
+    max-width:560px; width:calc(100% - 40px);
+    /* dvh: Safari's toolbars come and go, and 85vh of the LARGE viewport ran
+       the dialog's bottom — its buttons — under them */
+    max-height:85vh; max-height:85dvh;
     background:var(--solid); color:var(--ink); border:none; border-radius:var(--r-lg);
     padding:20px 24px; font-size:14px; font-family:var(--font);
     box-shadow:0 24px 60px -12px rgba(10,14,18,.45);
@@ -345,13 +414,39 @@
   #about td, #about th, #rides td, #rides th {
     border-bottom:1px solid var(--line); padding:5px 7px;
     text-align:left; font-variant-numeric:tabular-nums; }
-  #rides td button { margin:0 2px 0 0; padding:2px 8px; font-size:12px; }
+  #rides td button { margin:0 2px 0 0; padding:2px 8px; font-size:13px; }
   #about-close, #rides-close, #hazard-close { position:absolute; top:12px; right:14px; margin:0; }
   #about ol { padding-left:18px; } #about li { margin:5px 0; }
   /* the phone sizing rule only covered input[type=search], so the hazard note
      and file pickers were 21 px tall — unhittable with a thumb */
   #hazard input, #hazard select, #hazard textarea { min-height:40px; box-sizing:border-box; }
   #hazard input[type="file"] { padding:8px; }
+
+  /* ── First run (phones only; see initFirstRun) ─────────────────────── */
+  #first-run {
+    position:absolute; z-index:4; top:calc(12px + env(safe-area-inset-top));
+    left:calc(12px + env(safe-area-inset-left)); right:calc(68px + env(safe-area-inset-right));
+    background:var(--surface); color:var(--ink);
+    -webkit-backdrop-filter:blur(20px) saturate(1.5); backdrop-filter:blur(20px) saturate(1.5);
+    border:1px solid var(--line); border-radius:var(--r-md); box-shadow:var(--shadow);
+    padding:8px 10px 10px 12px; font-size:13.5px;
+    /* the map stays usable through it: only its buttons take a tap */
+    pointer-events:none;
+  }
+  #first-run[hidden], body.navigating #first-run { display:none; }
+  #first-run button { pointer-events:auto; }
+  #first-run .fr-head { display:flex; align-items:flex-start; justify-content:space-between; gap:6px; }
+  #first-run h2 { font-size:15px; line-height:1.25; margin:4px 0 6px; letter-spacing:-.01em; }
+  #first-run-ok { flex:none; margin:0; width:44px; height:44px; min-height:44px; padding:0;
+    font-size:16px; border-radius:999px; margin:-4px -4px 0 0; }
+  .fr-key { list-style:none; margin:0 0 8px; padding:0; display:grid;
+    grid-template-columns:1fr 1fr; gap:3px 10px; font-size:13px; }
+  .fr-key li { display:flex; align-items:center; gap:6px; white-space:nowrap; }
+  .fr-who { display:flex; align-items:center; gap:5px; flex-wrap:wrap; font-size:13px; }
+  .fr-who > span { width:100%; color:var(--muted); font-weight:600; }
+  .fr-who button { flex:1; margin:0; min-height:44px; padding:0 4px; font-size:13.5px; }
+  .fr-who button[aria-pressed="true"] { border-color:var(--accent); background:var(--accent-soft);
+    box-shadow:inset 0 0 0 1px var(--accent); }
 
   /* ── Floating banners ──────────────────────────────────────────────── */
   #data-update, #update-banner {
@@ -360,14 +455,21 @@
     border:1px solid var(--line); border-radius:var(--r-md); box-shadow:var(--shadow);
     padding:9px 13px; font-size:13.5px; font-weight:500;
   }
-  #data-update { top:12px; left:50%; transform:translateX(-50%); }
-  #update-banner { top:12px; right:12px; z-index:7; gap:9px; align-items:center; }
+  #data-update { top:calc(12px + env(safe-area-inset-top)); left:50%; transform:translateX(-50%); }
+  /* Beside the panel, not over it: centred on the whole window, it sat on the
+     346 px panel at every width from 761 to about 900. Centred over the map. */
+  @media (min-width: 761px) and (min-height: 501px) {
+    #data-update { left:calc(370px + env(safe-area-inset-left) + (100% - 370px) / 2); }
+  }
+  #update-banner { top:calc(12px + env(safe-area-inset-top));
+    right:calc(12px + env(safe-area-inset-right)); z-index:7; gap:9px; align-items:center; }
 
   /* ── Navigation banner: read at arm's length, at speed ─────────────── */
   /* Compact by default — it sits over the map, so it shows the turn and the
      ETA and nothing else until the rider asks for the controls. */
   #nav-banner {
-    display:none; position:absolute; top:12px; left:50%; transform:translateX(-50%);
+    display:none; position:absolute; top:calc(12px + env(safe-area-inset-top));
+    left:50%; transform:translateX(-50%);
     z-index:6; background:var(--surface); color:var(--ink);
     -webkit-backdrop-filter:blur(22px) saturate(1.6); backdrop-filter:blur(22px) saturate(1.6);
     border:1px solid var(--line); border-radius:var(--r-lg); box-shadow:var(--shadow);
@@ -391,7 +493,7 @@
      street is not aiming precisely, and spread across the width because the
      thumb arrives from either side. */
   #ride-dock {
-    display:none; position:absolute; left:0; right:0;
+    display:none; position:absolute; left:env(safe-area-inset-left); right:env(safe-area-inset-right);
     bottom:calc(10px + env(safe-area-inset-bottom)); z-index:7;
     justify-content:space-evenly; align-items:center; gap:6px; padding:6px;
     /* The band is the dock's. With pointer-events:none the gaps between the
@@ -409,8 +511,10 @@
     border:1px solid var(--line); box-shadow:var(--shadow);
   }
   .dock-btn .dock-icon { font-size:24px; line-height:1; }
-  .dock-btn .dock-label { font-size:9.5px; font-weight:600; letter-spacing:-.01em;
-                          color:var(--muted); line-height:1;
+  /* the ink colour, and 11 px: 9.5 px grey was the one thing on the dock that
+     could not be read at arm's length */
+  .dock-btn .dock-label { font-size:11px; font-weight:700; letter-spacing:-.01em;
+                          color:var(--ink); line-height:1;
                           max-width:60px; overflow:hidden; text-overflow:ellipsis;
                           white-space:nowrap; }
   .dock-btn.danger { color:var(--s-busy); }
@@ -428,7 +532,7 @@
   @media (max-width: 380px) {
     .dock-btn { width:54px; height:54px; }
     .dock-btn .dock-icon { font-size:21px; }
-    .dock-btn .dock-label { font-size:9px; max-width:52px; }
+    .dock-btn .dock-label { font-size:11px; max-width:52px; }
   }
   /* opens upward from the dock, so the thumb doesn't cover it */
   #nav-stops-menu {
@@ -445,27 +549,27 @@
   }
   #nav-stops-menu button {
     display:flex; flex-direction:column; align-items:center; gap:3px;
-    min-width:58px; min-height:56px; margin:0; padding:6px; font-size:10.5px; font-weight:600;
+    min-width:58px; min-height:56px; margin:0; padding:6px; font-size:12px; font-weight:600;
   }
   #nav-stops-menu button span { font-size:22px; line-height:1; }
   /* Layer groups. The point is that a rider can see at a glance which of these
      are about their ride and which are a planner's analysis — before, the two
      were interleaved in one list of twelve. */
   .layer-head { display:flex; align-items:center; justify-content:space-between;
-                margin:2px 0 8px; font-size:11.5px; color:var(--muted); }
-  .layer-head button { margin:0; padding:2px 9px; font-size:11.5px; min-height:0; }
+                margin:2px 0 8px; font-size:12.5px; color:var(--muted); }
+  .layer-head button { margin:0; padding:2px 9px; font-size:12.5px; min-height:0; }
   .layer-group { margin-bottom:13px; }
-  .layer-group h4 { margin:0 0 5px; font-size:11px; font-weight:700; letter-spacing:.07em;
+  .layer-group h4 { margin:0 0 5px; font-size:12px; font-weight:700; letter-spacing:.07em;
                     text-transform:uppercase; color:var(--muted); }
   .layer-group .toggle { margin-bottom:5px; }
   .layer-group .toggle small { display:block; margin-left:25px; color:var(--muted);
-                               font-size:11.5px; line-height:1.3; }
+                               font-size:12.5px; line-height:1.3; }
   .layer-group.planners { border-top:1px solid var(--line); padding-top:11px; }
-  .group-note { margin:0 0 7px; font-size:11.5px; color:var(--muted); line-height:1.35; }
+  .group-note { margin:0 0 7px; font-size:12.5px; color:var(--muted); line-height:1.35; }
   .group-note a { color:var(--accent); }
   #nav-flags { display:flex; gap:6px; justify-content:center; margin-top:7px; }
   #nav-flags button {
-    margin:0; padding:3px 9px; font-size:11.5px; font-weight:600; min-height:0;
+    margin:0; padding:3px 9px; font-size:13px; font-weight:600; min-height:0;
     border-radius:999px; color:var(--muted);
   }
   #nav-flags button.active { color:var(--accent); border-color:var(--accent); }
@@ -502,8 +606,8 @@
   .build-row.selected { border-color:var(--accent); box-shadow:inset 0 0 0 1px var(--accent); }
   .build-rank { font-family:var(--font-cond); font-weight:700; margin-right:6px; }
   .build-where { font-weight:600; }
-  .build-why { color:var(--muted); font-size:12.5px; margin-top:2px; line-height:1.35; }
-  .build-alt { color:var(--muted); font-size:12px; }
+  .build-why { color:var(--muted); font-size:13px; margin-top:2px; line-height:1.35; }
+  .build-alt { color:var(--muted); font-size:12.5px; }
   #whatif { margin-top:9px; border-top:1px solid var(--line); padding-top:9px; }
   #whatif .row { gap:8px; }
   #whatif-run { flex:1; margin:0; }
@@ -511,7 +615,7 @@
   #whatif-result b { color:var(--ink); }
   .build-badge {
     display:inline-block; margin-right:6px; padding:1px 7px; border-radius:var(--r-pill);
-    background:var(--accent-soft); color:var(--accent); font-size:11px; font-weight:700;
+    background:var(--accent-soft); color:var(--accent); font-size:12px; font-weight:700;
     text-transform:lowercase; letter-spacing:.02em; vertical-align:1px;
   }
   label.wt { display:flex; align-items:center; justify-content:space-between; gap:8px;
@@ -523,7 +627,7 @@
   #nav-classify-q { font-size:13px; color:var(--muted); width:100%; }
   #nav-classify button { display:flex; flex-direction:column; align-items:center; gap:2px;
                          min-width:56px; min-height:52px; margin:0; padding:6px 8px;
-                         font-size:10.5px; font-weight:600; }
+                         font-size:12px; font-weight:600; }
   #nav-classify button span { font-size:19px; line-height:1; }
   #nav-ask { margin-top:9px; border-top:1px solid var(--line); padding-top:9px; }
   #nav-ask-text { font-size:14px; font-weight:600; margin-bottom:7px; }
@@ -549,38 +653,91 @@
     #panel {
       top:auto; bottom:0; left:0; right:0; width:auto; max-height:52%;
       border-radius:var(--r-lg) var(--r-lg) 0 0; border-bottom:none; font-size:14.5px;
-      padding:4px 14px calc(14px + env(safe-area-inset-bottom));
+      /* sideways too: in landscape the notch and the navigation bar are on
+         the sheet's left and right */
+      padding:4px calc(14px + env(safe-area-inset-right)) calc(14px + env(safe-area-inset-bottom))
+              calc(14px + env(safe-area-inset-left));
       transition:max-height .2s ease;
     }
     #panel.dragging { transition:none;
     }
-    /* the map already says where you are — the title and blurb are desktop-only */
-    #panel h1, #panel .hint { display:none; }
-    /* h1 goes, ℹ stays — it's the only way into the explanation from a phone */
-    #panel-head { justify-content:flex-end; margin-bottom:6px; }
+    /* The map already says where you are, so the title and blurb leave the
+       screen — but not the page: a screen reader still finds the heading.
+       display:none took the only heading there was. Only the intro blurb, too:
+       "#panel .hint" also hid every other hint in the panel, including the
+       result of the voice test and of a backup. */
+    #panel h1, #intro-hint {
+      position:absolute; width:1px; height:1px; margin:-1px; padding:0; overflow:hidden;
+      clip:rect(0 0 0 0); white-space:nowrap; border:0;
+    }
+    /* h1 goes, ℹ stays — it's the only way into the explanation from a phone.
+       It sits at the end of the grabber's row rather than on a row of its own,
+       which is what lets it be a full 44 px without pushing "Where to?" out of
+       the collapsed sheet. A zero-height sticky row, so it stays put above the
+       handle (also sticky) when the sheet is scrolled to a route. */
+    #panel-head { position:sticky; top:0; height:0; z-index:3; margin:0;
+      justify-content:flex-end; align-items:flex-start; }
     #panel.peek { max-height:168px; overflow:hidden; }
     #panel.half { max-height:52%; }
-    #panel.full { max-height:88%; }
+    #panel.full { max-height:min(88%, calc(100% - 8px - env(safe-area-inset-top))); }
     /* While searching (see enterSearchMode), the answers go directly under the
        field. The results list is rendered after the whole origin/destination
        block, so the round-trip block sat between "Where to?" and its own
        answers — pushing them down toward the keyboard, and reading as if they
        were round trips. It is not what anyone typing an address is after. */
     body.searching #loop-row { display:none; }
+    /* and the whole height: the map is not what anyone typing an address is
+       looking at, and every row gained under the field is a row above the
+       keyboard */
+    body.searching #panel.full { max-height:calc(100% - 8px - env(safe-area-inset-top)); }
     /* The grabber is a thin bar, but the TARGET is the full width of the
        sheet top — a 4px-tall hit area is close to undraggable with a thumb. */
+    /* Sticky: scrolled down to a route, the sheet could not be resized or
+       closed without first scrolling back up to find its handle. It spans the
+       sheet's padding too, so what scrolls under it is covered edge to edge. */
     #sheet-handle {
-      display:block; width:100%; height:28px; margin:0 0 2px; position:relative;
-      touch-action:none; cursor:grab; background:none;
+      display:block; height:44px; min-height:0; padding:0; border:0; border-radius:0;
+      width:calc(100% + 28px + env(safe-area-inset-left) + env(safe-area-inset-right));
+      margin:0 calc(-14px - env(safe-area-inset-right)) 2px calc(-14px - env(safe-area-inset-left));
+      position:sticky; top:0; z-index:2; touch-action:none; cursor:grab;
+      background:var(--solid);
     }
+    #sheet-handle:hover { background:var(--solid); }
+    /* The way off this sheet once a route is up: kept at its foot while the
+       route's details are in view, rather than below the fold under them. */
+    #nav-btn { position:sticky; bottom:env(safe-area-inset-bottom); z-index:1;
+      box-shadow:0 -6px 16px -6px rgba(10,14,18,.35); }
     #sheet-handle::before {
       content:""; position:absolute; left:50%; top:10px; transform:translateX(-50%);
       width:46px; height:5px; border-radius:3px; background:var(--muted); opacity:.4;
     }
     #sheet-handle:active { cursor:grabbing; }
     #sheet-handle:active::before { opacity:.75; }
-    button, select, input[type="search"] { min-height:40px; }
-    #modes label { padding:9px 4px; }
+    /* 44 px: Apple's and Google's minimum for a thumb, and the size at which a
+       parent holding a bike with the other hand stops mis-tapping. */
+    button, select, input[type="search"], input[type="number"], input[type="text"],
+    input[type="password"], input[type="range"] { min-height:44px; box-sizing:border-box; }
+    #about-top { width:44px; height:44px; min-width:44px; }
+    #loop-row input[type=number] { width:5.2em; }
+    .section > summary, #why summary { min-height:44px; }
+    #build-weights > summary { padding:12px 0; }
+    .od-row button, #panel select { min-width:44px; }
+    .search-row button, #rides td button, .sketchy-row button, .layer-head button {
+      min-width:44px; min-height:44px; }
+    #hazard input, #hazard select, #hazard textarea { min-height:44px; }
+    .maplibregl-ctrl-group button { width:44px; height:44px; }
+    /* Mid-ride these were 23 px tall: min-height:0 on the base rule beat the
+       phone minimum. They are the only way to see or change "my way". */
+    #nav-flags button { min-height:44px; padding:0 14px; font-size:14px; }
+    #nav-flags { gap:8px; }
+    #modes label > span { min-height:44px; padding:0 4px; box-sizing:border-box; }
+  }
+  /* iOS zooms the whole page when a field under 16 px takes focus, and leaves it
+     zoomed — the map, the sheet and the keyboard all shift. Any touch screen,
+     not only a narrow one: an iPad does it too. */
+  @media (max-width: 760px), (max-height: 500px), (pointer: coarse) {
+    #panel input, #panel select, #panel textarea, dialog input, dialog select,
+    dialog textarea { font-size:16px; }
   }
   button, input, select, label { touch-action:manipulation; }
   @media (prefers-reduced-motion: reduce) {
@@ -590,6 +747,29 @@
 </head>
 <body>
 <div id="map"></div>
+<!-- First run on a phone. The title and blurb are off screen there, the legend
+     is inside a collapsed section and the rider switch is below the fold, so a
+     first visit explained nothing: coloured lines, a search box and a hundred
+     and seventy symbols. What the app is for, what the colours mean, and who is
+     riding — which changes every route — until it is dismissed, once. -->
+<section id="first-run" aria-labelledby="first-run-title" hidden>
+  <div class="fr-head">
+    <h2 id="first-run-title">Safe bike routes for riding with kids</h2>
+    <button id="first-run-ok" type="button" aria-label="Got it — hide this">✕</button>
+  </div>
+  <ul class="fr-key" aria-label="What the lines mean">
+    <li><span data-swatch="path"></span>protected</li>
+    <li><span data-swatch="quiet_street"></span>quiet</li>
+    <li><span data-swatch="lane"></span>paint only</li>
+    <li><span data-swatch="busy_street"></span>busy — avoid</li>
+  </ul>
+  <div class="fr-who" role="group" aria-label="Who's riding?">
+    <span>Who's riding?</span>
+    <button type="button" data-profile="young_kids">young kids</button>
+    <button type="button" data-profile="older_kids">older kids</button>
+    <button type="button" data-profile="solo">solo</button>
+  </div>
+</section>
 <div id="data-update" style="display:none">⬇ Updating map data…</div>
 <div id="update-banner" style="display:none">
   <span id="update-text"></span>
@@ -673,14 +853,21 @@
     </div>
   </div>
 </div>
-<div id="panel">
-  <div id="sheet-handle" title="drag to resize"></div>
+<!-- main: the one landmark a screen reader can jump to; the map is a canvas
+     it can say nothing useful about -->
+<main id="panel" aria-label="Plan a ride">
+  <!-- Before the handle, so on a phone ℹ can sit at the end of the handle's
+       row and stay there when the sheet scrolls (both are sticky). -->
   <div id="panel-head">
     <h1>Family Bike Router</h1>
     <button id="about-top" type="button" aria-label="About — how safety is decided"
             title="About — how safety is decided, data sources and freshness">ℹ</button>
   </div>
-  <div class="hint">Cambridge, Somerville &amp; nearby towns — safety first. Search or tap the map for where you’re headed; routes start from your location.</div>
+  <!-- A button, so it can be reached and worked without a thumb: Enter or
+       Space steps it through the sizes, the arrow keys open and close it. -->
+  <button id="sheet-handle" type="button" title="drag to resize"
+          aria-label="Panel size" aria-controls="panel" aria-expanded="false"></button>
+  <div class="hint" id="intro-hint">Cambridge, Somerville &amp; nearby towns — safety first. Search or tap the map for where you’re headed; routes start from your location.</div>
   <div id="od">
     <div class="od-row">
       <input id="from-field" type="search" placeholder="Your location" autocomplete="off"
@@ -724,17 +911,25 @@
     <summary>🕘 Recent routes</summary>
     <div id="recent-list"></div>
   </details>
-  <div id="modes">
-    <label><input type="radio" name="profile" value="young_kids" checked> young kids</label>
-    <label><input type="radio" name="profile" value="older_kids"> older kids</label>
-    <label><input type="radio" name="profile" value="solo"> solo</label>
+  <!-- The text is in a span beside the radio so the selected pill can be drawn
+       with "input:checked + span", which every browser has, rather than only
+       with label:has(), which Firefox before 121 lacks — there the choice was
+       invisible, since the radios themselves are hidden. -->
+  <div id="modes" role="radiogroup" aria-label="Who's riding">
+    <label><input type="radio" name="profile" value="young_kids" checked><span>young kids</span></label>
+    <label><input type="radio" name="profile" value="older_kids"><span>older kids</span></label>
+    <label><input type="radio" name="profile" value="solo"><span>solo</span></label>
   </div>
-  <div id="loading">routing…</div>
+  <!-- Said aloud as it changes: which stage the wait is at, what the route
+       came out as, and what went wrong. None of it was, before. -->
+  <div id="sr-status" class="sr-only" role="status" aria-live="polite"></div>
+  <div id="loading" role="status" aria-live="polite">routing…</div>
   <div id="options" style="display:none"></div>
   <div id="summary">
     <div id="fingerprint">
       <div class="fp-head"><span>The ride</span><span>start → finish</span></div>
       <div id="classbar"></div>
+      <div id="class-key"></div>
       <div id="ribbon" title="the ride, start to finish: stress colors on top, elevation profile below, ▲ = busy crossing"></div>
     </div>
     <div class="stat"><span>Route</span><b id="s-dist"></b></div>
@@ -757,7 +952,7 @@
       <button id="offline-btn" title="Pre-download the map tiles along this route so it works with no signal">⬇ Offline map</button>
     </details>
   </div>
-  <div id="error"></div>
+  <div id="error" role="alert"></div>
   <div class="row"><button id="reset">Reset</button><button id="swap">⇄ Swap A/B</button></div>
 
   <details class="section">
@@ -902,7 +1097,7 @@
       <label class="toggle"><input type="checkbox" id="show-aerial"> 🛰 aerial view
         <small>MassGIS 15 cm imagery (2023) — lane paint and flexposts</small></label>
       <label class="toggle"><input type="checkbox" id="dark-mode"> 🌙 dark mode
-        <small>for night rides; follows your system setting at first</small></label>
+        <small>for night rides; stays as you set it, whatever the phone is set to</small></label>
     </div>
 
     <div class="layer-group planners">
@@ -925,7 +1120,7 @@
     <button id="about-btn">ℹ How safety is decided</button>
     <button id="rides-btn" title="Your ride history and stats (stored on this device only)">📊 Rides</button>
   </div>
-</div>
+</main>
 <dialog id="rides">
   <button id="rides-close" title="close">✕</button>
   <h2>Your rides</h2>

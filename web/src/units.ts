@@ -131,3 +131,43 @@ export function fmtSpeed(metersPerSecond: number): string {
     ? `${(metersPerSecond * 2.236936).toFixed(1)} mph`
     : `${(metersPerSecond * 3.6).toFixed(1)} km/h`;
 }
+
+/** Riding speed rounded to a whole number, for a glance at the ride banner:
+ * "12 mph", "19 km/h". A decimal there only flickers. */
+export function fmtSpeedRound(metersPerSecond: number): string {
+  return current === "imperial"
+    ? `${Math.round(metersPerSecond * 2.236936)} mph`
+    : `${Math.round(metersPerSecond * 3.6)} km/h`;
+}
+
+/** "mi" / "km", for a column header or the label beside a number field. */
+export function unitShort(): string {
+  return current === "imperial" ? "mi" : "km";
+}
+
+/** A length as it should be spoken — how long a stretch is, not how far away
+ * something is, so unlike distVoice it is never "now": "90 feet", "0.3 miles",
+ * "90 meters", "1.2 kilometers". Rounded to ten of the small unit, which is all
+ * a voice heard at 12 mph can usefully carry. */
+export function lengthVoice(m: number): string {
+  if (current === "imperial") {
+    const ft = m * FT_PER_M;
+    if (ft < FT_SWITCH) return `${Math.max(10, Math.round(ft / 10) * 10)} feet`;
+    const said = String(parseFloat((m / M_PER_MI).toFixed(1)));
+    return `${said} mile${said === "1" ? "" : "s"}`;
+  }
+  if (m < 1000) return `${Math.max(10, Math.round(m / 10) * 10)} meters`;
+  const said = String(parseFloat((m / 1000).toFixed(1)));
+  return `${said} kilometer${said === "1" ? "" : "s"}`;
+}
+
+/** The length of one ride milestone, so the cheer counts in the rider's unit. */
+export function milestoneM(): number {
+  return current === "imperial" ? M_PER_MI : 1000;
+}
+
+/** "3 miles done" / "1 kilometer done". */
+export function milestoneVoice(n: number): string {
+  const unit = current === "imperial" ? "mile" : "kilometer";
+  return `${n} ${unit}${n === 1 ? "" : "s"} done`;
+}

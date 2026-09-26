@@ -28,6 +28,19 @@ test("tells an iPhone owner the three taps, and names Safari", async ({ page }) 
   await expect(ios.locator("ol li")).toHaveCount(3);
 });
 
+test("is honest with an iPhone owner about what they are getting", async ({ page }) => {
+  await page.goto("/install/");
+  const ios = page
+    .locator("section.path")
+    .filter({ has: page.locator("h2", { hasText: "iPhone" }) });
+  // Safari forgets the tap that lets a page speak each time the app is closed:
+  // "press Test voice once" left a rider in silence on the second ride
+  await expect(ios).not.toContainText(/voice settings once/);
+  await expect(ios).toContainText(/each time the app is closed/);
+  // it is a home-screen web page, not an App Store app
+  await expect(ios).toContainText(/there is no iPhone app/);
+});
+
 test("is honest about the Android warning rather than pretending it away", async ({ page }) => {
   await page.goto("/install/");
   const android = page

@@ -127,12 +127,12 @@ export async function drawTotalsCard(totals) {
     ctx.fillText("our family rides so far", 32, 78);
     statRow(ctx, [
         [`${totals.count}`, "rides"],
-        [`${totals.km} km`, "total"],
-        [`${totals.longestKm} km`, "longest"],
+        [fmtDist(totals.km * 1000), "total"],
+        [fmtDist(totals.longestKm * 1000), "longest"],
         [`${totals.avgProtectedPct}%`, "protected"],
     ], 170);
     statRow(ctx, [
-        [`${totals.thisMonthKm} km`, "this month"],
+        [fmtDist(totals.thisMonthKm * 1000), "this month"],
         [`${totals.movingHours} h`, "time riding"],
     ], 300);
     return toBlob(canvas);

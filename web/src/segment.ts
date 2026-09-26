@@ -43,6 +43,18 @@ export const GRADE_COLORS: Record<SafetyGrade, string> = {
   F: "#d73027",
 };
 
+/** The letter's colour on each grade's badge. White was used on all five and
+ * only F passed: on B's green it was 2.3:1, on C's orange 1.8:1 — under the
+ * 3:1 that even large text needs, and unreadable in sunlight. Near-black
+ * clears 4.5:1 on A to D; F keeps white, which clears it there. */
+export const GRADE_TEXT: Record<SafetyGrade, string> = {
+  A: "#111619",
+  B: "#111619",
+  C: "#111619",
+  D: "#111619",
+  F: "#ffffff",
+};
+
 /** Classes that represent an actual bike facility, as opposed to a road we
  * merely tolerate. Used to flag one that only OSM knows about. */
 export const FACILITY_CLASSES: ProtectionClass[] = ["path", "separated", "buffered", "lane"];
@@ -92,7 +104,7 @@ export function segmentHtml(props: SegmentProps, opts: { photo: boolean } = { ph
   const label = known ? esc(CLASS_LABELS[cls] ?? cls) : "type unknown";
   const badge =
     grade !== null
-      ? `<span style="background:${GRADE_COLORS[grade]};color:#fff;border-radius:5px;` +
+      ? `<span style="background:${GRADE_COLORS[grade]};color:${GRADE_TEXT[grade]};border-radius:5px;` +
         `padding:0 6px;font-weight:700">${grade}</span> `
       : "";
   const meaning = known ? `<br>${CLASS_SAFETY[cls]}` : "";

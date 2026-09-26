@@ -164,6 +164,18 @@ describe("the totals card", () => {
     expect(all).toMatch(String(totals.km));
   });
 
+  it("draws the totals in the rider's unit", async () => {
+    // the totals card said "km" to riders who had chosen miles, while the text
+    // shared beside it said miles
+    installCanvas();
+    setUnits("imperial");
+    const totals = rideTotals([ride], new Date("2026-07-20T12:00:00Z"));
+    await drawTotalsCard(totals);
+    const all = rec.texts.join(" | ");
+    expect(all).toMatch(/3\.2 mi/);
+    expect(all).not.toMatch(/\bkm\b/);
+  });
+
   it("rejects rather than returning a broken image", async () => {
     installCanvas({ context: false });
     const totals = rideTotals([ride], new Date("2026-07-20T12:00:00Z"));

@@ -59,6 +59,7 @@ import {
   nearestMapillary,
   fillSegmentPhoto as fillPhotoSlot,
   GRADE_COLORS,
+  GRADE_TEXT,
   segmentHtml,
 } from "./segment.js";
 import type { Maneuver, RideAlert, Track } from "./nav.js";
@@ -115,12 +116,17 @@ import {
   fmtClimb,
   fmtDistTight,
   fmtSpeed,
+  fmtSpeedRound,
   fromMeters,
   getUnits,
+  lengthVoice,
+  milestoneM,
+  milestoneVoice,
   navRound,
   setUnits,
   toMeters,
   unitName,
+  unitShort,
 } from "./units.js";
 import { NetworkTiles, TileStore } from "./tiles.js";
 import { drawRideCard, drawTotalsCard, rideShareText, totalsShareText } from "./sharecard.js";
@@ -160,6 +166,162 @@ const CLASS_COLORS: Record<ProtectionClass, string> = {
   busy_street: "#d73027",
   unpaved: "#a6761d",
 };
+
+// ---------------------------------------------------------------------------
+// Safety classes told apart by more than hue
+//
+// The palette runs green to red, which is the axis colour-blind riders lose:
+// simulated for deuteranopia a quiet street and a painted lane differ by a ΔE
+// of 1.3 (the same colour), and a buffered lane and a sharrow by 6.2; for
+// protanopia an off-street path and a moderate street by 4.1. The hues stay
+// (the owner's call); each class also gets a width and a mark, the same on the
+// map, on the route, in the legend and in the ride's class bar:
+//
+//   protected (path, separated, buffered)  plain, and the widest lines
+//   quiet street / alley                   plain and thin
+//   painted lane                           a dark dash down the middle
+//   sharrow                                a row of dark dots
+//   moderate street                        dark ticks across it, spaced
+//   busy street                            dark ticks across it, close — hatched
+//
+// Ticks for the two classes a child should not be on make "warning" something
+// you can see without red. Plain means safe; marked means read the mark.
+// ---------------------------------------------------------------------------
+
+/** Line width relative to an ordinary street. */
+const CLASS_WIDTH: Record<ProtectionClass, number> = {
+  path: 1.7,
+  separated: 1.5,
+  buffered: 1.3,
+  quiet_street: 0.9,
+  service: 0.9,
+  lane: 1.3,
+  sharrow: 1.3,
+  moderate_street: 1.1,
+  busy_street: 1.25,
+};
+
+interface ClassMark {
+  id: string;
+  cls: ProtectionClass;
+  /** Mark width, as a multiple of the line it sits on. */
+  scale: number;
+  /** MapLibre dash pattern, in multiples of the mark's own width. */
+  dash: [number, number];
+  /** Round caps turn zero-length dashes into dots. */
+  round: boolean;
+}
+
+const CLASS_MARKS: ClassMark[] = [
+  { id: "lane", cls: "lane", scale: 0.3, dash: [3.2, 2.2], round: false },
+  { id: "sharrow", cls: "sharrow", scale: 0.5, dash: [0, 2.4], round: true },
+  { id: "moderate", cls: "moderate_street", scale: 2.1, dash: [0.28, 3.2], round: false },
+  { id: "busy", cls: "busy_street", scale: 2.1, dash: [0.28, 1.15], round: false },
+];
+const MARK_INK = "rgba(17,22,25,0.82)";
+/** Ticks stand out past their line, so over the dark basemap they are drawn
+ * light — dark ones there read as gaps, which is to say as dashes. */
+const TICK_INK_DARK = "rgba(236,240,244,0.85)";
+const isTick = (m: ClassMark): boolean => m.scale > 1;
+
+/** A line width that grows with zoom from `lo` to `hi` and is scaled per class. */
+function classWidth(lo: number, hi: number, scale = 1): unknown {
+  const byClass = (base: number): unknown => [
+    "*",
+    base * scale,
+    [
+      "match",
+      ["get", "cls"],
+      ...Object.entries(CLASS_WIDTH).flatMap(([cls, k]) => [cls, k]),
+      1,
+    ],
+  ];
+  return ["interpolate", ["linear"], ["zoom"], 12, byClass(lo), 16, byClass(hi)];
+}
+
+/** Every layer that draws a class mark over the network. */
+const NETWORK_MARK_LAYERS = CLASS_MARKS.map((m) => `network-mark-${m.id}`);
+
+/** A small picture of a class's line — colour, width and mark — for the legend,
+ * the about table and the ride's class key, so all three match the map. */
+function classSwatch(cls: ProtectionClass, w = 36, h = 14): string {
+  const y = h / 2;
+  const sw = 2.6 * CLASS_WIDTH[cls];
+  const mark = CLASS_MARKS.find((m) => m.cls === cls);
+  let over = "";
+  if (mark !== undefined) {
+    const mw = sw * mark.scale;
+    const dash = `${(mark.dash[0] * mw).toFixed(2)} ${(mark.dash[1] * mw).toFixed(2)}`;
+    // ticks take their ink from the theme (--tick-ink), as they do on the map
+    const ink = isTick(mark) ? `style="stroke:var(--tick-ink)"` : `stroke="${MARK_INK}"`;
+    over =
+      `<line x1="2" y1="${y}" x2="${w - 2}" y2="${y}" ${ink} ` +
+      `stroke-width="${mw.toFixed(2)}" stroke-dasharray="${dash}"` +
+      `${mark.round ? ' stroke-linecap="round"' : ""}/>`;
+  }
+  return (
+    `<svg class="swatch" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true">` +
+    `<line x1="2" y1="${y}" x2="${w - 2}" y2="${y}" stroke="${CLASS_COLORS[cls]}" ` +
+    `stroke-width="${sw.toFixed(2)}" stroke-linecap="round"/>${over}</svg>`
+  );
+}
+
+/** The construction marker: a black-and-white barricade. Nothing else on the
+ * map is black and white, so it cannot be read as a safety colour (it was
+ * orange, between the palette's amber and red) or as a place to visit (it was a
+ * dot, like the kid stops), and ~170 of them no longer look like a route. */
+function constructionIcon(): { width: number; height: number; data: Uint8Array } | null {
+  const W = 34;
+  const H = 22;
+  const c = document.createElement("canvas");
+  c.width = W;
+  c.height = H;
+  const ctx = c.getContext("2d");
+  if (ctx === null) return null;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(2, 3, W - 4, H - 6);
+  ctx.fillStyle = "#ffffff";
+  ctx.fill();
+  ctx.clip();
+  ctx.fillStyle = "#111619";
+  for (let x = -H; x < W + H; x += 9) {
+    ctx.beginPath();
+    ctx.moveTo(x, H);
+    ctx.lineTo(x + 4.5, H);
+    ctx.lineTo(x + 4.5 + H, 0);
+    ctx.lineTo(x + H, 0);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.restore();
+  ctx.lineWidth = 2.5;
+  ctx.strokeStyle = "#111619";
+  ctx.strokeRect(2, 3, W - 4, H - 6);
+  const img = ctx.getImageData(0, 0, W, H);
+  return { width: W, height: H, data: new Uint8Array(img.data.buffer) };
+}
+
+/** The marks as SVG patterns, for the ride ribbon's 12 px class strip. */
+const RIBBON_PATTERNS =
+  `<defs>` +
+  `<pattern id="rp-lane" width="9" height="12" patternUnits="userSpaceOnUse">` +
+  `<rect x="0" y="5.2" width="5" height="1.6" fill="${MARK_INK}"/></pattern>` +
+  `<pattern id="rp-sharrow" width="6" height="12" patternUnits="userSpaceOnUse">` +
+  `<circle cx="3" cy="6" r="1.4" fill="${MARK_INK}"/></pattern>` +
+  `<pattern id="rp-moderate_street" width="8" height="12" patternUnits="userSpaceOnUse">` +
+  `<rect width="1.5" height="12" fill="${MARK_INK}"/></pattern>` +
+  `<pattern id="rp-busy_street" width="4" height="12" patternUnits="userSpaceOnUse">` +
+  `<rect width="1.5" height="12" fill="${MARK_INK}"/></pattern>` +
+  `</defs>`;
+
+/** The legend's picture of construction, to match the map. */
+const CONSTRUCTION_SWATCH =
+  `<svg class="swatch" width="36" height="14" viewBox="0 0 36 14" aria-hidden="true">` +
+  `<defs><pattern id="constr-stripes" width="6" height="12" patternUnits="userSpaceOnUse" ` +
+  `patternTransform="rotate(45)"><rect width="3" height="12" fill="#111619"/></pattern></defs>` +
+  `<rect x="9" y="2" width="18" height="10" fill="#fff" stroke="#111619" stroke-width="1.5"/>` +
+  `<rect x="9" y="2" width="18" height="10" fill="url(#constr-stripes)"/></svg>`;
 
 const POI_META: Record<string, { emoji: string; label: string; color: string }> = {
   playground: { emoji: "🛝", label: "playground", color: "#e67e22" },
@@ -268,7 +430,9 @@ map.addControl(
   }),
   "top-right",
 );
-map.addControl(new maplibregl.ScaleControl({}), "bottom-left");
+// in the rider's unit: it read "500 m" under a panel that said miles
+const scaleBar = new maplibregl.ScaleControl({ unit: getUnits() });
+map.addControl(scaleBar, "bottom-left");
 
 // ---------------------------------------------------------------------------
 // state
@@ -403,6 +567,23 @@ let builtTileCount = -1;
  */
 let onTileProgress: ((done: number, total: number) => void) | undefined;
 
+/** Say something to a screen reader without putting it on screen.
+ *
+ * Route results, grades and search answers all arrive by redrawing part of the
+ * panel, which a screen reader does not notice: a blind parent asked for a
+ * route and heard nothing at all. `delayMs` lets a burst — a list redrawn on
+ * every keystroke — settle into one announcement. */
+let announceTimer: number | undefined;
+function announce(text: string, delayMs = 0): void {
+  window.clearTimeout(announceTimer);
+  announceTimer = window.setTimeout(() => {
+    const box = document.getElementById("sr-status");
+    if (box === null) return;
+    // the same words twice in a row are only announced if the node changes
+    box.textContent = box.textContent === text ? `${text}\u00a0` : text;
+  }, delayMs);
+}
+
 function showStage(text: string, sub = ""): void {
   const box = el<HTMLDivElement>("loading");
   box.innerHTML =
@@ -449,7 +630,9 @@ const manifestReady: Promise<void> = dataReady
   })
   .catch((err: unknown) => {
     const errBox = el<HTMLDivElement>("error");
-    errBox.textContent = `failed to load routing tiles: ${String(err)}`;
+    console.warn("routing tiles failed to load", err);
+    errBox.textContent =
+      "Couldn't load the route map. Check your connection, then reload the page.";
     errBox.style.display = "block";
     dataProgress();
   });
@@ -781,6 +964,46 @@ function setPoint(kind: "start" | "end", lngLat: LngLat | [number, number]): voi
 // routing
 // ---------------------------------------------------------------------------
 
+/** What went wrong, in words for a parent rather than for whoever wrote the
+ * router. Its messages ("start and end snap to the same intersection", "no
+ * path found", "failed to load routing tiles: TypeError: Failed to fetch")
+ * reached the screen as they were. The router keeps its own wording, which its
+ * tests and logs rely on; this only decides what is shown. */
+function plainError(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  // the round trip's own messages are already written for people
+  if (/try another distance/i.test(raw)) return `${raw.charAt(0).toUpperCase()}${raw.slice(1)}.`;
+  if (/same intersection/i.test(raw)) {
+    return (
+      "The start and the destination are the same spot. " +
+      "Pick a destination a little further away."
+    );
+  }
+  if (/no path found|no route/i.test(raw)) {
+    return (
+      "There's no way to ride between these two points on the streets we have mapped. " +
+      "Try a spot on a nearby street for either end."
+    );
+  }
+  if (/too far from the mapped/i.test(raw)) {
+    return (
+      "That spot is too far from any street we have mapped. " +
+      "Pick a point on or next to a street."
+    );
+  }
+  if (/isn't mapped|unmapped/i.test(raw)) {
+    return (
+      "This area isn't mapped for routing yet — the map covers Cambridge, Somerville " +
+      "and the towns around them."
+    );
+  }
+  if (/fetch|network|load|TypeError/i.test(raw)) {
+    return "Couldn't download the map needed for this route. Check your connection and try again.";
+  }
+  console.warn("route failed", err);
+  return "Something went wrong planning this route. Try again, or pick a slightly different spot.";
+}
+
 async function requestRoute(): Promise<void> {
   if (!end) return;
   await manifestReady;
@@ -796,8 +1019,11 @@ async function requestRoute(): Promise<void> {
       syncOD();
     } catch {
       loading.style.display = "none";
+      // there has been no "📍 From" control to tap for a while: name the ones
+      // that are actually on screen
       errBox.textContent =
-        "Couldn't get your location — tap \u201c\ud83d\udccd From\u201d to set a start, or enable location access.";
+        "Couldn't find where you are. Type a start in \u201cYour location\u201d, tap 🗺 to " +
+        "pick it on the map, or allow location access.";
       errBox.style.display = "block";
       return;
     }
@@ -849,7 +1075,7 @@ async function requestRoute(): Promise<void> {
     selectedId = null;
     renderOptions();
     clearOptionChips();
-    errBox.textContent = err instanceof Error ? err.message : String(err);
+    errBox.textContent = plainError(err);
     errBox.style.display = "block";
   } finally {
     loading.style.display = "none";
@@ -931,7 +1157,7 @@ async function requestLoop(): Promise<void> {
         `${meta?.emoji ?? ""} ${poi.properties.name || meta?.label || "stop"}`;
     }
   } catch (err) {
-    errBox.textContent = err instanceof Error ? err.message : String(err);
+    errBox.textContent = plainError(err);
     errBox.style.display = "block";
   } finally {
     onTileProgress = undefined;
@@ -947,8 +1173,12 @@ function clearOptionChips(): void {
 
 /** Selectable grade·time chips on the map, one per alternative (Google-style,
  * but the lead label is the safety grade, not the ETA). */
+let chipToFocus: RouteOption["id"] | null = null;
+
 function renderOptionChips(): void {
   clearOptionChips();
+  const refocus = chipToFocus;
+  chipToFocus = null;
   if (options.length < 2) return; // no choice to make
   options.forEach((o, i) => {
     const coords = o.payload.geojson.features.flatMap((f) => f.geometry.coordinates);
@@ -959,12 +1189,29 @@ function renderOptionChips(): void {
     const chip = document.createElement("div");
     chip.className = "opt-chip" + (o.id === selectedId ? " sel" : "");
     chip.style.setProperty("--g", GRADE_COLORS[o.grade]);
-    chip.textContent = `${o.grade} · ${o.payload.summary.minutes}m`;
+    chip.style.setProperty("--gt", GRADE_TEXT[o.grade]);
+    chip.textContent = `${o.grade} · ${o.payload.summary.minutes} min`;
     chip.title = `${o.label}: ${o.gradeReason}`;
+    // reachable and pressable from a keyboard, like the cards they mirror
+    chip.tabIndex = 0;
+    chip.setAttribute("role", "button");
+    chip.setAttribute("aria-pressed", String(o.id === selectedId));
+    chip.setAttribute(
+      "aria-label",
+      `${o.label}: grade ${o.grade}, ${o.payload.summary.minutes} minutes`,
+    );
     chip.addEventListener("click", (ev: Event) => {
       ev.stopPropagation();
       selectOption(o.id);
     });
+    chip.addEventListener("keydown", (ev: KeyboardEvent) => {
+      if (ev.key !== "Enter" && ev.key !== " ") return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      chipToFocus = o.id; // the chips are rebuilt; keep the focus on this one
+      selectOption(o.id);
+    });
+    if (refocus === o.id) window.setTimeout(() => chip.focus(), 0);
     optionChips.push(
       new maplibregl.Marker({ element: chip }).setLngLat(pt as [number, number]).addTo(map),
     );
@@ -1039,12 +1286,22 @@ function selectOption(id: RouteOption["id"]): void {
     renderOptions();
     renderOptionChips();
     showSummary(chosen);
+    showOptionsInSheet();
+    const s = chosen.payload.summary;
+    announce(
+      `${chosen.label} route, grade ${chosen.grade}: ${fmtDist(s.meters)}, ${s.minutes} min, ` +
+        `${s.pct_protected}% protected.` +
+        (options.length > 1 ? ` ${options.length} route options.` : ""),
+    );
   });
   if (wasNavigating && navActive) {
     // keep the spoken guidance on the line that is actually drawn
     rebuildNavFromSelected();
   }
 }
+
+/** The card to give focus back to once the cards are rebuilt. */
+let optionToFocus: RouteOption["id"] | null = null;
 
 function renderOptions(): void {
   const box = el<HTMLDivElement>("options");
@@ -1054,6 +1311,13 @@ function renderOptions(): void {
     return;
   }
   box.style.display = "block";
+  // One choice among several: a radio group to assistive tech, and walked with
+  // the arrow keys. They were click-only divs, so a keyboard could not pick
+  // Balanced or Direct at all.
+  box.setAttribute("role", "radiogroup");
+  box.setAttribute("aria-label", "Route options");
+  const refocus = optionToFocus;
+  optionToFocus = null;
   if (options.length > 1) {
     const head = document.createElement("div");
     head.className = "options-head";
@@ -1068,6 +1332,7 @@ function renderOptions(): void {
     const badge = document.createElement("b");
     badge.className = "grade";
     badge.style.background = GRADE_COLORS[o.grade];
+    badge.style.color = GRADE_TEXT[o.grade];
     badge.textContent = o.grade;
     card.appendChild(badge);
     // name on its own line, the numbers on a second — a single run-on string
@@ -1091,6 +1356,33 @@ function renderOptions(): void {
     card.addEventListener("click", () => {
       selectOption(o.id);
     });
+    const selected = o.id === selectedId;
+    card.setAttribute("role", "radio");
+    card.setAttribute("aria-checked", String(selected));
+    // one tab stop for the group, on the chosen one — the radio pattern
+    card.tabIndex = selected ? 0 : -1;
+    card.addEventListener("keydown", (ev: KeyboardEvent) => {
+      const i = options.findIndex((x) => x.id === o.id);
+      const step =
+        ev.key === "ArrowDown" || ev.key === "ArrowRight"
+          ? 1
+          : ev.key === "ArrowUp" || ev.key === "ArrowLeft"
+            ? -1
+            : 0;
+      const target =
+        step !== 0
+          ? options[(i + step + options.length) % options.length]
+          : ev.key === "Enter" || ev.key === " "
+            ? o
+            : undefined;
+      if (target === undefined) return;
+      ev.preventDefault();
+      // the cards are rebuilt when the panel repaints; keep the focus with the
+      // choice rather than dropping it on the page
+      optionToFocus = target.id;
+      selectOption(target.id);
+    });
+    if (refocus === o.id) window.setTimeout(() => card.focus(), 0);
     // hovering a card previews that route on the map
     card.addEventListener("mouseenter", () => {
       getSource("route").setData(o.payload.geojson as GeoJSON.GeoJSON);
@@ -1136,9 +1428,16 @@ function renderRibbon(option: RouteOption): void {
       `<rect x="${x.toFixed(2)}" y="0" width="${Math.max(wpx, 0.4).toFixed(2)}" height="12"` +
         ` fill="${fill}"><title>${segLabel}: ${fmtDist(seg.m)}</title></rect>`,
     );
+    // the class's map mark over its colour (see CLASS_MARKS)
+    if (seg.walk !== true && CLASS_MARKS.some((m) => m.cls === seg.cls)) {
+      rects.push(
+        `<rect x="${x.toFixed(2)}" y="0" width="${Math.max(wpx, 0.4).toFixed(2)}" height="12"` +
+          ` fill="url(#rp-${seg.cls})" pointer-events="none"/>`,
+      );
+    }
     if (seg.crossing) {
       crossings.push(
-        `<text x="${x.toFixed(2)}" y="22" font-size="9" fill="#a33">▲<title>busy crossing</title></text>`,
+        `<text x="${x.toFixed(2)}" y="23" font-size="11" fill="#a33">▲<title>busy crossing</title></text>`,
       );
     }
     linePts.push(`${x.toFixed(2)},${ey(seg.e0).toFixed(1)}`);
@@ -1147,11 +1446,12 @@ function renderRibbon(option: RouteOption): void {
   }
   holder.innerHTML =
     `<svg width="${W}" height="70" xmlns="http://www.w3.org/2000/svg">` +
+    RIBBON_PATTERNS +
     rects.join("") +
     crossings.join("") +
     `<polyline points="${linePts.join(" ")}" fill="none" stroke="#666" stroke-width="1.4"/>` +
-    `<text x="0" y="40" font-size="8" fill="#999">${fmtClimb(eMax)}</text>` +
-    `<text x="0" y="68" font-size="8" fill="#999">${fmtClimb(eMin)}</text>` +
+    `<text x="0" y="41" font-size="11" fill="currentColor" opacity=".7">${fmtClimb(eMax)}</text>` +
+    `<text x="0" y="69" font-size="11" fill="currentColor" opacity=".7">${fmtClimb(eMin)}</text>` +
     `</svg>`;
 }
 
@@ -1169,11 +1469,23 @@ function showSummary(option: RouteOption): void {
       : `+${s.detour_pct}% (${fmtDist(s.shortest_meters)})`;
   const bar = el<HTMLDivElement>("classbar");
   bar.innerHTML = "";
+  const key = el<HTMLDivElement>("class-key");
+  key.innerHTML = "";
+  const total = Object.values(s.by_class_m).reduce((a, m) => a + m, 0);
   for (const [cls, m] of Object.entries(s.by_class_m) as [ProtectionClass, number][]) {
     const seg = document.createElement("i");
-    seg.style.cssText = `flex:${m};background:${CLASS_COLORS[cls] ?? "#999"}`;
+    // the class's mark as a pattern, so the bar reads without its colours
+    seg.className = `pat-${cls}`;
+    seg.style.cssText = `flex:${m};background-color:${CLASS_COLORS[cls] ?? "#999"}`;
     seg.title = `${CLASS_LABELS[cls] ?? cls}: ${fmtDist(m)}`;
     bar.appendChild(seg);
+    // and in words, which a title attribute is not on a phone or to a keyboard
+    const pct = total > 0 ? Math.round((100 * m) / total) : 0;
+    if (pct < 1) continue;
+    const item = document.createElement("span");
+    item.innerHTML = `${classSwatch(cls, 22, 12)} `;
+    item.append(`${CLASS_LABELS[cls] ?? cls} ${pct}%`);
+    key.appendChild(item);
   }
   renderRibbon(option);
   const cautions = el<HTMLDivElement>("cautions");
@@ -1544,7 +1856,7 @@ function renderPlacesAndRecent(): void {
     const clear = document.createElement("button");
     clear.textContent = "clear history";
     clear.title = "clear recent routes";
-    clear.style.cssText = "margin-top:4px;padding:1px 8px;font-size:11px";
+    clear.style.cssText = "margin-top:4px;padding:1px 8px;font-size:13px";
     clear.addEventListener("click", () => {
       clearRecent();
       renderPlacesAndRecent();
@@ -1814,6 +2126,7 @@ async function gradeSearchResults(
     if (mine !== gradeGen) return;
     row.badge.textContent = hit.grade;
     row.badge.style.background = GRADE_COLORS[hit.grade];
+    row.badge.style.color = GRADE_TEXT[hit.grade];
     row.badge.title = `Safest route here grades ${hit.grade}`;
     row.badge.setAttribute("aria-label", `safest route grades ${hit.grade}`);
     row.sub.textContent = `${fmtDist(hit.meters)} · ${hit.minutes} min by the safest way`;
@@ -1851,8 +2164,10 @@ function renderSearchResults(rows: Ranked[], target: "start" | "end" = "end"): v
   gradeGen++; // abandon grading for whatever list was here before
   if (rows.length === 0) {
     box.textContent = "no results in this area";
+    announce("no results in this area", 700);
     return;
   }
+  announce(`${rows.length} place${rows.length === 1 ? "" : "s"} found`, 700);
   const grading: { lngLat: [number, number]; badge: HTMLElement; sub: HTMLElement }[] = [];
   for (const r of rows) {
     const row = document.createElement("div");
@@ -2211,7 +2526,7 @@ map.on("load", () => {
     ],
     paint: {
       "line-color": ["get", "color"],
-      "line-width": ["interpolate", ["linear"], ["zoom"], 12, 1.2, 16, 3.5],
+      "line-width": classWidth(1.2, 3.5) as number,
       "line-opacity": 0.75,
     },
   });
@@ -2227,11 +2542,29 @@ map.on("load", () => {
     ],
     paint: {
       "line-color": ["get", "color"],
-      "line-width": ["interpolate", ["linear"], ["zoom"], 12, 1.2, 16, 3.5],
+      "line-width": classWidth(1.2, 3.5) as number,
       "line-opacity": 0.75,
       "line-dasharray": [2, 1.4],
     },
   });
+  // each class's mark, over its line (see CLASS_MARKS). From z13: below that a
+  // street is a hairline and a pattern on it is noise.
+  for (const m of CLASS_MARKS) {
+    map.addLayer({
+      id: `network-mark-${m.id}`,
+      type: "line",
+      source: "network",
+      minzoom: 13,
+      filter: ["==", ["get", "cls"], m.cls],
+      layout: m.round ? { "line-cap": "round" } : {},
+      paint: {
+        "line-color": MARK_INK,
+        "line-width": classWidth(1.2, 3.5, m.scale) as number,
+        "line-dasharray": m.dash,
+        "line-opacity": 0.75,
+      },
+    });
+  }
   // invisible hit layer: every street stays hoverable/right-clickable even
   // when the network display is toggled off or covered by other layers
   map.addLayer({
@@ -2304,6 +2637,21 @@ map.on("load", () => {
     layout: { "line-cap": "round", "line-join": "round" },
     paint: { "line-color": ["get", "color"], "line-width": 5 },
   });
+  // the same marks on the route itself, which is drawn in the same colours
+  for (const m of CLASS_MARKS) {
+    map.addLayer({
+      id: `route-mark-${m.id}`,
+      type: "line",
+      source: "route",
+      filter: ["all", ["==", ["get", "cls"], m.cls], ["!=", ["get", "walk"], true]],
+      layout: { "line-join": "round", ...(m.round ? { "line-cap": "round" as const } : {}) },
+      paint: {
+        "line-color": MARK_INK,
+        "line-width": Math.min(9, 5 * m.scale),
+        "line-dasharray": m.dash,
+      },
+    });
+  }
   // walking stretches: white dashes over the route line
   map.addLayer({
     id: "route-walk",
@@ -2323,23 +2671,36 @@ map.on("load", () => {
     paint: { "line-color": "#8a8f98", "line-width": 6, "line-opacity": 0.85 },
   });
   map.addSource("construction", { type: "geojson", data: emptyFC() });
+  // Barricade tape — black and white, which nothing else on the map is. As
+  // orange dashes it read as a route, in a colour between the palette's amber
+  // and red. (See constructionIcon for the points.)
+  map.addLayer({
+    id: "construction-lines-base",
+    type: "line",
+    source: "construction",
+    filter: ["!=", ["geometry-type"], "Point"],
+    paint: { "line-color": "#ffffff", "line-width": 6, "line-opacity": 0.95 },
+  });
   map.addLayer({
     id: "construction-lines",
     type: "line",
     source: "construction",
     filter: ["!=", ["geometry-type"], "Point"],
-    paint: { "line-color": "#ff8c00", "line-width": 5, "line-dasharray": [1.2, 1], "line-opacity": 0.85 },
+    paint: { "line-color": "#111619", "line-width": 6, "line-dasharray": [1, 1] },
   });
+  const barricade = constructionIcon();
+  if (barricade !== null) map.addImage("construction-icon", barricade, { pixelRatio: 2 });
   map.addLayer({
     id: "construction-pts",
-    type: "circle",
+    type: "symbol",
     source: "construction",
     filter: ["==", ["geometry-type"], "Point"],
-    paint: {
-      "circle-radius": 6,
-      "circle-color": "#ff8c00",
-      "circle-stroke-color": "#7a3b00",
-      "circle-stroke-width": 2,
+    layout: {
+      "icon-image": "construction-icon",
+      "icon-allow-overlap": true,
+      "icon-ignore-placement": true,
+      // small from afar, where there are a hundred and seventy of them
+      "icon-size": ["interpolate", ["linear"], ["zoom"], 12, 0.6, 14, 0.85, 16, 1.2],
     },
   });
   for (const layer of ["construction-lines", "construction-pts"]) {
@@ -2955,6 +3316,12 @@ function setSheet(state: SheetState): void {
   panel.style.maxHeight = "";
   panel.classList.remove("peek", "half", "full");
   panel.classList.add(state);
+  const handle = el<HTMLButtonElement>("sheet-handle");
+  handle.setAttribute("aria-expanded", String(state !== "peek"));
+  handle.setAttribute(
+    "aria-label",
+    `Panel size: ${state === "peek" ? "collapsed" : state === "half" ? "half open" : "fully open"}`,
+  );
 }
 function currentSheet(): SheetState {
   const panel = el<HTMLDivElement>("panel");
@@ -2962,7 +3329,7 @@ function currentSheet(): SheetState {
 }
 (function initSheet(): void {
   const panel = el<HTMLDivElement>("panel");
-  const handle = el<HTMLDivElement>("sheet-handle");
+  const handle = el<HTMLButtonElement>("sheet-handle");
   // start collapsed: the map is the point, and a route expands the sheet
   // to "half" on its own (revealSheet)
   if (sheetLayout.matches) setSheet("peek");
@@ -3009,14 +3376,129 @@ function currentSheet(): SheetState {
   };
   handle.addEventListener("pointerup", end);
   handle.addEventListener("pointercancel", end);
+  // From a keyboard (or a switch, or a screen reader's double-tap, which
+  // arrives as a click with no pointer before it): Enter and Space step through
+  // the sizes as a tap does; the arrows open and close.
+  handle.addEventListener("click", (e: MouseEvent) => {
+    if (e.detail !== 0) return; // a real pointer tap, already handled by end()
+    const next = SHEET_STATES[(SHEET_STATES.indexOf(currentSheet()) + 1) % 3];
+    setSheet(next ?? "half");
+  });
+  handle.addEventListener("keydown", (e: KeyboardEvent) => {
+    const i = SHEET_STATES.indexOf(currentSheet());
+    const to =
+      e.key === "ArrowUp"
+        ? SHEET_STATES[Math.min(2, i + 1)]
+        : e.key === "ArrowDown"
+          ? SHEET_STATES[Math.max(0, i - 1)]
+          : undefined;
+    if (to === undefined) return;
+    e.preventDefault();
+    setSheet(to);
+  });
   // some WebViews revoke capture mid-gesture; without this the sheet sticks
   handle.addEventListener("lostpointercapture", end);
 })();
 
-/** After a route computes, make sure the sheet is at least half-open (mobile). */
+/** The trip whose answer was last brought into view, so a re-plan of the same
+ * trip (a preference changed, further down the sheet) does not yank the reader
+ * away from what they were changing. */
+let revealedTrip = "";
+/** Set when the next panel repaint should bring the route options into view. */
+let scrollToOptions = false;
+
+/** After a route computes, make sure the sheet is at least half-open (mobile),
+ * and that the answer is what it shows.
+ *
+ * "half" alone was not enough: measured on a 390x820 phone, the round-trip
+ * block, Recent routes and the rider switch filled the half-open sheet, and "3
+ * ROUTE OPTIONS" started at y=784 — the grade and ▶ Navigate needed a scroll
+ * nothing hinted at. A new trip now scrolls its options to the top of the
+ * sheet; ▶ Navigate is kept at the sheet's foot by CSS. */
 function revealSheet(): void {
-  if (currentSheet() === "peek") setSheet("half");
+  const wasPeek = currentSheet() === "peek";
+  if (wasPeek) setSheet("half");
+  if (!sheetLayout.matches) return;
+  const s = start?.getLngLat();
+  const e = end?.getLngLat();
+  const trip =
+    s && e ? `${s.lng.toFixed(5)},${s.lat.toFixed(5)}>${e.lng.toFixed(5)},${e.lat.toFixed(5)}` : "";
+  if (!wasPeek && trip === revealedTrip) return;
+  revealedTrip = trip;
+  scrollToOptions = true;
 }
+
+/** Scroll the sheet so the route options sit just under its handle. */
+function showOptionsInSheet(): void {
+  if (!scrollToOptions) return;
+  scrollToOptions = false;
+  if (!sheetLayout.matches || document.body.classList.contains("searching")) return;
+  const panel = el<HTMLDivElement>("panel");
+  const top = el<HTMLDivElement>("options").getBoundingClientRect().top;
+  const handle = el<HTMLButtonElement>("sheet-handle").offsetHeight;
+  panel.scrollTop += top - (panel.getBoundingClientRect().top + handle + 6);
+}
+
+/** iOS scrolls the whole page to bring a focused field above its keyboard, and
+ * does not always scroll it back when the keyboard goes: the map and the sheet
+ * were left shifted up by the keyboard's height. Nothing here is meant to
+ * scroll the page itself, so any offset is leftover. */
+function resetPageScroll(): void {
+  if (window.scrollX !== 0 || window.scrollY !== 0) window.scrollTo(0, 0);
+}
+window.visualViewport?.addEventListener("resize", () => {
+  if (!document.body.classList.contains("searching")) resetPageScroll();
+});
+
+/** Remembered once dismissed; a phone that has seen it once does not again. */
+const FIRST_RUN_KEY = "firstRunSeen";
+
+/** The first-run card on a phone (see #first-run in index.html): what the app
+ * is for, what the line colours and marks mean, and who is riding — the one
+ * choice that changes every route, which otherwise sat below the fold. */
+(function initFirstRun(): void {
+  let seen = false;
+  try {
+    seen = localStorage.getItem(FIRST_RUN_KEY) === "1";
+  } catch {
+    /* private mode: show it, it just won't be remembered */
+  }
+  if (seen || !sheetLayout.matches) return;
+  const card = el<HTMLElement>("first-run");
+  for (const slot of card.querySelectorAll<HTMLElement>("[data-swatch]")) {
+    slot.innerHTML = classSwatch(slot.dataset["swatch"] as ProtectionClass, 28, 12);
+  }
+  const who = [...card.querySelectorAll<HTMLButtonElement>("[data-profile]")];
+  const sync = (): void => {
+    const current = document.querySelector<HTMLInputElement>("input[name=profile]:checked")?.value;
+    for (const b of who) b.setAttribute("aria-pressed", String(b.dataset["profile"] === current));
+  };
+  for (const b of who) {
+    b.addEventListener("click", () => {
+      const radio = document.querySelector<HTMLInputElement>(
+        `input[name=profile][value="${b.dataset["profile"] ?? ""}"]`,
+      );
+      if (radio === null || radio.checked) return;
+      radio.checked = true;
+      radio.dispatchEvent(new Event("change", { bubbles: true }));
+      sync();
+    });
+  }
+  // the same choice made in the panel shows here too
+  for (const radio of document.querySelectorAll<HTMLInputElement>("input[name=profile]")) {
+    radio.addEventListener("change", sync);
+  }
+  sync();
+  el<HTMLButtonElement>("first-run-ok").addEventListener("click", () => {
+    card.hidden = true;
+    try {
+      localStorage.setItem(FIRST_RUN_KEY, "1");
+    } catch {
+      /* private mode */
+    }
+  });
+  card.hidden = false;
+})();
 
 // ---------------------------------------------------------------------------
 // Searching on a phone
@@ -3043,18 +3525,26 @@ function enterSearchMode(field: HTMLInputElement): void {
   if (!sheetLayout.matches) return;
   if (sheetBeforeSearch === null) sheetBeforeSearch = currentSheet();
   document.body.classList.add("searching");
-  setSheet("full");
-  // Field to the top of the sheet. Measured as a difference of two rects so it
-  // holds while the sheet is still animating open: both move together.
   const panel = el<HTMLDivElement>("panel");
+  // Open at once, not over the 0.2 s transition. Animated, the sheet was still
+  // growing when the field was lifted, so the lift ran twice (now and 250 ms
+  // later) and iOS, scrolling the focused field into view on its own schedule,
+  // could act on either height. "dragging" is the class that already turns the
+  // transition off; measuring below forces the full height to apply under it.
+  panel.classList.add("dragging");
+  setSheet("full");
+  // Field to the top of the sheet, just under its (sticky) handle.
+  const handle = el<HTMLButtonElement>("sheet-handle");
   const lift = (): void => {
     const gap = field.getBoundingClientRect().top - panel.getBoundingClientRect().top;
-    panel.scrollTop += gap - 8;
+    panel.scrollTop += gap - handle.offsetHeight - 6;
   };
   lift();
-  // and again once the height transition has settled, since content that was
-  // clipped a moment ago is only now scrollable
-  window.setTimeout(lift, 250);
+  window.requestAnimationFrame(() => {
+    panel.classList.remove("dragging");
+    // content hidden a moment ago (the loop block) may have changed the layout
+    lift();
+  });
 }
 
 /** Leave search mode. `chose` means a place was picked, so the sheet should
@@ -3065,6 +3555,7 @@ function leaveSearchMode(chose: boolean): void {
   const before = sheetBeforeSearch ?? "half";
   sheetBeforeSearch = null;
   el<HTMLDivElement>("panel").scrollTop = 0;
+  resetPageScroll();
   // A chosen place gets the map back, with the route options under it — "half",
   // the state a computed route asks for anyway (revealSheet). A search walked
   // away from goes back to where it started.
@@ -3178,7 +3669,7 @@ el<HTMLButtonElement>("loop-btn").addEventListener("click", () => {
  * so both stay in sync from either place. */
 function setNetworkVisible(on: boolean): void {
   el<HTMLInputElement>("show-net").checked = on;
-  for (const layer of ["network", "network-unconfirmed"]) {
+  for (const layer of ["network", "network-unconfirmed", ...NETWORK_MARK_LAYERS]) {
     map.setLayoutProperty(layer, "visibility", on ? "visible" : "none");
   }
   applyBasemap(); // casing + line widths key off the same flag
@@ -3484,15 +3975,24 @@ document.addEventListener("keydown", (e: KeyboardEvent) => {
   }
 });
 
-// legend
+// legend: each class as it is drawn — colour, width and mark — so the marks
+// are explained where the colours are, and construction beside them
 const legend = el<HTMLDivElement>("legend");
 for (const [cls, label] of Object.entries(CLASS_LABELS) as [ProtectionClass, string][]) {
-  if (cls === "service") continue; // same color as quiet_street
-  const sw = document.createElement("i");
-  sw.style.background = CLASS_COLORS[cls];
+  if (cls === "service") continue; // drawn as quiet_street
+  const sw = document.createElement("span");
+  sw.innerHTML = classSwatch(cls);
   legend.appendChild(sw);
   const span = document.createElement("span");
   span.textContent = label;
+  legend.appendChild(span);
+}
+{
+  const sw = document.createElement("span");
+  sw.innerHTML = CONSTRUCTION_SWATCH;
+  legend.appendChild(sw);
+  const span = document.createElement("span");
+  span.textContent = "construction — routes avoid it";
   legend.appendChild(span);
 }
 
@@ -3513,8 +4013,7 @@ function fillAbout(): void {
     .sort((a, b) => a[1] - b[1])
     .map(
       ([cls, m]) =>
-        `<tr><td><i style="display:inline-block;width:12px;height:5px;border-radius:2px;` +
-        `background:${CLASS_COLORS[cls]}"></i> ${CLASS_LABELS[cls]}</td>` +
+        `<tr><td>${classSwatch(cls, 28, 12)} ${CLASS_LABELS[cls]}</td>` +
         `<td>×${m}</td></tr>`,
     );
   rows.push(
@@ -3776,13 +4275,13 @@ function renderRides(): void {
   table.innerHTML =
     rides.length === 0
       ? ""
-      : `<tr><th>date</th><th>${unitName() === "miles" ? "mi" : "km"}</th><th>moving</th>` +
+      : `<tr><th>date</th><th>${unitShort()}</th><th>moving</th>` +
         `<th>avg</th><th>protected</th><th></th></tr>`;
   for (const ride of rides) {
     const tr = table.insertRow();
     const d = new Date(ride.startedAt);
     tr.insertCell().textContent = d.toLocaleDateString([], { month: "short", day: "numeric" });
-    tr.insertCell().textContent = (ride.meters / 1000).toFixed(1);
+    tr.insertCell().textContent = fromMeters(ride.meters).toFixed(1);
     tr.insertCell().textContent = `${Math.round(ride.movingS / 60)} min`;
     tr.insertCell().textContent =
       ride.movingS > 0 ? fmtSpeed(ride.meters / ride.movingS) : "–";
@@ -4070,7 +4569,7 @@ function finishAndSaveRide(): void {
   stashInProgress(null);
   if (!ride) return;
   saveRide(ride);
-  speak(`ride saved. ${(ride.meters / 1000).toFixed(1)} kilometers.`, "chat");
+  speak(`ride saved. ${lengthVoice(ride.meters)}.`, "chat");
 }
 
 function vibrate(pattern: number[]): void {
@@ -4154,7 +4653,7 @@ function drainSpeech(): void {
  * an answer before the ride rather than after it. */
 async function runVoiceTest(): Promise<void> {
   const box = el<HTMLDivElement>("voice-status");
-  const line = "Voice test. In 200 meters, turn left onto the path.";
+  const line = `Voice test. In ${distVoice(200)}, turn left onto the path.`;
   box.textContent = "testing…";
   if (await nativeSpeak(line)) {
     box.textContent =
@@ -4261,7 +4760,7 @@ function navUpdateTrip(remainingM: number, straight = false): void {
   el<HTMLElement>("nav-remaining").textContent =
     `${straight ? "~" : ""}${fmtDist(remainingM)} · ${mins} min · eta ${clock}`;
   el<HTMLElement>("nav-speed").textContent =
-    navSpeed > 0.8 ? `${((navSpeed * 3600) / 1000).toFixed(0)} km/h` : "";
+    navSpeed > 0.8 ? fmtSpeedRound(navSpeed) : "";
 }
 
 function navUpdateBanner(distToNext: number, remainingM: number): void {
@@ -4426,7 +4925,7 @@ function closeAsk(): void {
  * wording is written for the moment of arrival, so the staged calls need their
  * own phrasing. Returns null for ordinary turns. */
 function arrivalPhrase(voice: string, metres: number): string | null {
-  return /have arrived/i.test(voice) ? `in ${metres} meters, your destination` : null;
+  return /have arrived/i.test(voice) ? `in ${navDistVoice(metres)}, your destination` : null;
 }
 
 /** Where we're going, for the arrival line. */
@@ -4769,16 +5268,16 @@ function navOnFix(fix: NativeFix): void {
     hideRideAlert();
   }
 
-  // kid morale: kilometer milestones and the halfway mark
+  // kid morale: a milestone every mile (or kilometre) and the halfway mark
   // Catch up silently on the first fix: joining a route part-way (a train leg,
   // a cold GPS, a replan) fired "1 kilometer done… 20 kilometers done" one per
   // second before any guidance.
-  if (navNextKm === 1 && snap.alongM > 1500) {
-    navNextKm = Math.floor(snap.alongM / 1000) + 1;
+  if (navNextKm === 1 && snap.alongM > 1.5 * milestoneM()) {
+    navNextKm = Math.floor(snap.alongM / milestoneM()) + 1;
     navHalfway = snap.alongM >= navTrack.totalM / 2;
   }
-  if (snap.alongM >= navNextKm * 1000) {
-    speak(`${navNextKm} kilometer${navNextKm > 1 ? "s" : ""} done. nice riding!`, "chat");
+  if (snap.alongM >= navNextKm * milestoneM()) {
+    speak(`${milestoneVoice(navNextKm)}. nice riding!`, "chat");
     navNextKm++;
   }
   if (!navHalfway && navTrack.totalM > 1500 && snap.alongM >= navTrack.totalM / 2) {
@@ -4797,13 +5296,13 @@ function navOnFix(fix: NativeFix): void {
       el<HTMLButtonElement>("nav-resume").style.display = "inline-block";
     } else {
       speak(
-        `you have arrived. ${(navTrack.totalM / 1000).toFixed(1)} kilometers — nicely done!`,
+        `you have arrived. ${lengthVoice(navTrack.totalM)} — nicely done!`,
       );
       el<HTMLElement>("nav-icon").textContent = "🏁";
       el<HTMLElement>("nav-dist").textContent = "Arrived";
       el<HTMLElement>("nav-street").textContent = navDestLabel ?? "you're there";
       el<HTMLElement>("nav-remaining").textContent =
-        `${(navTrack.totalM / 1000).toFixed(1)} km ridden`;
+        `${fmtDist(navTrack.totalM)} ridden`;
       el<HTMLElement>("nav-speed").textContent = "";
       hideRideAlert();
       finishAndSaveRide();
@@ -5010,13 +5509,26 @@ el<HTMLButtonElement>("nav-hazard").addEventListener("click", () => {
   const pref = el<HTMLSelectElement>("units-pref");
   pref.value = getUnits();
   const syncUnitLabels = (): void => {
-    el<HTMLSpanElement>("loop-unit").textContent = unitName() === "miles" ? "mi" : "km";
+    el<HTMLSpanElement>("loop-unit").textContent = unitShort();
+    // The walking budget is stored in metres (the router's unit) and its
+    // options keep those values; only what they read as follows the rider.
+    // Feet round to tens: "330 ft" is a figure, "328 ft" is a conversion.
+    for (const opt of el<HTMLSelectElement>("walk-max").options) {
+      const m = Number(opt.value);
+      const ft = m * 3.28084;
+      opt.textContent =
+        getUnits() === "imperial" && ft < 1000 ? `${Math.round(ft / 10) * 10} ft` : fmtDistTight(m);
+    }
+    el<HTMLSpanElement>("shed-budget-label").textContent = fmtDistTight(
+      Number(el<HTMLInputElement>("shed-budget").value) * 1000,
+    );
   };
   syncUnitLabels();
   pref.addEventListener("change", () => {
     const wasM = toMeters(Number(el<HTMLInputElement>("loop-dist").value) || 0);
     setUnits(pref.value === "metric" ? "metric" : "imperial");
     syncUnitLabels();
+    scaleBar.setUnit(getUnits());
     // the number in the box meant a distance, not a digit: keep the distance
     if (wasM > 0) {
       el<HTMLInputElement>("loop-dist").value = String(Math.round(fromMeters(wasM) * 10) / 10);
@@ -5072,9 +5584,9 @@ const LAYER_DEFAULTS: Record<string, boolean> = {
   "show-lanes": false,
   "show-access": false,
   "show-build": false,
-  // dark-mode is deliberately absent. It follows the system setting and belongs
-  // to the rider, not to the map: resetting the layers on a night ride should
-  // not white out the screen.
+  // dark-mode is deliberately absent. It is the rider's setting, not a map
+  // layer: resetting the layers on a night ride should not white out the
+  // screen.
 };
 
 el<HTMLButtonElement>("layers-reset").addEventListener("click", () => {
@@ -5320,8 +5832,8 @@ el<HTMLButtonElement>("offline-btn").addEventListener("click", () => {
 });
 
 // ---------------------------------------------------------------------------
-// dark mode (night rides): dark basemap + dark UI, persisted; defaults to the
-// system color scheme
+// dark mode (night rides): dark basemap + dark UI, persisted; light until
+// the rider turns it on, whatever the system theme (see applyDark below)
 // ---------------------------------------------------------------------------
 
 function applyBasemap(): void {
@@ -5379,9 +5891,17 @@ function applyBasemap(): void {
     }
     // over photos the lanes need contrast: dark halo + thicker, solid lines
     vis("network-casing", aerial && netOn);
-    const width: unknown = aerial
-      ? ["interpolate", ["linear"], ["zoom"], 12, 2.0, 16, 5.0]
-      : ["interpolate", ["linear"], ["zoom"], 12, 1.2, 16, 3.5];
+    const [lo, hi] = aerial ? [2.0, 5.0] : [1.2, 3.5];
+    const width: unknown = classWidth(lo, hi);
+    for (const m of CLASS_MARKS) {
+      const id = `network-mark-${m.id}`;
+      if (map.getLayer(id) === undefined) continue;
+      map.setPaintProperty(id, "line-width", classWidth(lo, hi, m.scale));
+      map.setPaintProperty(id, "line-opacity", plain ? 0.3 : 0.75);
+      if (isTick(m)) {
+        map.setPaintProperty(id, "line-color", dark && !aerial ? TICK_INK_DARK : MARK_INK);
+      }
+    }
     for (const layer of ["network", "network-unconfirmed"]) {
       if (map.getLayer(layer) === undefined) continue;
       map.setPaintProperty(layer, "line-width", width);
@@ -5428,7 +5948,7 @@ el<HTMLInputElement>("show-aerial").addEventListener("change", applyBasemap);
 
 el<HTMLInputElement>("show-constr").addEventListener("change", (e: Event) => {
   const on = (e.target as HTMLInputElement).checked;
-  for (const layer of ["construction-lines", "construction-pts"]) {
+  for (const layer of ["construction-lines-base", "construction-lines", "construction-pts"]) {
     map.setLayoutProperty(layer, "visibility", on ? "visible" : "none");
   }
 });
@@ -5815,8 +6335,9 @@ async function runWhatIf(pid: string): Promise<void> {
     const gain = Math.round((after.reachableKm - before.reachableKm) * 10) / 10;
     out.textContent =
       gain > 0
-        ? `From your start, ${gain} km more of kid-safe street comes into reach ` +
-          `(${before.reachableKm} → ${after.reachableKm} km).`
+        ? `From your start, ${fmtDistTight(gain * 1000)} more of kid-safe street comes into ` +
+          `reach (${fmtDistTight(before.reachableKm * 1000)} → ` +
+          `${fmtDistTight(after.reachableKm * 1000)}).`
         : "From your start, this one doesn't change what's in reach.";
     return;
   }
@@ -5836,11 +6357,11 @@ async function runWhatIf(pid: string): Promise<void> {
     out.textContent = "couldn't re-plan with that built";
     return;
   }
-  const dKm = Math.round((now.meters - was.meters) / 100) / 10;
+  const dM = now.meters - was.meters;
   const dProt = now.pct_protected - was.pct_protected;
   const parts: string[] = [];
   if (dProt !== 0) parts.push(`${dProt > 0 ? "+" : ""}${dProt}% protected`);
-  if (Math.abs(dKm) >= 0.1) parts.push(`${dKm > 0 ? "+" : ""}${dKm} km`);
+  if (Math.abs(dM) >= 50) parts.push(`${dM > 0 ? "+" : "−"}${fmtDist(Math.abs(dM))}`);
   out.innerHTML = "";
   const line = document.createElement("b");
   line.textContent =
@@ -5959,7 +6480,7 @@ function describeMeta(meta: PriorityMeta): void {
     pct === undefined
       ? "Candidate projects, ranked by how much safe network they'd open up."
       : `${pct}% of ${who} in the mapped towns can't reach a school, playground or ` +
-        `library within ${Math.round((meta.access?.budget_m ?? 0) / 100) / 10} km of ` +
+        `library within ${fmtDistTight(meta.access?.budget_m ?? 0)} of ` +
         "perceived distance. These are the projects that would change that most.";
   const limits = meta.limits ?? [];
   // A field the build did not record is not a zero. "Measured 0 candidates

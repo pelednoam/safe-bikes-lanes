@@ -2,6 +2,7 @@
 // and GPS-to-route snapping. Pure functions — the UI wiring lives in app.ts.
 
 import type { ProtectionClass, RoutePayload } from "./types.js";
+import { lengthVoice } from "./units.js";
 
 export interface Maneuver {
   /** Cumulative distance along the route where the maneuver happens. */
@@ -268,7 +269,7 @@ export function buildAlerts(payload: RoutePayload): RideAlert[] {
       const label = ALERT_CLASS_LABEL[runCls] ?? "a stressful street";
       alerts.push({
         atM: runStart,
-        voice: `entering ${label} for ${Math.round(runLen / 10) * 10} meters. ride carefully.`,
+        voice: `entering ${label} for ${lengthVoice(runLen)}. ride carefully.`,
       });
     }
     runStart = -1;
@@ -287,7 +288,7 @@ export function buildAlerts(payload: RoutePayload): RideAlert[] {
     } else if (walkRun >= 0) {
       alerts.push({
         atM: walkRun,
-        voice: `hop off and walk the bike for about ${Math.round(walkLen / 10) * 10} meters.`,
+        voice: `hop off and walk the bike for about ${lengthVoice(walkLen)}.`,
       });
       alerts.push({ atM: cum, voice: "you can ride again." });
       walkRun = -1;
@@ -311,7 +312,7 @@ export function buildAlerts(payload: RoutePayload): RideAlert[] {
   if (walkRun >= 0) {
     alerts.push({
       atM: walkRun,
-      voice: `hop off and walk the bike for about ${Math.round(walkLen / 10) * 10} meters.`,
+      voice: `hop off and walk the bike for about ${lengthVoice(walkLen)}.`,
     });
   }
   alerts.sort((a, b) => a.atM - b.atM);

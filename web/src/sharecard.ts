@@ -144,8 +144,8 @@ export async function drawTotalsCard(totals: RideTotals): Promise<Blob> {
     ctx,
     [
       [`${totals.count}`, "rides"],
-      [`${totals.km} km`, "total"],
-      [`${totals.longestKm} km`, "longest"],
+      [fmtDist(totals.km * 1000), "total"],
+      [fmtDist(totals.longestKm * 1000), "longest"],
       [`${totals.avgProtectedPct}%`, "protected"],
     ],
     170,
@@ -153,7 +153,7 @@ export async function drawTotalsCard(totals: RideTotals): Promise<Blob> {
   statRow(
     ctx,
     [
-      [`${totals.thisMonthKm} km`, "this month"],
+      [fmtDist(totals.thisMonthKm * 1000), "this month"],
       [`${totals.movingHours} h`, "time riding"],
     ],
     300,

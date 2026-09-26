@@ -12,6 +12,8 @@ import {
   photosPaused,
   fetchSegmentPhoto,
   fillSegmentPhoto,
+  GRADE_COLORS,
+  GRADE_TEXT,
   nearestMapillary,
   segmentHtml,
 } from "../src/segment.js";
@@ -70,6 +72,33 @@ describe("the street card", () => {
   it("only leaves a photo slot when there's a token to fill it", () => {
     expect(segmentHtml({ cls: "lane" }, { photo: true })).toContain("data-seg-photo");
     expect(segmentHtml({ cls: "lane" }, { photo: false })).not.toContain("data-seg-photo");
+  });
+});
+
+describe("the grade letters can be read", () => {
+  // WCAG relative luminance and contrast ratio
+  const lum = (hex: string): number => {
+    const c = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+    const f = (v: number): number => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+    return 0.2126 * f(c[0] ?? 0) + 0.7152 * f(c[1] ?? 0) + 0.0722 * f(c[2] ?? 0);
+  };
+  const ratio = (a: string, b: string): number => {
+    const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
+    return ((hi ?? 0) + 0.05) / ((lo ?? 0) + 0.05);
+  };
+
+  it("on every grade's colour, at the ratio small text needs", () => {
+    // white on B was 2.3:1 and on C 1.8:1 — below even the large-text 3:1,
+    // on the chips a parent reads on the map in sunlight
+    for (const g of ["A", "B", "C", "D", "F"] as const) {
+      expect(ratio(GRADE_TEXT[g], GRADE_COLORS[g]), `grade ${g}`).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it("and the street card uses them", () => {
+    expect(segmentHtml({ cls: "lane", name: "Cedar Street" })).toContain(
+      `color:${GRADE_TEXT.C}`,
+    );
   });
 });
 
