@@ -57,7 +57,15 @@ export function listRecent() {
 }
 export function pushRecent(entry) {
     const updated = recentWithNew(listRecent(), entry);
-    localStorage.setItem(RECENT_KEY, JSON.stringify(updated));
+    // Called at the end of every successful route. Unguarded, a full or blocked
+    // store threw into the router's own error handling, which then cleared the
+    // route it had just drawn and showed the storage error in its place.
+    try {
+        localStorage.setItem(RECENT_KEY, JSON.stringify(updated));
+    }
+    catch {
+        // the trip just won't be in the recent list
+    }
     return updated;
 }
 export function clearRecent() {

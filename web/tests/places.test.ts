@@ -155,4 +155,18 @@ describe("recent routes", () => {
     localStorage.setItem("recentRoutes", "{not json");
     expect(listRecent()).toEqual([]);
   });
+
+  it("a store that refuses the write does not throw into the router", () => {
+    // pushRecent runs at the end of every successful route, inside its error
+    // handling: a throw here cleared the route just drawn
+    const refuse = (): never => {
+      throw new DOMException("The quota has been exceeded.", "QuotaExceededError");
+    };
+    (globalThis as unknown as { localStorage: unknown }).localStorage = {
+      getItem: () => null,
+      setItem: refuse,
+      removeItem: refuse,
+    };
+    expect(() => pushRecent(route("one", 1))).not.toThrow();
+  });
 });

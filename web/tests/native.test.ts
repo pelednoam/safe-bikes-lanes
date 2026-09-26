@@ -97,6 +97,27 @@ describe("speaking on the phone", () => {
     expect(await nativeSpeak("turn left")).toBe(true);
     expect(spoke).toBe(true);
   });
+
+  it("can be silenced mid-line, and silencing nothing is harmless", async () => {
+    // mute and the end of a ride only ever cancelled the WebView's engine,
+    // which on the phone is not the one talking
+    let stops = 0;
+    installCapacitor({
+      speak: async () => undefined,
+      stop: async () => {
+        stops++;
+        throw new Error("nothing to stop");
+      },
+    });
+    const { nativeStopSpeech } = await import("../src/native.js");
+    nativeStopSpeech();
+    expect(stops).toBe(1);
+
+    vi.resetModules();
+    (globalThis as unknown as { window: Record<string, unknown> }).window = {};
+    const web = await import("../src/native.js");
+    expect(() => web.nativeStopSpeech()).not.toThrow();
+  });
 });
 
 describe("counting the WebView's own voices", () => {
