@@ -105,12 +105,17 @@ import {
   fmtClimb,
   fmtDistTight,
   fmtSpeed,
+  fmtSpeedRound,
   fromMeters,
   getUnits,
+  lengthVoice,
+  milestoneM,
+  milestoneVoice,
   navRound,
   setUnits,
   toMeters,
   unitName,
+  unitShort,
 } from "./units.js";
 import { NetworkTiles, TileStore } from "./tiles.js";
 import { drawRideCard, drawTotalsCard, rideShareText, totalsShareText } from "./sharecard.js";
@@ -935,7 +940,7 @@ function renderOptionChips(): void {
     const chip = document.createElement("div");
     chip.className = "opt-chip" + (o.id === selectedId ? " sel" : "");
     chip.style.setProperty("--g", GRADE_COLORS[o.grade]);
-    chip.textContent = `${o.grade} · ${o.payload.summary.minutes}m`;
+    chip.textContent = `${o.grade} · ${o.payload.summary.minutes} min`;
     chip.title = `${o.label}: ${o.gradeReason}`;
     chip.addEventListener("click", (ev: Event) => {
       ev.stopPropagation();
@@ -3752,13 +3757,13 @@ function renderRides(): void {
   table.innerHTML =
     rides.length === 0
       ? ""
-      : `<tr><th>date</th><th>${unitName() === "miles" ? "mi" : "km"}</th><th>moving</th>` +
+      : `<tr><th>date</th><th>${unitShort()}</th><th>moving</th>` +
         `<th>avg</th><th>protected</th><th></th></tr>`;
   for (const ride of rides) {
     const tr = table.insertRow();
     const d = new Date(ride.startedAt);
     tr.insertCell().textContent = d.toLocaleDateString([], { month: "short", day: "numeric" });
-    tr.insertCell().textContent = (ride.meters / 1000).toFixed(1);
+    tr.insertCell().textContent = fromMeters(ride.meters).toFixed(1);
     tr.insertCell().textContent = `${Math.round(ride.movingS / 60)} min`;
     tr.insertCell().textContent =
       ride.movingS > 0 ? fmtSpeed(ride.meters / ride.movingS) : "–";
@@ -4046,7 +4051,7 @@ function finishAndSaveRide(): void {
   stashInProgress(null);
   if (!ride) return;
   saveRide(ride);
-  speak(`ride saved. ${(ride.meters / 1000).toFixed(1)} kilometers.`, "chat");
+  speak(`ride saved. ${lengthVoice(ride.meters)}.`, "chat");
 }
 
 function vibrate(pattern: number[]): void {
@@ -4130,7 +4135,7 @@ function drainSpeech(): void {
  * an answer before the ride rather than after it. */
 async function runVoiceTest(): Promise<void> {
   const box = el<HTMLDivElement>("voice-status");
-  const line = "Voice test. In 200 meters, turn left onto the path.";
+  const line = `Voice test. In ${distVoice(200)}, turn left onto the path.`;
   box.textContent = "testing…";
   if (await nativeSpeak(line)) {
     box.textContent =
@@ -4237,7 +4242,7 @@ function navUpdateTrip(remainingM: number, straight = false): void {
   el<HTMLElement>("nav-remaining").textContent =
     `${straight ? "~" : ""}${fmtDist(remainingM)} · ${mins} min · eta ${clock}`;
   el<HTMLElement>("nav-speed").textContent =
-    navSpeed > 0.8 ? `${((navSpeed * 3600) / 1000).toFixed(0)} km/h` : "";
+    navSpeed > 0.8 ? fmtSpeedRound(navSpeed) : "";
 }
 
 function navUpdateBanner(distToNext: number, remainingM: number): void {
@@ -4321,7 +4326,7 @@ function closeAsk(): void {
  * wording is written for the moment of arrival, so the staged calls need their
  * own phrasing. Returns null for ordinary turns. */
 function arrivalPhrase(voice: string, metres: number): string | null {
-  return /have arrived/i.test(voice) ? `in ${metres} meters, your destination` : null;
+  return /have arrived/i.test(voice) ? `in ${navDistVoice(metres)}, your destination` : null;
 }
 
 /** Where we're going, for the arrival line. */
@@ -4664,16 +4669,16 @@ function navOnFix(fix: NativeFix): void {
     hideRideAlert();
   }
 
-  // kid morale: kilometer milestones and the halfway mark
+  // kid morale: a milestone every mile (or kilometre) and the halfway mark
   // Catch up silently on the first fix: joining a route part-way (a train leg,
   // a cold GPS, a replan) fired "1 kilometer done… 20 kilometers done" one per
   // second before any guidance.
-  if (navNextKm === 1 && snap.alongM > 1500) {
-    navNextKm = Math.floor(snap.alongM / 1000) + 1;
+  if (navNextKm === 1 && snap.alongM > 1.5 * milestoneM()) {
+    navNextKm = Math.floor(snap.alongM / milestoneM()) + 1;
     navHalfway = snap.alongM >= navTrack.totalM / 2;
   }
-  if (snap.alongM >= navNextKm * 1000) {
-    speak(`${navNextKm} kilometer${navNextKm > 1 ? "s" : ""} done. nice riding!`, "chat");
+  if (snap.alongM >= navNextKm * milestoneM()) {
+    speak(`${milestoneVoice(navNextKm)}. nice riding!`, "chat");
     navNextKm++;
   }
   if (!navHalfway && navTrack.totalM > 1500 && snap.alongM >= navTrack.totalM / 2) {
@@ -4692,13 +4697,13 @@ function navOnFix(fix: NativeFix): void {
       el<HTMLButtonElement>("nav-resume").style.display = "inline-block";
     } else {
       speak(
-        `you have arrived. ${(navTrack.totalM / 1000).toFixed(1)} kilometers — nicely done!`,
+        `you have arrived. ${lengthVoice(navTrack.totalM)} — nicely done!`,
       );
       el<HTMLElement>("nav-icon").textContent = "🏁";
       el<HTMLElement>("nav-dist").textContent = "Arrived";
       el<HTMLElement>("nav-street").textContent = navDestLabel ?? "you're there";
       el<HTMLElement>("nav-remaining").textContent =
-        `${(navTrack.totalM / 1000).toFixed(1)} km ridden`;
+        `${fmtDist(navTrack.totalM)} ridden`;
       el<HTMLElement>("nav-speed").textContent = "";
       hideRideAlert();
       finishAndSaveRide();
@@ -4921,7 +4926,19 @@ el<HTMLButtonElement>("nav-hazard").addEventListener("click", () => {
   const pref = el<HTMLSelectElement>("units-pref");
   pref.value = getUnits();
   const syncUnitLabels = (): void => {
-    el<HTMLSpanElement>("loop-unit").textContent = unitName() === "miles" ? "mi" : "km";
+    el<HTMLSpanElement>("loop-unit").textContent = unitShort();
+    // The walking budget is stored in metres (the router's unit) and its
+    // options keep those values; only what they read as follows the rider.
+    // Feet round to tens: "330 ft" is a figure, "328 ft" is a conversion.
+    for (const opt of el<HTMLSelectElement>("walk-max").options) {
+      const m = Number(opt.value);
+      const ft = m * 3.28084;
+      opt.textContent =
+        getUnits() === "imperial" && ft < 1000 ? `${Math.round(ft / 10) * 10} ft` : fmtDistTight(m);
+    }
+    el<HTMLSpanElement>("shed-budget-label").textContent = fmtDistTight(
+      Number(el<HTMLInputElement>("shed-budget").value) * 1000,
+    );
   };
   syncUnitLabels();
   pref.addEventListener("change", () => {
@@ -5697,8 +5714,9 @@ async function runWhatIf(pid: string): Promise<void> {
     const gain = Math.round((after.reachableKm - before.reachableKm) * 10) / 10;
     out.textContent =
       gain > 0
-        ? `From your start, ${gain} km more of kid-safe street comes into reach ` +
-          `(${before.reachableKm} → ${after.reachableKm} km).`
+        ? `From your start, ${fmtDistTight(gain * 1000)} more of kid-safe street comes into ` +
+          `reach (${fmtDistTight(before.reachableKm * 1000)} → ` +
+          `${fmtDistTight(after.reachableKm * 1000)}).`
         : "From your start, this one doesn't change what's in reach.";
     return;
   }
@@ -5718,11 +5736,11 @@ async function runWhatIf(pid: string): Promise<void> {
     out.textContent = "couldn't re-plan with that built";
     return;
   }
-  const dKm = Math.round((now.meters - was.meters) / 100) / 10;
+  const dM = now.meters - was.meters;
   const dProt = now.pct_protected - was.pct_protected;
   const parts: string[] = [];
   if (dProt !== 0) parts.push(`${dProt > 0 ? "+" : ""}${dProt}% protected`);
-  if (Math.abs(dKm) >= 0.1) parts.push(`${dKm > 0 ? "+" : ""}${dKm} km`);
+  if (Math.abs(dM) >= 50) parts.push(`${dM > 0 ? "+" : "−"}${fmtDist(Math.abs(dM))}`);
   out.innerHTML = "";
   const line = document.createElement("b");
   line.textContent =
@@ -5841,7 +5859,7 @@ function describeMeta(meta: PriorityMeta): void {
     pct === undefined
       ? "Candidate projects, ranked by how much safe network they'd open up."
       : `${pct}% of ${who} in the mapped towns can't reach a school, playground or ` +
-        `library within ${Math.round((meta.access?.budget_m ?? 0) / 100) / 10} km of ` +
+        `library within ${fmtDistTight(meta.access?.budget_m ?? 0)} of ` +
         "perceived distance. These are the projects that would change that most.";
   const limits = meta.limits ?? [];
   // A field the build did not record is not a zero. "Measured 0 candidates

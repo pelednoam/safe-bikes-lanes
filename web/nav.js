@@ -1,5 +1,6 @@
 // Turn-by-turn navigation logic: maneuver generation from a route's geometry
 // and GPS-to-route snapping. Pure functions — the UI wiring lives in app.ts.
+import { lengthVoice } from "./units.js";
 const M_PER_DEG_LAT = 110540;
 function mPerDegLon(lat) {
     return 111320 * Math.cos((lat * Math.PI) / 180);
@@ -217,7 +218,7 @@ export function buildAlerts(payload) {
             const label = ALERT_CLASS_LABEL[runCls] ?? "a stressful street";
             alerts.push({
                 atM: runStart,
-                voice: `entering ${label} for ${Math.round(runLen / 10) * 10} meters. ride carefully.`,
+                voice: `entering ${label} for ${lengthVoice(runLen)}. ride carefully.`,
             });
         }
         runStart = -1;
@@ -237,7 +238,7 @@ export function buildAlerts(payload) {
         else if (walkRun >= 0) {
             alerts.push({
                 atM: walkRun,
-                voice: `hop off and walk the bike for about ${Math.round(walkLen / 10) * 10} meters.`,
+                voice: `hop off and walk the bike for about ${lengthVoice(walkLen)}.`,
             });
             alerts.push({ atM: cum, voice: "you can ride again." });
             walkRun = -1;
@@ -262,7 +263,7 @@ export function buildAlerts(payload) {
     if (walkRun >= 0) {
         alerts.push({
             atM: walkRun,
-            voice: `hop off and walk the bike for about ${Math.round(walkLen / 10) * 10} meters.`,
+            voice: `hop off and walk the bike for about ${lengthVoice(walkLen)}.`,
         });
     }
     alerts.sort((a, b) => a.atM - b.atM);

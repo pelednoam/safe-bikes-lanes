@@ -12,6 +12,7 @@ import {
   trackSlice,
   turnAngle,
 } from "../src/nav.js";
+import { setUnits } from "../src/units.js";
 import type { LineFeature, ProtectionClass, RibbonSeg, RoutePayload } from "../src/types.js";
 
 const LAT = 42.38;
@@ -120,7 +121,26 @@ describe("buildAlerts", () => {
     expect(alerts).toHaveLength(2);
     expect(alerts[0]?.voice).toMatch(/crossing/);
     expect(alerts[0]?.atM).toBe(200);
-    expect(alerts[1]?.voice).toMatch(/moderate street for 100 meters/);
+    // miles are the default, so the warning is in feet, like every other
+    // distance the rider hears — it said "100 meters" to riders reading miles
+    expect(alerts[1]?.voice).toMatch(/moderate street for 330 feet/);
+  });
+
+  it("speaks a stretch's length in the rider's own units", () => {
+    const payload = ribbonPayload([
+      seg(200, "quiet_street"),
+      seg(100, "moderate_street"),
+      seg(2000, "path"),
+    ]);
+    try {
+      setUnits("metric");
+      expect(buildAlerts(payload)[0]?.voice).toMatch(/moderate street for 100 meters/);
+      setUnits("imperial");
+      expect(buildAlerts(payload)[0]?.voice).toMatch(/moderate street for 330 feet/);
+      expect(buildAlerts(payload)[0]?.voice).not.toMatch(/meter/);
+    } finally {
+      setUnits("imperial");
+    }
   });
 
   it("ignores short caution blips and merges near-duplicates", () => {
@@ -226,7 +246,7 @@ describe("walk alerts", () => {
       ...lRoute(),
       ribbon: [seg(400, false), seg(150, true), seg(400, false)],
     });
-    expect(alerts.some((a) => /walk the bike for about 150 meters/.test(a.voice))).toBe(true);
+    expect(alerts.some((a) => /walk the bike for about 490 feet/.test(a.voice))).toBe(true);
     expect(alerts.some((a) => /ride again/.test(a.voice))).toBe(true);
   });
 });
