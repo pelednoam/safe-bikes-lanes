@@ -51,6 +51,39 @@ def test_checkouts_leave_no_token_behind(name: str) -> None:
             )
 
 
+def test_pages_deploys_from_a_job_that_runs_no_third_party_code() -> None:
+    """The deploy token must not be in reach of npm.
+
+    It was one job: npm ci, vitest, Playwright and the deploy, all holding
+    pages:write and id-token:write — so any dev dependency could mint the OIDC
+    token and publish a site of its own.
+    """
+    workflow = load("pages.yml")
+    top = workflow.get("permissions") or {}
+    assert "pages" not in top and "id-token" not in top, (
+        "Pages permissions are granted to every job in the workflow"
+    )
+    jobs = workflow["jobs"]
+    build, deploy = jobs["build"], jobs["deploy"]
+
+    build_perms = build.get("permissions") or {}
+    assert "pages" not in build_perms and "id-token" not in build_perms
+    build_runs = " ".join(str(s.get("run", "")) for s in build["steps"])
+    for needed in ("npm ci", "npm run check", "test:coverage", "npm run e2e", "_site"):
+        assert needed in build_runs, f"the build job no longer does {needed!r}"
+    assert any("upload-pages-artifact" in str(s.get("uses", "")) for s in build["steps"])
+
+    assert deploy.get("needs") == "build"
+    assert deploy["permissions"] == {"pages": "write", "id-token": "write"}
+    assert deploy["environment"]["name"] == "github-pages"
+    for step in deploy["steps"]:
+        assert "run" not in step, "the deploy job runs a script"
+        assert "checkout" not in str(step.get("uses", "")), "the deploy job checks code out"
+    assert any("deploy-pages" in str(s.get("uses", "")) for s in deploy["steps"])
+    # one deploy at a time, and a newer push replaces an older one in flight
+    assert workflow["concurrency"] == {"group": "pages", "cancel-in-progress": True}
+
+
 def test_dependabot_keeps_the_pins_moving() -> None:
     config = yaml.safe_load((ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8"))
     ecosystems = {u["package-ecosystem"]: u for u in config["updates"]}

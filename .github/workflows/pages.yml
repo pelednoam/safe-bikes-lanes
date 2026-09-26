@@ -5,21 +5,25 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Read-only by default. Only the deploy job, which runs nothing from npm, gets
+# the Pages and OIDC permissions.
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: pages
   cancel-in-progress: true
 
 jobs:
-  build-deploy:
+  # Everything that installs and runs third-party code — npm ci, vitest,
+  # Playwright and the browser it downloads — happens here, with a read-only
+  # token. It used to share one job with the deploy, which meant any dev
+  # dependency could mint the id-token and publish its own site. What leaves
+  # this job is the site artifact, and nothing else.
+  build:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -145,9 +149,23 @@ jobs:
           else
             echo "::warning::could not resolve latest release tag — version.json not written"
           fi
-      - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5.0.0
       - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
         with:
           path: _site
+
+  # Publishes the artifact the build job made. No checkout, no npm: the only
+  # code that runs holding pages:write and id-token:write is GitHub's own
+  # (pinned) Pages actions.
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5.0.0
       - id: deployment
         uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
