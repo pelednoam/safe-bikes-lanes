@@ -172,23 +172,26 @@ test("a permit feed cannot script the map popups", async ({ page }) => {
   await page.evaluate(() => {
     window._map?.jumpTo({ center: [-71.1, 42.38], zoom: 16 });
   });
-  await page.waitForFunction(
-    () =>
-      (window._map?.queryRenderedFeatures(undefined, { layers: ["construction-pts"] }).length ??
-        0) > 0,
+  // Click it, wherever it landed on screen, once a click there would hit it.
+  // Drawn is not the same as clickable: an icon is on screen a moment before
+  // it is in the index a click is tested against, and a click in between
+  // missed it and fell through to the map.
+  const handle = await page.waitForFunction(
+    () => {
+      const map = window._map;
+      const f = map?.queryRenderedFeatures(undefined, { layers: ["construction-pts"] })[0];
+      if (map === undefined || f === undefined) return null;
+      const p = map.project((f.geometry as GeoJSON.Point).coordinates as [number, number]);
+      const at: [number, number] = [Math.round(p.x), Math.round(p.y)];
+      return map.queryRenderedFeatures(at, { layers: ["construction-pts"] }).length > 0
+        ? { x: at[0], y: at[1] }
+        : null;
+    },
     null,
     { timeout: 25_000 },
   );
-
-  // click it, wherever it landed on screen
-  const at = await page.evaluate(() => {
-    const f = window._map?.queryRenderedFeatures(undefined, { layers: ["construction-pts"] })[0];
-    const c = (f?.geometry as GeoJSON.Point | undefined)?.coordinates as [number, number];
-    const p = window._map?.project(c);
-    return p ? { x: Math.round(p.x), y: Math.round(p.y) } : null;
-  });
-  expect(at).not.toBeNull();
-  await page.mouse.click((at as { x: number; y: number }).x, (at as { x: number; y: number }).y);
+  const at = (await handle.jsonValue()) as { x: number; y: number };
+  await page.mouse.click(at.x, at.y);
   await expect(page.locator(".maplibregl-popup").first()).toBeVisible({ timeout: 10_000 });
 
   const state = await page.evaluate(() => ({
@@ -207,6 +210,13 @@ test("a permit feed cannot script the map popups", async ({ page }) => {
   expect(state.text).toContain("Water main");
   expect(state.text).toContain("<img");
   expect(state.text).toContain("<b>bold</b>");
+  // Reading a permit is not asking to ride there. The tap used to drop a
+  // destination on the site as well, and the plan that followed put "Couldn't
+  // find where you are" on screen or took the card down with it.
+  await page.waitForTimeout(1000);
+  expect(page.url(), "tapping a construction site planned a trip to it").not.toMatch(/[#&]e=/);
+  await expect(page.locator("#error")).toBeHidden();
+  await expect(page.locator(".maplibregl-popup").first()).toBeVisible();
 });
 
 test("save a place via right-click and use it as start", async ({ page }) => {

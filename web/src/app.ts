@@ -500,6 +500,13 @@ function syncAvoidSummary(): void {
     avoidTypes.size === 0 ? "🛡 avoid lane types" : `🛡 avoiding ${avoidTypes.size} lane type${avoidTypes.size > 1 ? "s" : ""}`;
 }
 let hoverPopup: Popup | null = null;
+/** Take the hover card down for a click card of the same thing. Both open on a
+ * desktop tap — the pointer is over it — and two cards over one spot is noise;
+ * the click card is the one with a close button, so it stays. */
+function dropHoverCard(): void {
+  hoverPopup?.remove();
+  hoverPopup = null;
+}
 let options: RouteOption[] = [];
 let selectedId: RouteOption["id"] | null = null;
 let shedMode = false;
@@ -2844,6 +2851,7 @@ map.on("load", () => {
   });
   for (const layer of ["construction-lines", "construction-pts"]) {
     map.on("click", layer, (e: MapLayerMouseEvent) => {
+      dropHoverCard();
       const f = e.features?.[0];
       if (!f) return;
       const props = f.properties as {
@@ -2893,6 +2901,7 @@ map.on("load", () => {
     },
   });
   map.on("click", "hazardpts", (e: MapLayerMouseEvent) => {
+    dropHoverCard();
     const f = e.features?.[0];
     if (!f) return;
     const props = f.properties as {
@@ -3169,6 +3178,7 @@ map.on("load", () => {
 
   // gateways have no click popup of their own — give phones (no hover) one
   map.on("click", "gateways", (e: MapLayerMouseEvent) => {
+    dropHoverCard();
     new maplibregl.Popup({ offset: 10 })
       .setLngLat(e.lngLat)
       .setHTML(hoverHtml["gateways"]?.({}) ?? "")
@@ -3249,6 +3259,7 @@ map.on("load", () => {
   }
 
   map.on("click", "pois", (e: MapLayerMouseEvent) => {
+    dropHoverCard();
     const f = e.features?.[0];
     if (!f) return;
     const props = f.properties as { kind?: string; name?: string };
@@ -3324,11 +3335,23 @@ map.on("load", () => {
 map.on("click", (e: MapMouseEvent) => {
   // A project line is a thing to inspect, not a place to ride to. Without this
   // the layer's own handler selected the project AND this one dropped a
-  // destination pin and re-routed underneath it.
-  const inspectable = ["build", "crossings"].filter(
+  // destination pin and re-routed underneath it. The same held for a
+  // construction site, a reported hazard and a gateway: tapping one to read it
+  // also planned a trip to it, and the plan's own messages ("Couldn't find
+  // where you are") landed on top of the card the rider had asked for.
+  // Destinations (pois) are left out on purpose: tapping a playground is a fair
+  // way to say "take us there".
+  const inspectable = [
+    "build",
+    "crossings",
+    "construction-lines",
+    "construction-pts",
+    "hazardpts",
+    "gateways",
+  ].filter(
+    // not "=== visible": a layer that never sets it is visible, and reads undefined
     (id) =>
-      map.getLayer(id) !== undefined &&
-      map.getLayoutProperty(id, "visibility") === "visible",
+      map.getLayer(id) !== undefined && map.getLayoutProperty(id, "visibility") !== "none",
   );
   if (
     inspectable.length > 0 &&
@@ -3380,9 +3403,8 @@ let sketchyPopup: Popup | null = null;
 function openSketchyPopup(lngLat: [number, number]): void {
   sketchyPopup?.remove();
   sketchyPopup = null;
-  // the hover card describes the same street; two cards over one spot is noise
-  hoverPopup?.remove();
-  hoverPopup = null;
+  // the hover card describes the same street
+  dropHoverCard();
   const box = document.createElement("div");
   const btn = document.createElement("button");
   btn.textContent = "⚠ mark this spot as sketchy";
