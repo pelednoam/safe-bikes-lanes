@@ -8,7 +8,7 @@
 // missing, and the app would fail to start with no explanation.
 //
 // So the list is checked against the imports rather than trusted.
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -108,6 +108,40 @@ describe("the offline shell", () => {
       stale,
       "listed for precache but neither imported by the app nor loaded by the page",
     ).toEqual([]);
+  });
+
+  it("vendors a glyph range for every character the map's labels are known to use", () => {
+    // MapLibre asks for glyphs in 256-codepoint ranges, and a range that 404s
+    // does not degrade to a missing character: the tile's labels fail to lay
+    // out. Only 0-255 and 256-511 were vendored, so any name with a typographic
+    // apostrophe (St. Paul’s Choir School is one of the POIs), an en dash or an
+    // ellipsis asked for 8192-8447 and got a 404. The network names mountain
+    // bike trails by their difficulty marks (Sledgehammer (■), Hells Gate
+    // (♦♦)), which live two ranges further up. Precached too, because street
+    // names during a ride are the labels that most need to work offline.
+    const assets = precachedAssets();
+    const stack = "fonts/glyphs/Noto Sans Regular";
+    for (const ch of ["é", "ō", "’", "–", "…", "“", "■", "♦"]) {
+      const cp = ch.codePointAt(0) ?? 0;
+      const start = Math.floor(cp / 256) * 256;
+      const file = `${stack}/${start}-${start + 255}.pbf`;
+      expect(existsSync(join(WEB, file)), `${ch} needs ${file}, which is not vendored`).toBe(true);
+      expect(assets, `${file} is vendored but not precached for offline`).toContain(file);
+    }
+  });
+
+  it("precaches exactly the glyph ranges that are vendored", () => {
+    // The other direction: a listed range that does not exist makes cache.addAll
+    // reject, which takes the whole offline install down with it.
+    const dir = join(WEB, "fonts/glyphs/Noto Sans Regular");
+    const vendored = readdirSync(dir)
+      .filter((f) => f.endsWith(".pbf"))
+      .map((f) => `fonts/glyphs/Noto Sans Regular/${f}`)
+      .sort();
+    const listed = precachedAssets()
+      .filter((a) => a.startsWith("fonts/glyphs/"))
+      .sort();
+    expect(listed).toEqual(vendored);
   });
 
   it("keeps the fonts the map needs to label streets mid-ride", () => {

@@ -47,9 +47,15 @@ const ASSETS = [
   "fonts/BarlowSemiCondensed-600.woff2",
   "fonts/BarlowSemiCondensed-700.woff2",
   // map label glyphs: street names while navigating come from a symbol layer,
-  // which needs these even when the ride is offline
+  // which needs these even when the ride is offline. 8192-8447 is general
+  // punctuation (’ – … “ ”), in ordinary names like "St. Paul’s"; the two after
+  // it hold the trail-difficulty marks (■ ♦) the network names MTB trails by.
+  // A range that 404s drops a tile's labels, not just the one character.
   "fonts/glyphs/Noto Sans Regular/0-255.pbf",
   "fonts/glyphs/Noto Sans Regular/256-511.pbf",
+  "fonts/glyphs/Noto Sans Regular/8192-8447.pbf",
+  "fonts/glyphs/Noto Sans Regular/9472-9727.pbf",
+  "fonts/glyphs/Noto Sans Regular/9728-9983.pbf",
   "data/tiles/manifest.json",
   "data/nettiles/manifest.json",
   "data/pois.geojson",

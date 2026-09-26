@@ -72,8 +72,9 @@ export const NOLABEL_STYLE_URL: Record<BasemapTheme, string> = {
 };
 
 /**
- * The one glyph stack this app ships (web/fonts/glyphs, Noto Sans, Latin +
- * Latin-1).
+ * The one glyph stack this app ships (web/fonts/glyphs, Noto Sans: Latin,
+ * Latin-1 and Extended-A, general punctuation, and the box/symbol ranges that
+ * hold trail-difficulty marks — see ASSETS in sw.js).
  *
  * A style gets exactly one `glyphs` URL, and this app's has to stay the
  * vendored one: ride-mode street names are drawn from a symbol layer and have
