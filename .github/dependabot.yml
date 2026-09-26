@@ -1,0 +1,37 @@
+# Keeps the pinned action SHAs (and their "# vX.Y.Z" comments) and the web
+# app's npm packages moving. The workflows pin every action to a commit so that
+# a moved tag cannot change what runs with this repo's tokens; this is what
+# stops those pins going stale.
+#
+# No pip entry: the pipeline's dependencies in pyproject.toml are unpinned, so
+# there is nothing for Dependabot to bump. Add one when a pinned requirements
+# file lands.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /web
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # one PR for the routine bumps, so they do not bury the ones that matter
+      minor-and-patch:
+        update-types: ["minor", "patch"]
+    ignore:
+      # MapLibre is vendored into the page and the APK at a version the map
+      # styles are tested against; moving it is a deliberate change.
+      - dependency-name: "maplibre-gl"
+      # A Capacitor major needs `cap migrate` and changes to the Android
+      # project; it is a piece of work, not a bump.
+      - dependency-name: "@capacitor/*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@capacitor-community/*"
+        update-types: ["version-update:semver-major"]
