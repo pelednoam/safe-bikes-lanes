@@ -380,6 +380,87 @@ test.describe("at night", () => {
   });
 });
 
+test.describe("safety classes without colour", () => {
+  test("the confusable classes differ by line, not only by hue", async ({ page }) => {
+    // Simulated colour blindness made these pairs the same colour, or nearly:
+    // quiet street / painted lane (deuteranopia ΔE 1.3), path / moderate street
+    // (protanopia 4.1), buffered lane / sharrow (deuteranopia 6.2).
+    await boot(page, "#c=-71.108,42.372,15.2");
+    const look = await page.evaluate(() => {
+      const map = window._map;
+      if (map === undefined) return null;
+      const width = (cls: string): number => {
+        // the class factor from the width expression's match arm
+        const expr = JSON.stringify(map.getPaintProperty("network", "line-width"));
+        const m = new RegExp(`"${cls}",([\\d.]+)`).exec(expr);
+        return m ? Number(m[1]) : 1;
+      };
+      const mark = (cls: string): string => {
+        const layer = map
+          .getStyle()
+          .layers.find(
+            (l) =>
+              l.id.startsWith("network-mark-") &&
+              JSON.stringify((l as { filter?: unknown }).filter).includes(`"${cls}"`),
+          );
+        return layer === undefined
+          ? "none"
+          : JSON.stringify(map.getPaintProperty(layer.id, "line-dasharray"));
+      };
+      const cls = ["quiet_street", "lane", "path", "moderate_street", "buffered", "sharrow"];
+      return Object.fromEntries(cls.map((c) => [c, `${width(c)}|${mark(c)}`]));
+    });
+    expect(look).not.toBeNull();
+    if (look === null) return;
+    expect(look["quiet_street"]).not.toBe(look["lane"]);
+    expect(look["path"]).not.toBe(look["moderate_street"]);
+    expect(look["buffered"]).not.toBe(look["sharrow"]);
+    // and the marks are actually drawn, not just declared
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            () =>
+              window._map?.queryRenderedFeatures(undefined, {
+                layers: ["network-mark-lane", "network-mark-busy"],
+              }).length ?? 0,
+          ),
+        { timeout: budget(30_000) },
+      )
+      .toBeGreaterThan(0);
+  });
+
+  test("the legend explains the marks and the construction symbol", async ({ page }) => {
+    await boot(page);
+    const legend = page.locator("#legend");
+    await expect(legend.locator("svg.swatch")).toHaveCount(9); // 8 classes + construction
+    await expect(legend).toContainText("construction");
+  });
+
+  test("construction looks like neither a safety colour nor a place", async ({ page }) => {
+    await boot(page);
+    const style = await page.evaluate(() => ({
+      pts: window._map?.getLayer("construction-pts")?.type,
+      icon: window._map?.getLayoutProperty("construction-pts", "icon-image") as unknown,
+      line: window._map?.getPaintProperty("construction-lines", "line-color") as unknown,
+    }));
+    // it was an orange dot (like the kid stops) and orange dashes (like a route,
+    // between the palette's amber and red)
+    expect(style.pts).toBe("symbol");
+    expect(style.icon).toBe("construction-icon");
+    expect(String(style.line)).not.toMatch(/ff8c00/i);
+  });
+
+  test("the ride's class bar says what it shows in words, too", async ({ page }) => {
+    await routed(page);
+    await expect(page.locator("#class-key")).toContainText(/off-street path \d+%/);
+    const patterned = await page
+      .locator("#classbar i")
+      .evaluateAll((segs) => segs.map((s) => s.className));
+    expect(patterned.every((c) => c.startsWith("pat-"))).toBe(true);
+  });
+});
+
 test.describe("when something goes wrong", () => {
   const developerWords = /snap|intersection|no path found|TypeError|failed to load|routing tiles/i;
 

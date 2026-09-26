@@ -156,6 +156,162 @@ const CLASS_COLORS: Record<ProtectionClass, string> = {
   busy_street: "#d73027",
 };
 
+// ---------------------------------------------------------------------------
+// Safety classes told apart by more than hue
+//
+// The palette runs green to red, which is the axis colour-blind riders lose:
+// simulated for deuteranopia a quiet street and a painted lane differ by a ΔE
+// of 1.3 (the same colour), and a buffered lane and a sharrow by 6.2; for
+// protanopia an off-street path and a moderate street by 4.1. The hues stay
+// (the owner's call); each class also gets a width and a mark, the same on the
+// map, on the route, in the legend and in the ride's class bar:
+//
+//   protected (path, separated, buffered)  plain, and the widest lines
+//   quiet street / alley                   plain and thin
+//   painted lane                           a dark dash down the middle
+//   sharrow                                a row of dark dots
+//   moderate street                        dark ticks across it, spaced
+//   busy street                            dark ticks across it, close — hatched
+//
+// Ticks for the two classes a child should not be on make "warning" something
+// you can see without red. Plain means safe; marked means read the mark.
+// ---------------------------------------------------------------------------
+
+/** Line width relative to an ordinary street. */
+const CLASS_WIDTH: Record<ProtectionClass, number> = {
+  path: 1.7,
+  separated: 1.5,
+  buffered: 1.3,
+  quiet_street: 0.9,
+  service: 0.9,
+  lane: 1.3,
+  sharrow: 1.3,
+  moderate_street: 1.1,
+  busy_street: 1.25,
+};
+
+interface ClassMark {
+  id: string;
+  cls: ProtectionClass;
+  /** Mark width, as a multiple of the line it sits on. */
+  scale: number;
+  /** MapLibre dash pattern, in multiples of the mark's own width. */
+  dash: [number, number];
+  /** Round caps turn zero-length dashes into dots. */
+  round: boolean;
+}
+
+const CLASS_MARKS: ClassMark[] = [
+  { id: "lane", cls: "lane", scale: 0.3, dash: [3.2, 2.2], round: false },
+  { id: "sharrow", cls: "sharrow", scale: 0.5, dash: [0, 2.4], round: true },
+  { id: "moderate", cls: "moderate_street", scale: 2.1, dash: [0.28, 3.2], round: false },
+  { id: "busy", cls: "busy_street", scale: 2.1, dash: [0.28, 1.15], round: false },
+];
+const MARK_INK = "rgba(17,22,25,0.82)";
+/** Ticks stand out past their line, so over the dark basemap they are drawn
+ * light — dark ones there read as gaps, which is to say as dashes. */
+const TICK_INK_DARK = "rgba(236,240,244,0.85)";
+const isTick = (m: ClassMark): boolean => m.scale > 1;
+
+/** A line width that grows with zoom from `lo` to `hi` and is scaled per class. */
+function classWidth(lo: number, hi: number, scale = 1): unknown {
+  const byClass = (base: number): unknown => [
+    "*",
+    base * scale,
+    [
+      "match",
+      ["get", "cls"],
+      ...Object.entries(CLASS_WIDTH).flatMap(([cls, k]) => [cls, k]),
+      1,
+    ],
+  ];
+  return ["interpolate", ["linear"], ["zoom"], 12, byClass(lo), 16, byClass(hi)];
+}
+
+/** Every layer that draws a class mark over the network. */
+const NETWORK_MARK_LAYERS = CLASS_MARKS.map((m) => `network-mark-${m.id}`);
+
+/** A small picture of a class's line — colour, width and mark — for the legend,
+ * the about table and the ride's class key, so all three match the map. */
+function classSwatch(cls: ProtectionClass, w = 36, h = 14): string {
+  const y = h / 2;
+  const sw = 2.6 * CLASS_WIDTH[cls];
+  const mark = CLASS_MARKS.find((m) => m.cls === cls);
+  let over = "";
+  if (mark !== undefined) {
+    const mw = sw * mark.scale;
+    const dash = `${(mark.dash[0] * mw).toFixed(2)} ${(mark.dash[1] * mw).toFixed(2)}`;
+    // ticks take their ink from the theme (--tick-ink), as they do on the map
+    const ink = isTick(mark) ? `style="stroke:var(--tick-ink)"` : `stroke="${MARK_INK}"`;
+    over =
+      `<line x1="2" y1="${y}" x2="${w - 2}" y2="${y}" ${ink} ` +
+      `stroke-width="${mw.toFixed(2)}" stroke-dasharray="${dash}"` +
+      `${mark.round ? ' stroke-linecap="round"' : ""}/>`;
+  }
+  return (
+    `<svg class="swatch" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true">` +
+    `<line x1="2" y1="${y}" x2="${w - 2}" y2="${y}" stroke="${CLASS_COLORS[cls]}" ` +
+    `stroke-width="${sw.toFixed(2)}" stroke-linecap="round"/>${over}</svg>`
+  );
+}
+
+/** The construction marker: a black-and-white barricade. Nothing else on the
+ * map is black and white, so it cannot be read as a safety colour (it was
+ * orange, between the palette's amber and red) or as a place to visit (it was a
+ * dot, like the kid stops), and ~170 of them no longer look like a route. */
+function constructionIcon(): { width: number; height: number; data: Uint8Array } | null {
+  const W = 34;
+  const H = 22;
+  const c = document.createElement("canvas");
+  c.width = W;
+  c.height = H;
+  const ctx = c.getContext("2d");
+  if (ctx === null) return null;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(2, 3, W - 4, H - 6);
+  ctx.fillStyle = "#ffffff";
+  ctx.fill();
+  ctx.clip();
+  ctx.fillStyle = "#111619";
+  for (let x = -H; x < W + H; x += 9) {
+    ctx.beginPath();
+    ctx.moveTo(x, H);
+    ctx.lineTo(x + 4.5, H);
+    ctx.lineTo(x + 4.5 + H, 0);
+    ctx.lineTo(x + H, 0);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.restore();
+  ctx.lineWidth = 2.5;
+  ctx.strokeStyle = "#111619";
+  ctx.strokeRect(2, 3, W - 4, H - 6);
+  const img = ctx.getImageData(0, 0, W, H);
+  return { width: W, height: H, data: new Uint8Array(img.data.buffer) };
+}
+
+/** The marks as SVG patterns, for the ride ribbon's 12 px class strip. */
+const RIBBON_PATTERNS =
+  `<defs>` +
+  `<pattern id="rp-lane" width="9" height="12" patternUnits="userSpaceOnUse">` +
+  `<rect x="0" y="5.2" width="5" height="1.6" fill="${MARK_INK}"/></pattern>` +
+  `<pattern id="rp-sharrow" width="6" height="12" patternUnits="userSpaceOnUse">` +
+  `<circle cx="3" cy="6" r="1.4" fill="${MARK_INK}"/></pattern>` +
+  `<pattern id="rp-moderate_street" width="8" height="12" patternUnits="userSpaceOnUse">` +
+  `<rect width="1.5" height="12" fill="${MARK_INK}"/></pattern>` +
+  `<pattern id="rp-busy_street" width="4" height="12" patternUnits="userSpaceOnUse">` +
+  `<rect width="1.5" height="12" fill="${MARK_INK}"/></pattern>` +
+  `</defs>`;
+
+/** The legend's picture of construction, to match the map. */
+const CONSTRUCTION_SWATCH =
+  `<svg class="swatch" width="36" height="14" viewBox="0 0 36 14" aria-hidden="true">` +
+  `<defs><pattern id="constr-stripes" width="6" height="12" patternUnits="userSpaceOnUse" ` +
+  `patternTransform="rotate(45)"><rect width="3" height="12" fill="#111619"/></pattern></defs>` +
+  `<rect x="9" y="2" width="18" height="10" fill="#fff" stroke="#111619" stroke-width="1.5"/>` +
+  `<rect x="9" y="2" width="18" height="10" fill="url(#constr-stripes)"/></svg>`;
+
 const POI_META: Record<string, { emoji: string; label: string; color: string }> = {
   playground: { emoji: "🛝", label: "playground", color: "#e67e22" },
   ice_cream: { emoji: "🍦", label: "ice cream", color: "#e84393" },
@@ -1248,6 +1404,13 @@ function renderRibbon(option: RouteOption): void {
       `<rect x="${x.toFixed(2)}" y="0" width="${Math.max(wpx, 0.4).toFixed(2)}" height="12"` +
         ` fill="${fill}"><title>${segLabel}: ${fmtDist(seg.m)}</title></rect>`,
     );
+    // the class's map mark over its colour (see CLASS_MARKS)
+    if (seg.walk !== true && CLASS_MARKS.some((m) => m.cls === seg.cls)) {
+      rects.push(
+        `<rect x="${x.toFixed(2)}" y="0" width="${Math.max(wpx, 0.4).toFixed(2)}" height="12"` +
+          ` fill="url(#rp-${seg.cls})" pointer-events="none"/>`,
+      );
+    }
     if (seg.crossing) {
       crossings.push(
         `<text x="${x.toFixed(2)}" y="23" font-size="11" fill="#a33">▲<title>busy crossing</title></text>`,
@@ -1259,6 +1422,7 @@ function renderRibbon(option: RouteOption): void {
   }
   holder.innerHTML =
     `<svg width="${W}" height="70" xmlns="http://www.w3.org/2000/svg">` +
+    RIBBON_PATTERNS +
     rects.join("") +
     crossings.join("") +
     `<polyline points="${linePts.join(" ")}" fill="none" stroke="#666" stroke-width="1.4"/>` +
@@ -1281,11 +1445,23 @@ function showSummary(option: RouteOption): void {
       : `+${s.detour_pct}% (${fmtDist(s.shortest_meters)})`;
   const bar = el<HTMLDivElement>("classbar");
   bar.innerHTML = "";
+  const key = el<HTMLDivElement>("class-key");
+  key.innerHTML = "";
+  const total = Object.values(s.by_class_m).reduce((a, m) => a + m, 0);
   for (const [cls, m] of Object.entries(s.by_class_m) as [ProtectionClass, number][]) {
     const seg = document.createElement("i");
-    seg.style.cssText = `flex:${m};background:${CLASS_COLORS[cls] ?? "#999"}`;
+    // the class's mark as a pattern, so the bar reads without its colours
+    seg.className = `pat-${cls}`;
+    seg.style.cssText = `flex:${m};background-color:${CLASS_COLORS[cls] ?? "#999"}`;
     seg.title = `${CLASS_LABELS[cls] ?? cls}: ${fmtDist(m)}`;
     bar.appendChild(seg);
+    // and in words, which a title attribute is not on a phone or to a keyboard
+    const pct = total > 0 ? Math.round((100 * m) / total) : 0;
+    if (pct < 1) continue;
+    const item = document.createElement("span");
+    item.innerHTML = `${classSwatch(cls, 22, 12)} `;
+    item.append(`${CLASS_LABELS[cls] ?? cls} ${pct}%`);
+    key.appendChild(item);
   }
   renderRibbon(option);
   const cautions = el<HTMLDivElement>("cautions");
@@ -2326,7 +2502,7 @@ map.on("load", () => {
     ],
     paint: {
       "line-color": ["get", "color"],
-      "line-width": ["interpolate", ["linear"], ["zoom"], 12, 1.2, 16, 3.5],
+      "line-width": classWidth(1.2, 3.5) as number,
       "line-opacity": 0.75,
     },
   });
@@ -2342,11 +2518,29 @@ map.on("load", () => {
     ],
     paint: {
       "line-color": ["get", "color"],
-      "line-width": ["interpolate", ["linear"], ["zoom"], 12, 1.2, 16, 3.5],
+      "line-width": classWidth(1.2, 3.5) as number,
       "line-opacity": 0.75,
       "line-dasharray": [2, 1.4],
     },
   });
+  // each class's mark, over its line (see CLASS_MARKS). From z13: below that a
+  // street is a hairline and a pattern on it is noise.
+  for (const m of CLASS_MARKS) {
+    map.addLayer({
+      id: `network-mark-${m.id}`,
+      type: "line",
+      source: "network",
+      minzoom: 13,
+      filter: ["==", ["get", "cls"], m.cls],
+      layout: m.round ? { "line-cap": "round" } : {},
+      paint: {
+        "line-color": MARK_INK,
+        "line-width": classWidth(1.2, 3.5, m.scale) as number,
+        "line-dasharray": m.dash,
+        "line-opacity": 0.75,
+      },
+    });
+  }
   // invisible hit layer: every street stays hoverable/right-clickable even
   // when the network display is toggled off or covered by other layers
   map.addLayer({
@@ -2419,6 +2613,21 @@ map.on("load", () => {
     layout: { "line-cap": "round", "line-join": "round" },
     paint: { "line-color": ["get", "color"], "line-width": 5 },
   });
+  // the same marks on the route itself, which is drawn in the same colours
+  for (const m of CLASS_MARKS) {
+    map.addLayer({
+      id: `route-mark-${m.id}`,
+      type: "line",
+      source: "route",
+      filter: ["all", ["==", ["get", "cls"], m.cls], ["!=", ["get", "walk"], true]],
+      layout: { "line-join": "round", ...(m.round ? { "line-cap": "round" as const } : {}) },
+      paint: {
+        "line-color": MARK_INK,
+        "line-width": Math.min(9, 5 * m.scale),
+        "line-dasharray": m.dash,
+      },
+    });
+  }
   // walking stretches: white dashes over the route line
   map.addLayer({
     id: "route-walk",
@@ -2438,23 +2647,36 @@ map.on("load", () => {
     paint: { "line-color": "#8a8f98", "line-width": 6, "line-opacity": 0.85 },
   });
   map.addSource("construction", { type: "geojson", data: emptyFC() });
+  // Barricade tape — black and white, which nothing else on the map is. As
+  // orange dashes it read as a route, in a colour between the palette's amber
+  // and red. (See constructionIcon for the points.)
+  map.addLayer({
+    id: "construction-lines-base",
+    type: "line",
+    source: "construction",
+    filter: ["!=", ["geometry-type"], "Point"],
+    paint: { "line-color": "#ffffff", "line-width": 6, "line-opacity": 0.95 },
+  });
   map.addLayer({
     id: "construction-lines",
     type: "line",
     source: "construction",
     filter: ["!=", ["geometry-type"], "Point"],
-    paint: { "line-color": "#ff8c00", "line-width": 5, "line-dasharray": [1.2, 1], "line-opacity": 0.85 },
+    paint: { "line-color": "#111619", "line-width": 6, "line-dasharray": [1, 1] },
   });
+  const barricade = constructionIcon();
+  if (barricade !== null) map.addImage("construction-icon", barricade, { pixelRatio: 2 });
   map.addLayer({
     id: "construction-pts",
-    type: "circle",
+    type: "symbol",
     source: "construction",
     filter: ["==", ["geometry-type"], "Point"],
-    paint: {
-      "circle-radius": 6,
-      "circle-color": "#ff8c00",
-      "circle-stroke-color": "#7a3b00",
-      "circle-stroke-width": 2,
+    layout: {
+      "icon-image": "construction-icon",
+      "icon-allow-overlap": true,
+      "icon-ignore-placement": true,
+      // small from afar, where there are a hundred and seventy of them
+      "icon-size": ["interpolate", ["linear"], ["zoom"], 12, 0.6, 14, 0.85, 16, 1.2],
     },
   });
   for (const layer of ["construction-lines", "construction-pts"]) {
@@ -3373,7 +3595,7 @@ el<HTMLButtonElement>("loop-btn").addEventListener("click", () => {
  * so both stay in sync from either place. */
 function setNetworkVisible(on: boolean): void {
   el<HTMLInputElement>("show-net").checked = on;
-  for (const layer of ["network", "network-unconfirmed"]) {
+  for (const layer of ["network", "network-unconfirmed", ...NETWORK_MARK_LAYERS]) {
     map.setLayoutProperty(layer, "visibility", on ? "visible" : "none");
   }
   applyBasemap(); // casing + line widths key off the same flag
@@ -3679,15 +3901,24 @@ document.addEventListener("keydown", (e: KeyboardEvent) => {
   }
 });
 
-// legend
+// legend: each class as it is drawn — colour, width and mark — so the marks
+// are explained where the colours are, and construction beside them
 const legend = el<HTMLDivElement>("legend");
 for (const [cls, label] of Object.entries(CLASS_LABELS) as [ProtectionClass, string][]) {
-  if (cls === "service") continue; // same color as quiet_street
-  const sw = document.createElement("i");
-  sw.style.background = CLASS_COLORS[cls];
+  if (cls === "service") continue; // drawn as quiet_street
+  const sw = document.createElement("span");
+  sw.innerHTML = classSwatch(cls);
   legend.appendChild(sw);
   const span = document.createElement("span");
   span.textContent = label;
+  legend.appendChild(span);
+}
+{
+  const sw = document.createElement("span");
+  sw.innerHTML = CONSTRUCTION_SWATCH;
+  legend.appendChild(sw);
+  const span = document.createElement("span");
+  span.textContent = "construction — routes avoid it";
   legend.appendChild(span);
 }
 
@@ -3708,8 +3939,7 @@ function fillAbout(): void {
     .sort((a, b) => a[1] - b[1])
     .map(
       ([cls, m]) =>
-        `<tr><td><i style="display:inline-block;width:12px;height:5px;border-radius:2px;` +
-        `background:${CLASS_COLORS[cls]}"></i> ${CLASS_LABELS[cls]}</td>` +
+        `<tr><td>${classSwatch(cls, 28, 12)} ${CLASS_LABELS[cls]}</td>` +
         `<td>×${m}</td></tr>`,
     );
   rows.push(
@@ -5496,9 +5726,17 @@ function applyBasemap(): void {
     }
     // over photos the lanes need contrast: dark halo + thicker, solid lines
     vis("network-casing", aerial && netOn);
-    const width: unknown = aerial
-      ? ["interpolate", ["linear"], ["zoom"], 12, 2.0, 16, 5.0]
-      : ["interpolate", ["linear"], ["zoom"], 12, 1.2, 16, 3.5];
+    const [lo, hi] = aerial ? [2.0, 5.0] : [1.2, 3.5];
+    const width: unknown = classWidth(lo, hi);
+    for (const m of CLASS_MARKS) {
+      const id = `network-mark-${m.id}`;
+      if (map.getLayer(id) === undefined) continue;
+      map.setPaintProperty(id, "line-width", classWidth(lo, hi, m.scale));
+      map.setPaintProperty(id, "line-opacity", plain ? 0.3 : 0.75);
+      if (isTick(m)) {
+        map.setPaintProperty(id, "line-color", dark && !aerial ? TICK_INK_DARK : MARK_INK);
+      }
+    }
     for (const layer of ["network", "network-unconfirmed"]) {
       if (map.getLayer(layer) === undefined) continue;
       map.setPaintProperty(layer, "line-width", width);
@@ -5544,7 +5782,7 @@ el<HTMLInputElement>("show-aerial").addEventListener("change", applyBasemap);
 
 el<HTMLInputElement>("show-constr").addEventListener("change", (e: Event) => {
   const on = (e.target as HTMLInputElement).checked;
-  for (const layer of ["construction-lines", "construction-pts"]) {
+  for (const layer of ["construction-lines-base", "construction-lines", "construction-pts"]) {
     map.setLayoutProperty(layer, "visibility", on ? "visible" : "none");
   }
 });

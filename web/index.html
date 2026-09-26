@@ -72,9 +72,11 @@
     /* native controls — inputs, selects, sliders, scrollbars — follow the
        page's theme, not the browser's default white */
     color-scheme: light;
+    --tick-ink:rgba(17,22,25,.82);
   }
   body.dark {
     color-scheme: dark;
+    --tick-ink:rgba(236,240,244,.85);
     --ink:#e9eef1; --muted:#93a1aa; --line:rgba(255,255,255,.13);
     --surface:rgba(19,23,27,.92); --solid:#13171b; --field:rgba(255,255,255,.07);
     --shadow: 0 1px 2px rgba(0,0,0,.5), 0 14px 34px -10px rgba(0,0,0,.6);
@@ -274,9 +276,25 @@
                      padding-top:8px; }
   .sketchy-row { display:flex; justify-content:space-between; align-items:center; margin:3px 0; }
   .sketchy-row button { margin:0; padding:2px 8px; font-size:12px; }
-  .legend { display:grid; grid-template-columns:14px auto; gap:5px 8px; margin-top:10px;
+  .legend { display:grid; grid-template-columns:36px auto; gap:5px 8px; margin-top:10px;
             align-items:center; font-size:13px; color:var(--muted); }
-  .legend i { width:14px; height:5px; border-radius:3px; display:inline-block; }
+  .legend > span { display:flex; align-items:center; }
+  svg.swatch { display:inline-block; vertical-align:middle; flex:none; }
+  /* The class bar carries each class's map mark as a pattern (CLASS_MARKS in
+     app.ts), so it can be read without telling its greens from its reds. */
+  #classbar i.pat-lane {
+    background-image:repeating-linear-gradient(90deg, rgba(17,22,25,.8) 0 5px, transparent 5px 9px);
+    background-size:100% 2px; background-position:0 50%; background-repeat:no-repeat; }
+  #classbar i.pat-sharrow {
+    background-image:radial-gradient(circle, rgba(17,22,25,.85) 1.4px, transparent 1.9px);
+    background-size:6px 100%; background-repeat:repeat-x; }
+  #classbar i.pat-moderate_street {
+    background-image:repeating-linear-gradient(90deg, rgba(17,22,25,.8) 0 1.5px, transparent 1.5px 8px); }
+  #classbar i.pat-busy_street {
+    background-image:repeating-linear-gradient(90deg, rgba(17,22,25,.85) 0 1.5px, transparent 1.5px 4px); }
+  #class-key { display:flex; flex-wrap:wrap; gap:3px 10px; margin-top:7px;
+               font-size:12.5px; color:var(--muted); }
+  #class-key span { display:inline-flex; align-items:center; gap:4px; white-space:nowrap; }
   .tool-row { display:flex; gap:7px; align-items:center; flex-wrap:wrap; margin:8px 0; }
   .tool-row select, #walk-max {
     padding:5px 8px; border-radius:var(--r-sm); border:1px solid var(--line);
@@ -862,6 +880,7 @@
     <div id="fingerprint">
       <div class="fp-head"><span>The ride</span><span>start → finish</span></div>
       <div id="classbar"></div>
+      <div id="class-key"></div>
       <div id="ribbon" title="the ride, start to finish: stress colors on top, elevation profile below, ▲ = busy crossing"></div>
     </div>
     <div class="stat"><span>Route</span><b id="s-dist"></b></div>
