@@ -954,6 +954,10 @@ def build() -> None:
         if gdf is not None:
             crash_frames.append(gdf[["geometry"]])
     edges["crash_count"] = 0
+    # which crashes, not just how many: a crash is joined to every edge within
+    # CRASH_JOIN_RADIUS_M, so adding counts along a corridor counts it once per
+    # edge it is near. Ids are row numbers of this build's crash table.
+    crash_ids: list[tuple[int, ...]] = [()] * len(edges)
     crashes_joined = 0
     if crash_frames:
         crashes = pd.concat(crash_frames, ignore_index=True)
@@ -971,6 +975,13 @@ def build() -> None:
         cc = edges.columns.get_loc("crash_count")
         for pos, n in counts.items():
             edges.iat[pos, cc] = n
+        by_edge: dict[int, list[int]] = {}
+        for cid, pos in zip(_crash_idx.tolist(), edge_pos.tolist(), strict=True):
+            by_edge.setdefault(pos, []).append(cid)
+        for pos, ids in by_edge.items():
+            crash_ids[pos] = tuple(sorted(ids))
+    edges["crash_ids"] = crash_ids
+    del crash_ids
 
     edges["crash_per_100m"] = edges["crash_count"] / (edges["length"].clip(lower=20) / 100)
     edges["crash_factor"] = (1 + config.CRASH_WEIGHT * edges["crash_per_100m"]).clip(
@@ -1050,6 +1061,7 @@ def build() -> None:
         # report quotes counts to cities, and a capped factor can't be inverted
         # back into one (crash_factor saturates at CRASH_FACTOR_CAP)
         data["crash_count"] = int(row["crash_count"])
+        data["crash_ids"] = row["crash_ids"]
         data["cls"] = row["cls"]
         data["road_cls"] = row["road_cls"]
         data["stress_mult"] = float(row["stress_mult"])

@@ -206,6 +206,8 @@ def find_candidates(graph: nx.MultiDiGraph) -> list[Candidate]:
             sub = run.subgraph(comp)
             length = 0.0
             crashes = 0
+            crash_ids: set[int] = set()
+            ids_known = True
             crashes_known = True
             pressure = 0.0
             parts: list[list[tuple[float, float]]] = []
@@ -221,6 +223,10 @@ def find_candidates(graph: nx.MultiDiGraph) -> list[Candidate]:
                     crashes += int(data["crash_count"])
                 else:
                     crashes_known = False
+                if "crash_ids" in data:
+                    crash_ids.update(data["crash_ids"])
+                else:
+                    ids_known = False
                 # length-weighted mean of the factor the router already applies
                 pressure += (float(data.get("crash_factor", 1.0)) - 1.0) * seg_m
                 members.append((u, v, k))
@@ -230,6 +236,13 @@ def find_candidates(graph: nx.MultiDiGraph) -> list[Candidate]:
                 parts.append(edge_coords(graph, u, v, data))
             if not members:
                 continue
+            # Each crash once. It is joined to every edge within 25 m, so the
+            # sum of per-edge counts counted a crash at a junction two or
+            # three times, and "N bike crashes since 2021" went to cities
+            # inflated. The sum is only a fallback for fixtures without ids;
+            # a real graph without them is refused by require_usable_graph.
+            if ids_known:
+                crashes = len(crash_ids)
             # The lower bound is applied after severance scoring, not here: a
             # 12 m link between two islands is the cheapest real project there
             # is, and this filter was throwing exactly those away unmeasured.
@@ -675,7 +688,7 @@ def write_csv(path: Any, candidates: list[Candidate]) -> None:
 # Edge attributes this analysis reads. A graph without them is not a graph this
 # can measure — see require_usable_graph().
 NEEDED_EDGE_ATTRS: Final[frozenset[str]] = frozenset(
-    {"length", "cls", "stress_mult", "crash_factor", "crash_count"}
+    {"length", "cls", "stress_mult", "crash_factor", "crash_count", "crash_ids"}
 )
 
 

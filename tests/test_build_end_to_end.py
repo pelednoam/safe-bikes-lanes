@@ -95,8 +95,10 @@ def test_build_produces_a_routable_graph_with_every_edge_costed(sandbox: Path) -
         for key in ("cls", "stress_mult", "weight", "weight_solo", "crash_factor", "length"):
             assert key in d, f"edge missing {key}"
         assert d["weight"] > 0
-        # the crash count is written for the where-to-build report
+        # the crash count is written for the where-to-build report, and which
+        # crashes, so a corridor can count each one once
         assert "crash_count" in d
+        assert len(d["crash_ids"]) == d["crash_count"]
 
     classes = {d["cls"] for _u, _v, d in g.edges(data=True)}
     # the classifier ran: a residential street, an arterial and a path
@@ -372,3 +374,30 @@ def test_a_street_over_a_hill_is_not_flat(
     assert g.edges[2, 1, 0]["climb"] == pytest.approx(20.0, abs=2.0)
     # and a level street is still level
     assert g.edges[3, 6, 0]["climb"] == 0.0
+
+
+def test_a_crash_at_a_junction_is_one_crash_to_the_corridor(sandbox: Path) -> None:
+    """The join puts a crash on every edge within 25 m — at a junction that is
+    every street meeting there — so the build records which crash, and the
+    where-to-build corridor counts each once."""
+    import json
+
+    import priorities
+
+    crash = {
+        "type": "Feature",
+        "geometry": {"type": "Point", "coordinates": [-71.0981, 42.3800]},
+        "properties": {},
+    }
+    (sandbox / "raw" / "crashes_2021.geojson").write_text(
+        json.dumps({"type": "FeatureCollection", "features": [crash]})
+    )
+    build_graph.build()
+    with (sandbox / "graph.pkl").open("rb") as fh:
+        g: nx.MultiDiGraph = pickle.load(fh)
+    assert g.graph["crashes_joined"] == 1
+    near = [d for _u, _v, d in g.edges(data=True) if d["crash_count"]]
+    assert len(near) >= 4, "the crash should reach several edge-directions"
+    assert all(d["crash_ids"] == (0,) for d in near)
+    big_ave = [c for c in priorities.find_candidates(g) if c.name == "Big Ave"]
+    assert big_ave and big_ave[0].crashes == 1

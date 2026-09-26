@@ -34,6 +34,7 @@ class GraphBuilder:
 
     def __init__(self) -> None:
         self.g = nx.MultiDiGraph()
+        self._next_crash = 0
 
     def node(self, n: int, x_m: float, lat: float = 42.38) -> None:
         lon, la = _lonlat(x_m, lat)
@@ -47,7 +48,14 @@ class GraphBuilder:
         cls: str,
         name: str = "",
         crashes: int = 0,
+        crash_ids: tuple[int, ...] | None = None,
     ) -> None:
+        """`crashes` distinct crashes near this edge, unless `crash_ids` names
+        them — the same id on two edges is one crash near both."""
+        if crash_ids is None:
+            crash_ids = tuple(range(self._next_crash, self._next_crash + crashes))
+            self._next_crash += crashes
+        crashes = len(crash_ids)
         mult = {
             "path": 1.0, "separated": 1.0, "buffered": 2.0, "quiet_street": 1.4,
             "lane": 3.0, "sharrow": 6.0, "moderate_street": 8.0, "busy_street": 25.0,
@@ -61,7 +69,7 @@ class GraphBuilder:
         for a, b in ((u, v), (v, u)):
             self.g.add_edge(
                 a, b, length=length, cls=cls, stress_mult=mult, name=name,
-                crash_count=crashes, crash_factor=factor,
+                crash_count=crashes, crash_ids=crash_ids, crash_factor=factor,
                 # what build_graph writes: perceived cost the router travels on
                 weight=length * mult * factor,
             )
@@ -1259,3 +1267,18 @@ def test_a_half_filled_candidate_never_renders_a_gap_in_a_sentence() -> None:
     # it falls back to what it can support
     assert "unlocks 3.1 mi of kid-safe streets" in out
     assert "14.9 mi" not in out
+
+
+def test_a_crash_near_two_edges_of_a_corridor_counts_once() -> None:
+    """A crash is joined to every edge within 25 m, so one at a mid-block
+    junction lands on both edges beside it. The corridor summed per-edge
+    counts, and the text sent to cities said "3 bike crashes since 2021" for
+    two crashes."""
+    b = GraphBuilder()
+    for i in range(3):
+        b.node(i, i * 150)
+    b.edge(0, 1, 150, "busy_street", "Main St", crash_ids=(7, 8))
+    b.edge(1, 2, 150, "busy_street", "Main St", crash_ids=(8,))
+    (cand,) = priorities.find_candidates(b.g)
+    assert cand.crashes == 2
+    assert "2 bike crashes since 2021" in priorities.summary_sentence(cand)
