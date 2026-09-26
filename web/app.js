@@ -12,6 +12,7 @@ import { distVoice, fmtDist, fmtClimb, fmtDistTight, fmtSpeed, fromMeters, getUn
 import { NetworkTiles, TileStore } from "./tiles.js";
 import { Lane, planOptions, withUpgraded } from "./planner.js";
 import { SpeechQueue } from "./speech.js";
+import { loopRejoinPoint, payloadLength, rejoinOption } from "./rejoin.js";
 import { DeferredReload, ScreenLock } from "./lifecycle.js";
 import { drawRideCard, drawTotalsCard, rideShareText, totalsShareText } from "./sharecard.js";
 // ---------------------------------------------------------------------------
@@ -4036,17 +4037,60 @@ function speak(text, priority = "turn") {
 function clearSpeech() {
     speech.clear();
 }
+// ── round trips ──────────────────────────────────────────────────────────
+// A loop ends where it starts, so its navDest is the start, and a reroute
+// aimed there sends the rider home from wherever they strayed. While riding a
+// loop the app keeps the loop as planned and how far round it the rider has
+// got, and every way back aims for the rest of it instead (see rejoin.ts).
+/** The round trip being ridden, as planned; null on an A-to-B ride. */
+let navLoop = null;
+/** Furthest the rider has got round navLoop, in metres along it. */
+let navLoopDoneM = 0;
+/** How the track being followed maps onto the loop: its first `legM` metres
+ * get back to the loop, which it then follows from `resumeM` metres round.
+ * Null while following something else — a detour to a stop. */
+let navLoopLeg = null;
+/** The most loop progress one fix can add: a minute of fast riding, which
+ * also covers a short GPS gap. */
+const LOOP_PROGRESS_MAX_STEP_M = 400;
+/** The loop legs of the ways back planned so far, by option. */
+const loopLegs = new WeakMap();
+/** Route options from where the rider is to where the ride is going: back onto
+ * what is left of a loop, or to the destination. Null when there is nowhere
+ * to go (no destination yet). */
+function rideOptionsFrom(r, from, bias) {
+    if (navLoop !== null && navOriginalDest === null) {
+        const target = loopRejoinPoint(navLoop.payload, navLoopDoneM);
+        if (target !== null) {
+            const lead = planOptions(r, from, target.at, routePrefs(), bias)[0];
+            if (!lead)
+                return [];
+            const back = rejoinOption(lead, navLoop, target.index);
+            loopLegs.set(back, { legM: payloadLength(lead.payload), resumeM: target.atM });
+            return [back];
+        }
+        // what is left of the loop is shorter than the way onto it: finish
+    }
+    return navDest === null ? null : planOptions(r, from, navDest, routePrefs(), bias);
+}
 function rebuildNavFromSelected() {
     const sel = options.find((o) => o.id === selectedId);
     if (!sel)
         return false;
+    navLoopLeg =
+        loopLegs.get(sel) ?? (navLoop !== null && sel === navLoop ? { legM: 0, resumeM: 0 } : null);
     navTrack = buildTrack(sel.payload);
     navManeuvers = buildManeuvers(sel.payload);
     navAlerts = buildAlerts(sel.payload);
     navNext = 0;
     navAlertNext = 0;
     navAnnounceStage = 0;
-    navHint = -1;
+    // A new track is ridden from its beginning, so look for the rider there
+    // first (snapToTrack falls back to the whole track if they are not). With no
+    // hint at all, a round trip — which ends where it starts — snapped its very
+    // first fix to the finish: "you have arrived" at the start of every loop, the
+    // ride recorder closed, and the loop counted as already ridden.
+    navHint = 0;
     navArrived = false;
     navNextKm = 1;
     navHalfway = false;
@@ -4385,8 +4429,10 @@ function navOnFix(fix) {
                 const bias = useMyWay && navHeading !== null
                     ? router.headingBias([lon, lat], navHeading)
                     : undefined;
-                options = planOptions(router, [lon, lat], navDest, routePrefs(), bias);
-                const first = options[0];
+                const found = rideOptionsFrom(router, [lon, lat], bias);
+                if (found !== null)
+                    options = found;
+                const first = found?.[0];
                 if (first) {
                     selectOption(first.id);
                     rebuildNavFromSelected();
@@ -4409,6 +4455,16 @@ function navOnFix(fix) {
     if (el("nav-alert").classList.contains("gps"))
         hideRideAlert();
     navHint = snap.idx;
+    // How far round the loop, once this track is on it. Forwards only, and only
+    // by what a bicycle can cover between fixes: a loop crosses and runs back
+    // along its own streets, and a snap onto the far side of one of those must
+    // not count the stretch in between as ridden.
+    if (navLoopLeg !== null && snap.alongM >= navLoopLeg.legM) {
+        const round = navLoopLeg.resumeM + snap.alongM - navLoopLeg.legM;
+        if (round > navLoopDoneM && round - navLoopDoneM <= LOOP_PROGRESS_MAX_STEP_M) {
+            navLoopDoneM = round;
+        }
+    }
     // advance past maneuvers we've already ridden through
     while (navNext < navManeuvers.length - 1 && (navManeuvers[navNext]?.atM ?? 0) < snap.alongM - 20) {
         navNext++;
@@ -4534,13 +4590,21 @@ function navOnFix(fix) {
 async function startNav() {
     // a ride follows the streets as they are, never a what-if's proposed lane
     clearWhatIf();
+    const chosen = options.find((o) => o.id === selectedId);
+    navLoop = chosen !== undefined && chosen.id.startsWith("loop") ? chosen : null;
+    navLoopDoneM = 0;
     if (!rebuildNavFromSelected())
         return;
     const destLngLat = end?.getLngLat() ?? start?.getLngLat();
     if (!destLngLat)
         return;
     navDest = [destLngLat.lng, destLngLat.lat];
-    navDestLabel = el("search").value.trim().split(",")[0] || null;
+    // A round trip has no destination field of its own; the one on screen still
+    // names wherever the rider last searched for.
+    navDestLabel =
+        navLoop !== null
+            ? "back where you started"
+            : el("search").value.trim().split(",")[0] || null;
     navOriginalDest = null;
     el("nav-resume").style.display = "none";
     navActive = true;
@@ -4666,20 +4730,26 @@ el("nav-playground").addEventListener("click", () => {
 el("nav-resume").addEventListener("click", () => {
     if (!router || !navLastPos || !navOriginalDest)
         return;
+    // back to the ride: the destination, or what is left of the loop
+    const detourDest = navDest;
+    navDest = navOriginalDest;
+    navOriginalDest = null;
     try {
-        options = planOptions(router, navLastPos, navOriginalDest, routePrefs());
-        const first = options[0];
-        if (!first)
-            return;
+        const found = rideOptionsFrom(router, navLastPos);
+        const first = found?.[0];
+        if (!found || !first)
+            throw new Error("no way back");
+        options = found;
         selectOption(first.id);
-        navDest = navOriginalDest;
-        navOriginalDest = null;
         rebuildNavFromSelected();
         el("nav-resume").style.display = "none";
         hideRideAlert();
         speak("back on the way. let's go!");
     }
     catch {
+        // still on the detour
+        navOriginalDest = navDest;
+        navDest = detourDest;
         speak("could not plan the way back from here");
     }
 });

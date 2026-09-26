@@ -33,6 +33,7 @@ const ASSETS = [
   "nav.js",
   "places.js",
   "planner.js",
+  "rejoin.js",
   "rides.js",
   "router.js",
   "search.js",
