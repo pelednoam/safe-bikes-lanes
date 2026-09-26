@@ -51,6 +51,9 @@ const STYLE_URL = {
     light: "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
     dark: "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
 };
+/** Dark-matter's names are drawn light with a dark halo, for a dark basemap —
+ * which is also what reads over aerial photography. */
+export const PHOTO_LABEL_STYLE_URL = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
 /** The same basemaps with no symbol layers at all, for a page whose subject is
  * its own streets and whose basemap should stay quiet under them. */
 export const NOLABEL_STYLE_URL = {
@@ -79,16 +82,18 @@ export const VENDORED_FONT_STACK = ["Noto Sans Regular"];
  * dots (z<8), invisible at any zoom this app opens at, and dropping them means
  * the style needs no sprite — one fewer external URL to allow and to cache. */
 const SPRITE_LAYERS = /_dot_/;
-const layerId = (theme, id) => `bm-${theme}-${id}`;
+const layerId = (prefix, theme, id) => `${prefix}-${theme}-${id}`;
 /** Re-identify, re-font and hide one theme's layers. */
-function themeLayers(theme, style, textFont) {
+function themeLayers(theme, style, textFont, labelsOnly, prefix) {
     const out = [];
     for (const src of style.layers) {
         if (SPRITE_LAYERS.test(src.id))
             continue;
+        if (labelsOnly && src.type !== "symbol")
+            continue;
         // A LayerSpecification is a union discriminated on `type`; spreading and
         // re-typing keeps that narrowing rather than widening every branch.
-        const layer = { ...src, id: layerId(theme, src.id) };
+        const layer = { ...src, id: layerId(prefix, theme, src.id) };
         const layout = { ...layer.layout };
         layout["visibility"] = "none";
         if (textFont !== undefined && layout["text-font"] !== undefined) {
@@ -107,6 +112,8 @@ async function fetchStyle(url) {
 export function createBasemap(map, anchor, options = {}) {
     const styleUrl = options.styles ?? STYLE_URL;
     const textFont = options.textFont;
+    const labelsOnly = options.labelsOnly ?? false;
+    const prefix = options.prefix ?? "bm";
     const fetchJson = options.fetchJson ?? fetchStyle;
     const installed = new Map();
     const inflight = new Map();
@@ -133,7 +140,7 @@ export function createBasemap(map, anchor, options = {}) {
             // tile against the whole layer list whenever that list changes, so
             // splitting this in two — lines first, labels once the map settled —
             // bought nothing and paid for a second full pass over every tile.
-            for (const layer of themeLayers(theme, style, textFont))
+            for (const layer of themeLayers(theme, style, textFont, labelsOnly, prefix))
                 add(layer);
             // Visibility has to match whatever was asked for while the style was
             // still on its way, or the basemap arrives stuck hidden — or, worse,

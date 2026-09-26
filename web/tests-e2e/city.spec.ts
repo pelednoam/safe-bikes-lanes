@@ -507,18 +507,42 @@ test("the aerial view keeps the colours, and the street names, on top of it", as
       id,
     );
 
+  // The street names are a group of vector label layers now (labels-*), not one
+  // raster: Carto stamps "API KEY REQUIRED" on its raster label tiles. They are
+  // installed the first time the photo is shown, so "none shown" is the check.
+  const photoLabels = (): Promise<{ n: number; shown: number; onTop: boolean }> =>
+    page.evaluate(() => {
+      const m = window._map!;
+      const ids = m.getStyle().layers.map((l) => l.id);
+      const labels = ids.filter((i) => i.startsWith("labels-"));
+      const shown = labels.filter(
+        (i) => ((m.getLayoutProperty(i, "visibility") as string | undefined) ?? "visible") === "visible",
+      ).length;
+      const first = ids.findIndex((i) => i.startsWith("labels-"));
+      return {
+        n: labels.length,
+        shown,
+        onTop: first !== -1 && ids.slice(first).every((i) => i.startsWith("labels-")),
+      };
+    });
+
   // off by default: the whole-town view is a pattern read at a glance, and
   // photography drowns it
   expect(await layer("aerial")).toBe("none");
-  expect(await layer("labels")).toBe("none");
+  expect((await photoLabels()).shown).toBe(0);
   expect(await layer("islands-casing")).toBe("none");
 
   await page.locator("#show-aerial").check();
   expect(await layer("aerial")).toBe("visible");
   // street names, because orthophotos carry none and this page's basemap is
   // deliberately label-free — without them you can see a red line but can't say
-  // which street it is
-  expect(await layer("labels")).toBe("visible");
+  // which street it is. Polled: the style is fetched on first use.
+  await expect
+    .poll(async () => {
+      const l = await photoLabels();
+      return l.n > 0 && l.shown === l.n;
+    }, { timeout: 30_000 })
+    .toBe(true);
   // and the dark halos that keep green and red legible against bright pavement
   expect(await layer("islands-casing")).toBe("visible");
   expect(await layer("barriers-casing")).toBe("visible");
@@ -529,7 +553,7 @@ test("the aerial view keeps the colours, and the street names, on top of it", as
   // putting them anywhere but last hid every one of them under a green line.
   expect(order.indexOf("islands")).toBeGreaterThan(order.indexOf("aerial"));
   expect(order.indexOf("barriers")).toBeGreaterThan(order.indexOf("aerial"));
-  expect(order.indexOf("labels")).toBe(order.length - 1);
+  expect((await photoLabels()).onTop, "street names must be drawn above everything").toBe(true);
   // each casing immediately under the line it outlines
   expect(order.indexOf("islands-casing")).toBe(order.indexOf("islands") - 1);
   expect(order.indexOf("barriers-casing")).toBe(order.indexOf("barriers") - 1);
@@ -541,7 +565,7 @@ test("the aerial view keeps the colours, and the street names, on top of it", as
 
   await page.locator("#show-aerial").uncheck();
   expect(await layer("aerial")).toBe("none");
-  expect(await layer("labels")).toBe("none");
+  expect((await photoLabels()).shown).toBe(0);
   expect(await layer("barriers-casing")).toBe("none");
 });
 

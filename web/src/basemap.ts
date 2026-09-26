@@ -60,6 +60,10 @@ const STYLE_URL: Record<BasemapTheme, string> = {
   dark: "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
 };
 
+/** Dark-matter's names are drawn light with a dark halo, for a dark basemap —
+ * which is also what reads over aerial photography. */
+export const PHOTO_LABEL_STYLE_URL = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
+
 /** The same basemaps with no symbol layers at all, for a page whose subject is
  * its own streets and whose basemap should stay quiet under them. */
 export const NOLABEL_STYLE_URL: Record<BasemapTheme, string> = {
@@ -91,20 +95,24 @@ export const VENDORED_FONT_STACK = ["Noto Sans Regular"];
  * the style needs no sprite — one fewer external URL to allow and to cache. */
 const SPRITE_LAYERS = /_dot_/;
 
-const layerId = (theme: BasemapTheme, id: string): string => `bm-${theme}-${id}`;
+const layerId = (prefix: string, theme: BasemapTheme, id: string): string =>
+  `${prefix}-${theme}-${id}`;
 
 /** Re-identify, re-font and hide one theme's layers. */
 function themeLayers(
   theme: BasemapTheme,
   style: StyleSpecification,
   textFont: string[] | undefined,
+  labelsOnly: boolean,
+  prefix: string,
 ): LayerSpecification[] {
   const out: LayerSpecification[] = [];
   for (const src of style.layers) {
     if (SPRITE_LAYERS.test(src.id)) continue;
+    if (labelsOnly && src.type !== "symbol") continue;
     // A LayerSpecification is a union discriminated on `type`; spreading and
     // re-typing keeps that narrowing rather than widening every branch.
-    const layer = { ...src, id: layerId(theme, src.id) } as LayerSpecification;
+    const layer = { ...src, id: layerId(prefix, theme, src.id) } as LayerSpecification;
     const layout: Record<string, unknown> = { ...(layer.layout as object | undefined) };
     layout["visibility"] = "none";
     if (textFont !== undefined && layout["text-font"] !== undefined) {
@@ -166,6 +174,12 @@ export interface BasemapOptions {
    * which is right for any page serving glyphs from Carto rather than
    * vendoring them — see VENDORED_FONT_STACK. */
   textFont?: string[];
+  /** Install only the style's label layers — for drawing its street and place
+   * names over something else, such as aerial photography. */
+  labelsOnly?: boolean;
+  /** Layer id prefix. Two instances on one map need different ones, or their
+   * layers collide. Defaults to "bm", which the planner and its tests expect. */
+  prefix?: string;
   fetchJson?: (url: string) => Promise<StyleSpecification>;
 }
 
@@ -176,6 +190,8 @@ export function createBasemap(
 ): Basemap {
   const styleUrl = options.styles ?? STYLE_URL;
   const textFont = options.textFont;
+  const labelsOnly = options.labelsOnly ?? false;
+  const prefix = options.prefix ?? "bm";
   const fetchJson = options.fetchJson ?? fetchStyle;
   const installed = new Map<BasemapTheme, { all: string[]; labels: Set<string> }>();
   const inflight = new Map<BasemapTheme, Promise<void>>();
@@ -202,7 +218,7 @@ export function createBasemap(
       // tile against the whole layer list whenever that list changes, so
       // splitting this in two — lines first, labels once the map settled —
       // bought nothing and paid for a second full pass over every tile.
-      for (const layer of themeLayers(theme, style, textFont)) add(layer);
+      for (const layer of themeLayers(theme, style, textFont, labelsOnly, prefix)) add(layer);
 
       // Visibility has to match whatever was asked for while the style was
       // still on its way, or the basemap arrives stuck hidden — or, worse,

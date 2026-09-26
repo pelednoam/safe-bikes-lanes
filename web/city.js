@@ -9,7 +9,7 @@
 // Deliberately not part of the app bundle: no router, no tiles, no navigation.
 // A page a councillor opens should load a map and a paragraph, not a trip
 // planner.
-import { CARTO_ATTRIBUTION, CARTO_GLYPHS, CARTO_MAXZOOM, CARTO_TILES, createBasemap, NOLABEL_STYLE_URL, } from "./basemap.js";
+import { CARTO_ATTRIBUTION, CARTO_GLYPHS, CARTO_MAXZOOM, CARTO_TILES, createBasemap, NOLABEL_STYLE_URL, PHOTO_LABEL_STYLE_URL, } from "./basemap.js";
 import { fillSegmentPhoto, segmentHtml } from "./segment.js";
 /** One hue per pocket. Rank 0 is the network that leaves the city, so it gets
  * the safety green everything else in the app uses for "you can ride this";
@@ -416,35 +416,43 @@ function addLayers(map, city) {
             "line-dasharray": [1.4, 1.1],
         },
     });
-    // Added last, so it sits above everything. Carto draws street names along
-    // street centrelines — precisely where this page draws its network — so
-    // adding it earlier put every label under a 4 px green line.
-    // Orthophotos carry no street names, and this page deliberately uses a
-    // label-free basemap — so over imagery you can see a red line without being
-    // able to say which street it is. A labels-only raster rather than a symbol
-    // layer: it needs no glyph fonts, which are a dependency that has gone
-    // missing here before and fails silently when it does.
-    map.addSource("labels", {
-        type: "raster",
-        tiles: ["https://basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}.png"],
-        tileSize: 256,
-        attribution: "© OpenStreetMap contributors © CARTO",
-    });
-    map.addLayer({
-        id: "labels",
-        type: "raster",
-        source: "labels",
-        layout: { visibility: "none" },
-        paint: {
-            // Both of Carto's label sets draw charcoal text — the "dark" one is the
-            // set FOR a dark basemap, not text drawn light — and charcoal on
-            // photography is unreadable. Pinning the brightness range to the top end
-            // pushes every non-transparent pixel to white while leaving the alpha
-            // alone, so the type comes out light against the imagery.
-            "raster-brightness-min": 1,
-            "raster-opacity": 0.9,
-        },
-    });
+    // Street names over the aerial view are added separately, on first use, by
+    // showPhotoLabels — see there for why they are no longer a raster layer.
+}
+/** Street and place names for the aerial view, installed the first time it is
+ * switched on and appended last so they sit above everything.
+ *
+ * Carto draws names along street centrelines — precisely where this page draws
+ * its network — so anything drawn after them would bury every one under a 4 px
+ * green line. Orthophotos carry no names, and this page's basemap is
+ * deliberately label-free, so without these you can see a red line over the
+ * imagery but not say which street it is.
+ *
+ * These were a labels-only raster (dark_only_labels) until September 2026, when
+ * Carto began stamping "API KEY REQUIRED" across that tile set too. They are
+ * now the label layers of Carto's dark-matter vector style: light text with a
+ * dark halo, which reads over photography without the brightness trick the
+ * raster needed. The glyphs come from Carto's own server, like the rest of this
+ * page's basemap, and the map-services health check watches it.
+ */
+let photoLabels = null;
+function showPhotoLabels(map, on) {
+    photoLabels ?? (photoLabels = createBasemap(map, () => undefined, {
+        styles: { light: PHOTO_LABEL_STYLE_URL, dark: PHOTO_LABEL_STYLE_URL },
+        labelsOnly: true,
+        prefix: "labels",
+    }));
+    const labels = photoLabels;
+    labels.show({ theme: "light", labels: true, on });
+    if (on) {
+        void labels
+            .ensure("light")
+            .then(() => labels.show({ theme: "light", labels: true, on: aerialIsOn() }))
+            .catch((err) => console.warn("street names for the aerial view failed to load", err));
+    }
+}
+function aerialIsOn() {
+    return el("show-aerial").checked;
 }
 function wireLayerToggles(map) {
     const pairs = [
@@ -468,9 +476,8 @@ function wireLayerToggles(map) {
     }
     const aerial = el("show-aerial");
     aerial.addEventListener("change", () => {
-        for (const layer of ["aerial", "labels"]) {
-            map.setLayoutProperty(layer, "visibility", vis(aerial.checked));
-        }
+        map.setLayoutProperty("aerial", "visibility", vis(aerial.checked));
+        showPhotoLabels(map, aerial.checked);
         syncCasings(map);
     });
 }
