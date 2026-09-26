@@ -265,20 +265,118 @@ CYCLEWAY_KEYS: Final[tuple[str, ...]] = (
 )
 
 
+def car_oneway(tags: Mapping[str, Any]) -> bool:
+    """osmnx's `oneway`: a bool (numpy's, after a DataFrame), maybe a list."""
+    return any(str(o) == "True" for o in listy(tags.get("oneway")))
+
+
+def bike_contraflow(tags: Mapping[str, Any]) -> bool:
+    """Bikes may ride this one-way street against the traffic."""
+    if "no" in tag_values(tags, "oneway:bicycle"):
+        return True
+    return any(
+        v.startswith("opposite") for key in CYCLEWAY_KEYS for v in tag_values(tags, key)
+    )
+
+
+def travel_direction(tags: Mapping[str, Any]) -> str | None:
+    """Whether an edge runs with ("forward") or against ("backward") the OSM
+    way it came from, or None when a merged edge mixes both."""
+    rev = {bool(r) for r in listy(tags.get("reversed")) if r is not None and r == r}
+    if rev == {False}:
+        return "forward"
+    if rev == {True}:
+        return "backward"
+    return None
+
+
+def facility_values(tags: Mapping[str, Any]) -> list[str]:
+    """The `cycleway*` values that describe the side of the street this edge
+    rides on.
+
+    OSM's sides are relative to the way's direction, and traffic keeps right:
+    on a two-way street cycleway:right serves riders travelling with the way
+    and cycleway:left riders travelling against it. Counting both for both
+    directions gave the whole street a lane that only one side has. On a
+    one-way street every side serves the one direction — unless bikes may ride
+    it both ways, when the left side is the contraflow lane (the usual tagging,
+    with or without cycleway:left:oneway=-1). `opposite_lane`/`opposite_track`
+    on `cycleway` are the older way of saying the same, and `opposite` means
+    contraflow with no facility at all.
+    """
+    def vals(key: str) -> list[str]:
+        return tag_values(tags, key)
+
+    plain = [v for v in vals("cycleway") if not v.startswith("opposite")]
+    opposite = [
+        v.removeprefix("opposite").lstrip("_")
+        for key in CYCLEWAY_KEYS
+        for v in vals(key)
+        if v.startswith("opposite")
+    ]
+    direction = travel_direction(tags)
+    one_way = car_oneway(tags)
+    contraflow = one_way and bike_contraflow(tags)
+    if direction == "forward":
+        out = plain + vals("cycleway:both") + vals("cycleway:right")
+        if one_way and not contraflow:
+            out += vals("cycleway:left")
+        return out
+    if direction == "backward":
+        out = vals("cycleway:both") + vals("cycleway:left") + opposite
+        if not one_way:
+            out += plain
+        return out
+    # a merged edge running both ways along its parts: any facility counts, as
+    # it always has (and as for roads, mixed segments are rare and short)
+    return [v for key in CYCLEWAY_KEYS for v in vals(key) if not v.startswith("opposite")]
+
+
 def classify_osm(tags: Mapping[str, Any]) -> tuple[str, bool]:
     """Base protection class from OSM tags alone, plus a busy-road flag.
 
     Conservative: when a tag is a list (simplified edge spans several ways),
-    road class uses the worst part but a facility tag anywhere counts —
-    mixed segments are rare and short."""
+    road class uses the worst part. The facility is the one on this edge's
+    side of the street (facility_values)."""
     road = classify_road(tags)
     if road in OFFSTREET:
         return road, False
     busy = road == "busy_street"
-    values: list[Any] = []
-    for key in CYCLEWAY_KEYS:
-        values.extend(listy(tags.get(key)))
-    return facility_class(values) or road, busy
+    return facility_class(facility_values(tags)) or road, busy
+
+
+def add_contraflow_edges(graph: nx.MultiDiGraph) -> int:
+    """Give bikes the direction a one-way street allows them and cars.
+
+    osmnx builds edge directions from `oneway` alone, so oneway:bicycle=no and
+    cycleway=opposite* were downloaded and ignored: the router could not ride a
+    contraflow lane it was drawing on the map, and sent families round the
+    block instead. Each such edge gets its reverse, geometry flipped and marked
+    `contraflow`, classified later by facility_values like any other.
+
+    Only for an edge that is a single OSM way. osmnx merges a chain of ways
+    into one edge and keeps each tag's distinct values, dropping the ways that
+    lack the tag — so oneway:bicycle="no" on a merged edge cannot say whether
+    every way in the chain allows contraflow, and routing a child the wrong way
+    down the part that doesn't is the one mistake this must not make.
+    """
+    added = 0
+    for u, v, _k, d in list(graph.edges(keys=True, data=True)):
+        if not car_oneway(d) or isinstance(d.get("osmid"), list):
+            continue
+        if not bike_contraflow(d) or travel_direction(d) is None:
+            continue
+        existing = graph.get_edge_data(v, u, default={}).values()
+        if any(e.get("osmid") == d.get("osmid") for e in existing):
+            continue  # already two-way here
+        back = dict(d)
+        back["reversed"] = not bool(d.get("reversed"))
+        back["contraflow"] = True
+        if isinstance(d.get("geometry"), LineString):
+            back["geometry"] = LineString(list(d["geometry"].coords)[::-1])
+        graph.add_edge(v, u, **back)
+        added += 1
+    return added
 
 
 def facility_multiplier(
@@ -609,6 +707,7 @@ def build() -> None:
     print("downloading OSM (bike + footpaths) ...")
     G = acquire_osm(BBOX)
     print(f"  merged graph: {len(G.nodes)} nodes, {len(G.edges)} edges")
+    print(f"  added {add_contraflow_edges(G)} contraflow edges (bikes both ways)")
     mem("after download+compose")
     nodes, edges = ox.graph_to_gdfs(G)
     edges = edges.to_crs(METRIC_CRS)

@@ -1,8 +1,10 @@
 """Unit tests for the classification and cost model."""
 
 import config
+import networkx as nx
 import pytest
 from build_graph import (
+    add_contraflow_edges,
     angle_diff,
     classify_osm,
     classify_road,
@@ -232,3 +234,65 @@ def test_safer_picks_lower_stress() -> None:
 def test_angle_diff_wraps() -> None:
     assert angle_diff(179, 1) == 2
     assert angle_diff(90, 0) == 90
+
+
+def side(tags: dict[str, object], reversed_: bool) -> str:
+    return classify_osm({**tags, "reversed": reversed_})[0]
+
+
+def test_a_lane_on_one_side_serves_one_direction() -> None:
+    """Traffic keeps right: on a two-way street cycleway:right serves riders
+    going with the way and cycleway:left riders going against it. Both
+    directions used to get the lane."""
+    street = {"highway": "residential", "oneway": False, "cycleway:left": "lane"}
+    assert side(street, reversed_=True) == "lane"
+    assert side(street, reversed_=False) == "quiet_street"
+    street = {"highway": "tertiary", "oneway": False, "cycleway:right": "lane"}
+    assert side(street, reversed_=False) == "lane"
+    assert side(street, reversed_=True) == "moderate_street"
+    # both sides, or no side named: both directions
+    assert side({"highway": "tertiary", "cycleway": "lane"}, reversed_=True) == "lane"
+    assert side({"highway": "tertiary", "cycleway:both": "lane"}, reversed_=True) == "lane"
+
+
+def test_on_a_one_way_street_every_side_serves_the_one_direction() -> None:
+    # Boston and Cambridge paint many one-way streets' lanes on the left
+    street = {"highway": "tertiary", "oneway": True, "cycleway:left": "lane"}
+    assert side(street, reversed_=False) == "lane"
+
+
+def test_a_contraflow_lane_is_for_riding_against_the_traffic() -> None:
+    street = {
+        "highway": "tertiary", "oneway": True, "oneway:bicycle": "no", "cycleway:left": "lane",
+    }
+    assert side(street, reversed_=True) == "lane"  # the contraflow edge
+    assert side(street, reversed_=False) == "moderate_street"  # with traffic: no lane
+    # the older tagging says the same on `cycleway`
+    older = {"highway": "tertiary", "oneway": True, "cycleway": "opposite_lane"}
+    assert side(older, reversed_=True) == "lane"
+    assert side(older, reversed_=False) == "moderate_street"
+    track = {"highway": "tertiary", "oneway": True, "cycleway": "opposite_track"}
+    assert side(track, reversed_=True) == "separated"
+    # plain `opposite` is permission with no facility
+    bare = {"highway": "tertiary", "oneway": True, "cycleway": "opposite"}
+    assert side(bare, reversed_=True) == "moderate_street"
+
+
+def test_contraflow_streets_get_their_bike_direction() -> None:
+    """osmnx builds directions from `oneway` alone, so the router could not
+    ride a contraflow lane it drew on the map."""
+    g = nx.MultiDiGraph()
+    one_way = {"highway": "residential", "oneway": True, "reversed": False}
+    g.add_edge(1, 2, osmid=10, **one_way, **{"oneway:bicycle": "no"})
+    g.add_edge(3, 4, osmid=11, **one_way, cycleway="opposite_lane")
+    g.add_edge(5, 6, osmid=12, **one_way)  # no contraflow: stays one-way
+    # a merged chain: "no" may be the tag of only some of its ways
+    g.add_edge(7, 8, osmid=[13, 14], **one_way, **{"oneway:bicycle": "no"})
+    assert add_contraflow_edges(g) == 2
+    assert g.has_edge(2, 1) and g.has_edge(4, 3)
+    assert not g.has_edge(6, 5) and not g.has_edge(8, 7)
+    back = g.get_edge_data(2, 1)[0]
+    assert back["contraflow"] is True and back["reversed"] is True
+    assert classify_osm(g.get_edge_data(4, 3)[0])[0] == "lane"
+    # idempotent: a street that already runs both ways is left alone
+    assert add_contraflow_edges(g) == 0

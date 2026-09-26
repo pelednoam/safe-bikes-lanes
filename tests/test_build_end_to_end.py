@@ -53,6 +53,12 @@ def tiny_osm(painted: bool = False) -> nx.MultiDiGraph:
     if painted:
         link(1, 7, highway="residential", name="Painted St", cycleway="lane")
         link(4, 8, highway="path", name="Mud Trail", surface="dirt")
+        # one-way for cars, both ways for bikes, a contraflow lane on the left;
+        # osmnx hands over only the car direction
+        g.add_edge(
+            6, 5, osmid=605, highway="residential", name="Contra St", oneway=True,
+            reversed=False, **{"oneway:bicycle": "no", "cycleway:left": "lane"},
+        )
         link(7, 8, highway="primary", name="Sharrow Ave", cycleway="shared_lane")
     # osmnx measures lengths during the download the real acquire_osm does;
     # use its own helper rather than inventing metres by hand
@@ -277,3 +283,19 @@ def test_an_unpaved_trail_reaches_the_app_as_its_own_class(
                 # every other class keeps the index it has always had
                 assert e[3] < len(legacy)
     assert found
+
+
+def test_a_contraflow_street_can_be_ridden_both_ways(
+    sandbox: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(build_graph, "acquire_osm", lambda _bbox: tiny_osm(painted=True))
+    build_graph.build()
+    with (sandbox / "graph.pkl").open("rb") as fh:
+        g: nx.MultiDiGraph = pickle.load(fh)
+    with_traffic = g.get_edge_data(6, 5)
+    against = g.get_edge_data(5, 6)
+    assert with_traffic is not None
+    assert against is not None, "the contraflow direction is missing"
+    # the lane is on the contraflow side, and only there
+    assert against[0]["cls"] == "lane"
+    assert with_traffic[0]["cls"] == "quiet_street"
