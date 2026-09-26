@@ -42,7 +42,12 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <!-- Android 13+: without it the ride's "navigation is running" notification is
+         hidden. Asked for when a ride starts (AppShellPlugin.requestNotifications).
+         No ACCESS_BACKGROUND_LOCATION: a ride runs as a foreground service with that
+         notification, which is what keeps GPS going with the screen off, and the
+         background permission was declared but never asked for. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 </manifest>

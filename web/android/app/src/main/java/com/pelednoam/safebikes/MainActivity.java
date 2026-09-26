@@ -1,23 +1,26 @@
 package com.pelednoam.safebikes;
 
-import android.Manifest;
 import android.app.DownloadManager;
 import android.content.Intent;
-import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Environment;
 import android.view.WindowManager;
-
-import androidx.core.app.ActivityCompat;
-import androidx.core.content.ContextCompat;
 
 import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
+        // Before super.onCreate: the bridge is built there, from this list.
+        registerPlugin(AppShellPlugin.class);
         super.onCreate(savedInstanceState);
+        // No permission is asked for here any more. Location used to be requested
+        // the moment the app opened, before anyone had planned anything, with
+        // nothing to say why. It is asked when it is needed instead: the WebView
+        // asks the first time "Your location" is used, and a ride asks through
+        // AppShellPlugin before it starts the watcher.
+
         // riding use: never let the screen sleep while the app is open
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         // A WebView silently drops downloads, so tapping "install" on the in-app
@@ -36,18 +39,6 @@ public class MainActivity extends BridgeActivity {
                 .setDownloadListener(
                         (url, userAgent, contentDisposition, mimetype, contentLength) ->
                                 downloadUpdate(url));
-        // the WebView's navigator.geolocation needs the app-level permission;
-        // ask up front so the first Navigate tap just works
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
-                != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(
-                    this,
-                    new String[] {
-                        Manifest.permission.ACCESS_FINE_LOCATION,
-                        Manifest.permission.ACCESS_COARSE_LOCATION
-                    },
-                    1001);
-        }
     }
 
     /** Download the update through the system, into Downloads, with a notification.

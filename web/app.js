@@ -1,5 +1,5 @@
 import { CARTO_ATTRIBUTION, CARTO_MAXZOOM, CARTO_TILES, createBasemap, VENDORED_FONT_STACK, } from "./basemap.js";
-import { isNativeApp, isNewerAppVersion, lastNativeSpeechError, minimizeApp, nativeSpeak, onAndroidBack, startDownload, startBackgroundWatcher, stopBackgroundWatcher, webVoiceCount, } from "./native.js";
+import { askForRideNotifications, isNativeApp, isNewerAppVersion, lastNativeSpeechError, locationAdvice, minimizeApp, nativeLocationAllowed, nativeSpeak, onAndroidBack, rideLocationState, startDownload, startBackgroundWatcher, stopBackgroundWatcher, webVoiceCount, } from "./native.js";
 import { GEOCODE_DEBOUNCE_MS, geocodeDelayMs, matchScore, metresBetween, rank as rankSearch, describe as describeRow, worthGeocoding, } from "./search.js";
 import { CLASS_LABELS, cautionsHtml, clearPhotoCache, esc, FACILITY_CLASSES, nearestMapillary, fillSegmentPhoto as fillPhotoSlot, GRADE_COLORS, segmentHtml, } from "./segment.js";
 import { bearingDeg, buildAlerts, buildManeuvers, buildTrack, distM, snapToTrack, sunsetTime, trackBearingAhead, trackSlice, } from "./nav.js";
@@ -415,12 +415,21 @@ async function locateIfAlreadyAllowed() {
     if (!fromCurrent || start !== null || !navigator.geolocation)
         return;
     try {
-        const perms = navigator.permissions;
-        if (perms === undefined)
-            return; // Safari <16: don't guess, wait to be asked
-        const status = await perms.query({ name: "geolocation" });
-        if (status.state !== "granted")
+        // In the app, Android's own answer: the WebView's Permissions API reports
+        // its per-origin state, which is not the app's permission. The app no
+        // longer asks at launch, so this is what keeps "Your location" filled in
+        // for someone who allowed it on an earlier ride.
+        const nativeAllowed = await nativeLocationAllowed();
+        if (nativeAllowed === false)
             return;
+        const perms = navigator.permissions;
+        if (nativeAllowed === null) {
+            if (perms === undefined)
+                return; // Safari <16: don't guess, wait to be asked
+            const status = await perms.query({ name: "geolocation" });
+            if (status.state !== "granted")
+                return;
+        }
         const at = await currentPosition();
         if (!fromCurrent || start !== null)
             return; // the rider got there first
@@ -4016,6 +4025,81 @@ function onLocationError(err) {
 function navOnPosition(pos) {
     navOnFix(toFix(pos));
 }
+/** A location problem on the ride alert, and what tapping the alert opens. */
+let gpsAlertFix = null;
+function showLocationAdvice(message, fix) {
+    const text = `⚠ ${message}`;
+    showRideAlert(text, "gps");
+    gpsAlertFix = fix === undefined ? null : { text, fix };
+}
+el("nav-alert").addEventListener("click", () => {
+    const box = el("nav-alert");
+    // only while the alert still says what the fix is for
+    if (gpsAlertFix !== null && box.style.display !== "none" && box.textContent === gpsAlertFix.text) {
+        gpsAlertFix.fix();
+    }
+});
+/** Set while navStartLocation is waiting on a permission dialog. */
+let navLocationStarting = false;
+/** Start the ride's position source.
+ *
+ * In the app, permission comes first and the watcher second. The watcher's
+ * plugin asks for location itself, but goes straight on to start its foreground
+ * service without waiting for the answer; on Android 14+ that start is refused
+ * without the permission and never retried, so a first ride only tracked while
+ * the screen stayed on. With precise location refused or only approximate, no
+ * watcher starts at all — the WebView would just ask again — and this runs again
+ * when the rider comes back from Settings (`ask` false: nothing pops up then). */
+async function navStartLocation(ask) {
+    if (navLocationStarting || navBgWatcherId !== null || navWatchId !== null)
+        return;
+    navLocationStarting = true;
+    try {
+        if (isNativeApp()) {
+            const state = await rideLocationState(ask);
+            if (!navActive)
+                return;
+            const advice = locationAdvice(state);
+            if (state === "approximate" || state === "denied") {
+                if (advice !== null)
+                    showLocationAdvice(advice.text, advice.fix);
+                return;
+            }
+            if (ask && state !== "unknown") {
+                const line = await askForRideNotifications((l) => showRideAlert(`🔔 ${l}`, "gps"));
+                if (line !== null && el("nav-alert").textContent === `🔔 ${line}`) {
+                    hideRideAlert();
+                }
+                if (!navActive)
+                    return;
+            }
+            // "off" still starts the watcher: its fixes arrive once location is on
+            if (advice !== null)
+                showLocationAdvice(advice.text, advice.fix);
+            // background watcher keeps GPS + voice alive with the screen off (shows a
+            // persistent notification while navigating)
+            const id = await startBackgroundWatcher("Family Bike Router", "Turn-by-turn navigation is running", navOnFix, showLocationAdvice, { requestPermissions: state === "unknown" });
+            if (!navActive) {
+                if (id !== null)
+                    void stopBackgroundWatcher(id);
+                return;
+            }
+            navBgWatcherId = id;
+            if (id !== null)
+                return;
+        }
+        navWatchId = navigator.geolocation.watchPosition(navOnPosition, (err) => onLocationError(err), { enableHighAccuracy: true, maximumAge: 1000, timeout: 15000 });
+    }
+    finally {
+        navLocationStarting = false;
+    }
+}
+// Back from Settings with location now allowed (or switched on): pick the ride up.
+document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && navActive && isNativeApp()) {
+        void navStartLocation(false);
+    }
+});
 /** A warning the rider can SEE. The spoken version is the primary channel, but
  * it is useless muted or over kids' chatter, and a safety app must not depend on
  * audio alone. Cleared automatically once it's behind us. */
@@ -4468,16 +4552,7 @@ async function startNav() {
     catch {
         wakeLock = null; // unsupported or denied — navigation still works
     }
-    if (isNativeApp()) {
-        // native app: background watcher keeps GPS + voice alive with the
-        // screen off (shows a persistent notification while navigating)
-        navBgWatcherId = await startBackgroundWatcher("Family Bike Router", "Turn-by-turn navigation is running", navOnFix, (message) => {
-            showRideAlert(`⚠ ${message}`, "gps");
-        });
-    }
-    if (navBgWatcherId === null) {
-        navWatchId = navigator.geolocation.watchPosition(navOnPosition, (err) => onLocationError(err), { enableHighAccuracy: true, maximumAge: 1000, timeout: 15000 });
-    }
+    await navStartLocation(true);
     // absorb one Back press: on Android the hardware button is a thumb-brush from
     // ending the ride, and there was no guard of any kind
     history.pushState({ navigating: true }, "");

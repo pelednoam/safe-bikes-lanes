@@ -17,6 +17,8 @@ interface ShellState {
   back: (() => void) | null;
   /** The watcher's callback, to deliver errors through it. */
   watcher: ((position?: unknown, error?: { code?: string; message?: string }) => void) | null;
+  /** What AppShell reports about location; a test may change it mid-run. */
+  location: { precise: boolean; approximate: boolean; enabled: boolean; notifications: string };
 }
 
 declare global {
@@ -35,21 +37,26 @@ interface ShimOptions {
 
 async function androidShim(page: Page, options: ShimOptions = {}): Promise<void> {
   await page.addInitScript((opts: ShimOptions) => {
-    const shell: ShellState = { calls: [], args: [], back: null, watcher: null };
+    const shell: ShellState = {
+      calls: [],
+      args: [],
+      back: null,
+      watcher: null,
+      location: opts.location ?? {
+        precise: true,
+        approximate: true,
+        enabled: true,
+        notifications: "prompt",
+      },
+    };
     window.__shell = shell;
     const record =
-      (name: string, result: unknown = undefined) =>
+      (name: string, result: () => unknown = () => undefined) =>
       async (arg?: unknown): Promise<unknown> => {
         shell.calls.push(name);
         shell.args.push(arg);
-        return result;
+        return result();
       };
-    const location = opts.location ?? {
-      precise: true,
-      approximate: true,
-      enabled: true,
-      notifications: "prompt",
-    };
     const plugins: Record<string, Record<string, unknown>> = {
       TextToSpeech: { speak: record("TextToSpeech.speak"), stop: async () => undefined },
       BackgroundGeolocation: {
@@ -73,15 +80,16 @@ async function androidShim(page: Page, options: ShimOptions = {}): Promise<void>
     };
     if (opts.appShell !== false) {
       plugins["AppShell"] = {
-        locationStatus: record("AppShell.locationStatus", location),
-        requestLocation: record("AppShell.requestLocation", location),
-        requestNotifications: record("AppShell.requestNotifications", {
-          notifications: "granted",
+        locationStatus: record("AppShell.locationStatus", () => shell.location),
+        requestLocation: record("AppShell.requestLocation", () => shell.location),
+        requestNotifications: record("AppShell.requestNotifications", () => {
+          shell.location = { ...shell.location, notifications: "granted" };
+          return { notifications: "granted" };
         }),
         openLocationSettings: record("AppShell.openLocationSettings"),
         openAppSettings: record("AppShell.openAppSettings"),
         keepScreenOn: record("AppShell.keepScreenOn"),
-        downloadUpdate: record("AppShell.downloadUpdate", { status: "started" }),
+        downloadUpdate: record("AppShell.downloadUpdate", () => ({ status: "started" })),
       };
     }
     window.Capacitor = {
@@ -170,4 +178,116 @@ test("Back closes the stops menu before it asks about the ride", async ({ page }
   await pressBack(page);
   await expect(page.locator("#nav-stops-menu")).toBeHidden();
   await expect(page.locator("#nav-ask")).toBeHidden();
+});
+
+// ── location and notifications when a ride starts ─────────────────────────
+
+test("opening the app asks for nothing", async ({ page }) => {
+  // It used to raise Android's location dialog at launch, before anyone had
+  // planned a trip; now a ride asks, or "Your location" does when first used.
+  await androidShim(page);
+  await boot(page);
+  const made = await calls(page);
+  expect(made).not.toContain("AppShell.requestLocation");
+  expect(made).not.toContain("AppShell.requestNotifications");
+});
+
+test("a ride asks for location, then notifications, and only then starts the watcher", async ({
+  page,
+}) => {
+  await androidShim(page);
+  await startRide(page);
+  await expect.poll(() => calls(page)).toContain("BackgroundGeolocation.addWatcher");
+  const made = await calls(page);
+  const at = (name: string): number => made.indexOf(name);
+  expect(at("AppShell.requestLocation")).toBeGreaterThanOrEqual(0);
+  expect(at("AppShell.requestNotifications")).toBeGreaterThan(at("AppShell.requestLocation"));
+  // The service starts with the permission already held, so the plugin must not
+  // ask again inside addWatcher — that is where the Android 14 start failed.
+  expect(at("BackgroundGeolocation.addWatcher")).toBeGreaterThan(
+    at("AppShell.requestNotifications"),
+  );
+  const options = await page.evaluate(
+    () => window.__shell.args[window.__shell.calls.indexOf("BackgroundGeolocation.addWatcher")],
+  );
+  expect(options).toMatchObject({ requestPermissions: false });
+  // the line shown while the dialog was up is gone once it is answered
+  await expect(page.locator("#nav-alert")).toBeHidden();
+
+  // a second ride does not ask about notifications again
+  await pressBack(page);
+  await page.locator("#nav-ask-yes").click();
+  await page.locator("#nav-btn").click();
+  await expect
+    .poll(async () => (await calls(page)).filter((c) => c.endsWith("addWatcher")).length)
+    .toBe(2);
+  expect((await calls(page)).filter((c) => c === "AppShell.requestNotifications")).toHaveLength(1);
+});
+
+test("approximate location is explained, and no watcher starts on it", async ({ page }) => {
+  await androidShim(page, {
+    location: { precise: false, approximate: true, enabled: true, notifications: "granted" },
+  });
+  await startRide(page);
+  const alert = page.locator("#nav-alert");
+  await expect(alert).toBeVisible();
+  await expect(alert).toContainText(/precise location/i);
+  await expect(alert).not.toContainText(/all the time/i);
+  expect(await calls(page)).not.toContain("BackgroundGeolocation.addWatcher");
+  await alert.click();
+  await expect.poll(() => calls(page)).toContain("AppShell.openAppSettings");
+
+  // back from Settings with precise location on: the ride picks itself up,
+  // without raising another dialog
+  await page.evaluate(() => {
+    window.__shell.location = { ...window.__shell.location, precise: true };
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await expect.poll(() => calls(page)).toContain("BackgroundGeolocation.addWatcher");
+  expect((await calls(page)).filter((c) => c === "AppShell.requestLocation")).toHaveLength(1);
+});
+
+test("a refused permission says 'while using the app', not 'all the time'", async ({ page }) => {
+  await androidShim(page, {
+    location: { precise: false, approximate: false, enabled: true, notifications: "granted" },
+  });
+  await startRide(page);
+  const alert = page.locator("#nav-alert");
+  await expect(alert).toContainText(/while using the app/i);
+  await expect(alert).not.toContainText(/all the time/i);
+  expect(await calls(page)).not.toContain("BackgroundGeolocation.addWatcher");
+});
+
+test("location switched off says so, and taps through to the switch", async ({ page }) => {
+  await androidShim(page, {
+    location: { precise: true, approximate: true, enabled: false, notifications: "granted" },
+  });
+  await startRide(page);
+  const alert = page.locator("#nav-alert");
+  await expect(alert).toContainText(/location is off/i);
+  // the watcher starts anyway: its fixes arrive the moment location is on
+  await expect.poll(() => calls(page)).toContain("BackgroundGeolocation.addWatcher");
+  await alert.click();
+  await expect.poll(() => calls(page)).toContain("AppShell.openLocationSettings");
+  expect(await calls(page)).not.toContain("AppShell.openAppSettings");
+});
+
+test("the watcher's NOT_AUTHORIZED is explained by what is actually wrong", async ({ page }) => {
+  await androidShim(page);
+  await startRide(page);
+  await expect.poll(() => page.evaluate(() => window.__shell.watcher !== null)).toBe(true);
+  // location is switched off mid-ride, and the plugin reports NOT_AUTHORIZED
+  await page.evaluate(() => {
+    window.__shell.location = { ...window.__shell.location, enabled: false };
+    window.__shell.watcher?.(undefined, {
+      code: "NOT_AUTHORIZED",
+      message: "Location services disabled.",
+    });
+  });
+  const alert = page.locator("#nav-alert");
+  await expect(alert).toContainText(/location is off/i);
+  await expect(alert).not.toContainText(/all the time/i);
+  // and nothing was opened without being asked
+  expect(await calls(page)).not.toContain("BackgroundGeolocation.openSettings");
+  expect(await calls(page)).not.toContain("AppShell.openLocationSettings");
 });

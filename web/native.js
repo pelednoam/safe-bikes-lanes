@@ -27,8 +27,13 @@ function ttsPlugin() {
     }
 }
 /** Start a background location watcher (keeps a foreground service + GPS alive
- * with the screen off). Returns the watcher id, or null when unavailable. */
-export async function startBackgroundWatcher(notificationTitle, notificationMessage, onFix, onError) {
+ * with the screen off). Returns the watcher id, or null when unavailable.
+ *
+ * `requestPermissions` should be false once rideLocationState(true) has asked:
+ * the plugin's own request runs alongside starting its foreground service
+ * rather than before it, and on Android 14+ that start is refused without the
+ * permission and never retried. It stays true only where AppShell is missing. */
+export async function startBackgroundWatcher(notificationTitle, notificationMessage, onFix, onError, options = {}) {
     const plugin = bgPlugin();
     if (plugin === null)
         return null;
@@ -36,14 +41,16 @@ export async function startBackgroundWatcher(notificationTitle, notificationMess
         return await plugin.addWatcher({
             backgroundTitle: notificationTitle,
             backgroundMessage: notificationMessage,
-            requestPermissions: true,
+            requestPermissions: options.requestPermissions ?? true,
             stale: false,
             distanceFilter: 3,
         }, (position, error) => {
             if (error) {
                 if (error.code === "NOT_AUTHORIZED") {
-                    onError('background location not allowed — set location to "Allow all the time"');
-                    void plugin.openSettings().catch(() => undefined);
+                    // The plugin says NOT_AUTHORIZED for a refused permission AND for the
+                    // phone's location switch being off, so find out which before
+                    // telling the rider what to do about it.
+                    void explainNotAuthorized(plugin).then((advice) => onError(advice.text, advice.fix));
                 }
                 else {
                     onError(error.message ?? "location error");
@@ -64,6 +71,18 @@ export async function startBackgroundWatcher(notificationTitle, notificationMess
     catch {
         return null;
     }
+}
+async function explainNotAuthorized(plugin) {
+    const advice = locationAdvice(await rideLocationState(false));
+    if (advice !== null)
+        return advice;
+    // No AppShell to ask, or it says all is well by now: name both causes. Neither
+    // is "Allow all the time" — the ride's notification is what keeps GPS going
+    // with the screen off, so background permission is not what is missing.
+    return {
+        text: "location is off or not allowed — turn it on, and allow it for this app",
+        fix: () => void plugin.openSettings().catch(() => undefined),
+    };
 }
 export async function stopBackgroundWatcher(id) {
     const plugin = bgPlugin();
@@ -103,6 +122,100 @@ export function minimizeApp() {
     if (plugin === null || typeof plugin.minimizeApp !== "function")
         return;
     void plugin.minimizeApp().catch(() => undefined);
+}
+function appShell() {
+    const plugin = nativePlugin("AppShell");
+    return plugin !== null && typeof plugin.locationStatus === "function" ? plugin : null;
+}
+export function classifyLocation(status) {
+    // permission first: while it is refused, the switch is not the thing to fix
+    if (!status.precise)
+        return status.approximate ? "approximate" : "denied";
+    return status.enabled ? "ready" : "off";
+}
+/** What to tell the rider about a location state, or null when there is
+ * nothing to tell. Never "Allow all the time": the ride runs as a foreground
+ * service with its notification, which is what keeps GPS going with the screen
+ * off, so the background permission is neither needed nor asked for. */
+export function locationAdvice(state) {
+    const shell = appShell();
+    const open = (which) => () => {
+        void shell?.[which]().catch(() => undefined);
+    };
+    switch (state) {
+        case "off":
+            return {
+                text: "location is off on this phone — tap here to turn it on",
+                fix: open("openLocationSettings"),
+            };
+        case "approximate":
+            // Approximate is a circle kilometres across: the ride would snap to the
+            // wrong street, and every turn would be called late or not at all.
+            return {
+                text: "turn-by-turn needs precise location — tap, then Location › Use precise location",
+                fix: open("openAppSettings"),
+            };
+        case "denied":
+            return {
+                text: "location isn't allowed — tap, then Location › Allow only while using the app",
+                fix: open("openAppSettings"),
+            };
+        case "ready":
+        case "unknown":
+            return null;
+    }
+}
+/** Location for a ride, first asking for precise permission when `ask`.
+ *
+ * This is the one place a ride asks. The app used to ask at launch, with no
+ * hint of why a bike map wants location before anyone has planned a trip, and
+ * then again inside the watcher — too late for its foreground service. */
+export async function rideLocationState(ask) {
+    const shell = appShell();
+    if (shell === null)
+        return "unknown";
+    try {
+        return classifyLocation(ask ? await shell.requestLocation() : await shell.locationStatus());
+    }
+    catch {
+        return "unknown";
+    }
+}
+/** Precise location already allowed in the app: true/false, or null on the
+ * website (where the Permissions API answers instead). Precise only, because
+ * with approximate alone the WebView's geolocation asks again — at launch. */
+export async function nativeLocationAllowed() {
+    const shell = appShell();
+    if (shell === null)
+        return null;
+    try {
+        return (await shell.locationStatus()).precise;
+    }
+    catch {
+        return null;
+    }
+}
+/** Ask for the notification permission (Android 13+) before a ride's watcher
+ * starts: without it the "navigation is running" notification is hidden, and
+ * that notification is the only sign the ride is still tracking once the app
+ * is out of view. Asked only while Android has never been asked — a refusal is
+ * respected, and the ride works without it. `explain` gets a line to show while
+ * the system dialog is up; the line is returned, or null when nothing was asked. */
+export async function askForRideNotifications(explain) {
+    const shell = appShell();
+    if (shell === null)
+        return null;
+    try {
+        if ((await shell.locationStatus()).notifications !== "prompt")
+            return null;
+        const line = "allow notifications, so Android can show that navigation is running";
+        explain(line);
+        await shell.requestNotifications();
+        return line;
+    }
+    catch {
+        return null;
+    }
 }
 /** Start a file download (the APK update).
  *
