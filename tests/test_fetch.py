@@ -65,6 +65,23 @@ def test_poi_kinds_map_from_tags(monkeypatch: pytest.MonkeyPatch) -> None:
     assert len(fc["features"]) == 8
 
 
+def test_a_partial_overpass_answer_is_not_a_poi_layer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A query that times out part-way still answers 200, with the elements it
+    had and a `remark`. That was saved as the POI layer."""
+    place = {"lon": -71.1, "lat": 42.38, "tags": {"leisure": "playground"}}
+    answers = [
+        {"elements": [place], "remark": "runtime error: Query timed out"},
+        {"elements": [place, place, place]},
+    ]
+    monkeypatch.setattr(
+        urllib.request,
+        "urlopen",
+        lambda *_a, **_k: _FakeResponse(json.dumps(answers.pop(0)).encode()),
+    )
+    fc = fetch.fetch_pois()
+    assert len(fc["features"]) == 3  # the complete answer, from the next mirror
+
+
 def test_towns_keep_only_their_name(monkeypatch: pytest.MonkeyPatch) -> None:
     raw = {
         "type": "FeatureCollection",

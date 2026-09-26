@@ -15,8 +15,10 @@ import os
 import pickle
 import time
 from collections import Counter
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
+from contextlib import contextmanager
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Final
 
 import config
@@ -680,6 +682,64 @@ OVERPASS_MIRRORS: Final[list[str]] = [
 ]
 
 
+class OverpassRemark(RuntimeError):
+    """Overpass answered, but with a remark saying the answer is incomplete."""
+
+
+@contextmanager
+def strict_overpass() -> Iterator[None]:
+    """Make a partial Overpass answer an error instead of a smaller graph.
+
+    When a query times out or runs out of memory part-way, Overpass still
+    answers 200 with whatever it had, plus a `remark` such as "runtime error:
+    Query timed out in "query" at line 3 after 181 seconds." osmnx logs the
+    remark as a warning and builds from the partial elements, so a refresh
+    could publish a network missing whole towns with nothing failing. Raised
+    here, it goes to with_overpass_retry like any other failure: the next
+    mirror, then a loud stop.
+    """
+    import osmnx._http as http
+
+    original = http._parse_response
+
+    def parse(response: Any) -> Any:
+        data = original(response)
+        if isinstance(data, dict) and data.get("remark"):
+            raise OverpassRemark(f"partial Overpass response: {data['remark']}")
+        return data
+
+    http._parse_response = parse
+    try:
+        yield
+    finally:
+        http._parse_response = original
+
+
+OSM_CACHE_ENV: Final[str] = "OSM_CACHE_HOURS"
+
+
+def configure_osm_cache() -> None:
+    """Don't let a local rebuild quietly reuse old Overpass answers.
+
+    osmnx caches every response under ./cache by default and never expires
+    them, so a rebuild on a machine that built once before was a rebuild of
+    that week's OSM, however fresh everything else was. The cache is now off
+    unless OSM_CACHE_HOURS is set (useful when iterating on the pipeline), and
+    then responses older than that are deleted before they can be read.
+    """
+    hours = float(os.environ.get(OSM_CACHE_ENV, "0") or 0)
+    ox.settings.use_cache = hours > 0
+    if hours <= 0:
+        print(f"  OSM cache off (set {OSM_CACHE_ENV}=N to reuse answers under N hours old)")
+        return
+    folder = Path(ox.settings.cache_folder)
+    cutoff = time.time() - hours * 3600
+    stale = [p for p in folder.glob("*.json") if p.stat().st_mtime < cutoff]
+    for p in stale:
+        p.unlink()
+    print(f"  OSM cache on: reusing answers under {hours:g} h old ({len(stale)} older deleted)")
+
+
 def with_overpass_retry(what: str, fetch: Callable[[], nx.MultiDiGraph]) -> nx.MultiDiGraph:
     """Try each Overpass mirror, twice round, backing off between attempts.
 
@@ -692,7 +752,8 @@ def with_overpass_retry(what: str, fetch: Callable[[], nx.MultiDiGraph]) -> nx.M
     for attempt, (round_no, url) in enumerate(attempts):
         ox.settings.overpass_url = url
         try:
-            return fetch()
+            with strict_overpass():
+                return fetch()
         except Exception as exc:
             last = exc
             remaining = len(attempts) - attempt - 1
@@ -787,6 +848,7 @@ def acquire_osm(bbox: tuple[float, float, float, float]) -> nx.MultiDiGraph:
     So this keeps the correct whole-area download but merges footpaths IN PLACE
     (bike attributes win, matching the old nx.compose(foot, bike)) rather than
     building a third full graph — that copy was pure transient overhead."""
+    configure_osm_cache()
     G: nx.MultiDiGraph = with_overpass_retry(
         "bike network",
         lambda: ox.graph_from_bbox(

@@ -118,9 +118,15 @@ out center tags;"""
             try:
                 req = urllib.request.Request(ep, data=body, headers=UA)
                 with urllib.request.urlopen(req, timeout=180) as r:
-                    raw = json.load(r)
+                    answer = json.load(r)
+                # A query that times out part-way still answers 200, with what
+                # it had and a `remark` saying so. Taking it published a POI
+                # layer missing whatever the query had not reached.
+                if isinstance(answer, dict) and answer.get("remark"):
+                    raise ValueError(f"partial Overpass response: {answer['remark']}")
+                raw = answer
                 break
-            except (OSError, ValueError) as e:  # HTTP/timeout/JSON
+            except (OSError, ValueError) as e:  # HTTP/timeout/JSON/partial
                 last_err = e
                 continue
         if raw is not None:

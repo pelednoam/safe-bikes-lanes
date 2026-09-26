@@ -401,3 +401,89 @@ def test_a_crash_at_a_junction_is_one_crash_to_the_corridor(sandbox: Path) -> No
     assert all(d["crash_ids"] == (0,) for d in near)
     big_ave = [c for c in priorities.find_candidates(g) if c.name == "Big Ave"]
     assert big_ave and big_ave[0].crashes == 1
+
+
+def _overpass_answer(payload: dict[str, Any]) -> Any:
+    """A real requests.Response, as osmnx's own parser receives it."""
+    import json
+
+    import requests
+
+    r = requests.Response()
+    r.status_code = 200
+    r._content = json.dumps(payload).encode()
+    r.url = "https://overpass-api.de/api/interpreter"
+    return r
+
+
+def test_a_partial_overpass_answer_is_retried_not_built_from(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Overpass answers a query that timed out part-way with 200, whatever it
+    had, and a `remark`. osmnx logs the remark and builds from the fragment,
+    so the network could lose whole towns with nothing failing."""
+    import time
+
+    import osmnx._http as http
+
+    calls = {"n": 0}
+
+    def download(*_a: object, **_k: object) -> nx.MultiDiGraph:
+        calls["n"] += 1
+        # what osmnx's _overpass_request does with each response it gets
+        remark = "runtime error: Query timed out in \"query\" at line 3 after 181 seconds."
+        payload: dict[str, Any] = {"elements": []}
+        if calls["n"] == 1:
+            payload["remark"] = remark
+        http._parse_response(_overpass_answer(payload))
+        return tiny_osm()
+
+    monkeypatch.setattr(time, "sleep", lambda _s: None)
+    monkeypatch.setattr(ox, "graph_from_bbox", download)
+    g = build_graph.acquire_osm((-71.2, 42.3, -71.0, 42.5))
+    assert g.number_of_nodes() > 0
+    # the partial answer was thrown away and the download tried again
+    assert calls["n"] == 3, "bike (partial, then whole) and footpaths: three downloads"
+
+
+def test_every_mirror_answering_partially_stops_the_build(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import time
+
+    import osmnx._http as http
+
+    def download(*_a: object, **_k: object) -> nx.MultiDiGraph:
+        http._parse_response(_overpass_answer({"elements": [], "remark": "out of memory"}))
+        return tiny_osm()
+
+    monkeypatch.setattr(time, "sleep", lambda _s: None)
+    monkeypatch.setattr(ox, "graph_from_bbox", download)
+    with pytest.raises(RuntimeError, match="partial Overpass response: out of memory"):
+        build_graph.acquire_osm((-71.2, 42.3, -71.0, 42.5))
+
+
+def test_a_local_rebuild_does_not_reuse_old_osm_answers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """osmnx caches every Overpass answer forever by default, so a second
+    build on the same machine rebuilt the first one's OSM."""
+    import os
+    import time
+
+    monkeypatch.setattr(ox.settings, "cache_folder", str(tmp_path))
+    monkeypatch.setattr(ox.settings, "use_cache", True)
+    monkeypatch.delenv(build_graph.OSM_CACHE_ENV, raising=False)
+    build_graph.configure_osm_cache()
+    assert ox.settings.use_cache is False
+
+    old = tmp_path / "old.json"
+    new = tmp_path / "new.json"
+    old.write_text("{}")
+    new.write_text("{}")
+    two_days_ago = time.time() - 48 * 3600
+    os.utime(old, (two_days_ago, two_days_ago))
+    monkeypatch.setenv(build_graph.OSM_CACHE_ENV, "24")
+    build_graph.configure_osm_cache()
+    assert ox.settings.use_cache is True
+    assert not old.exists() and new.exists()
