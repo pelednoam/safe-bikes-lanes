@@ -5,6 +5,7 @@
 import { expect, test } from "@playwright/test";
 import type { Map as MLMap } from "maplibre-gl";
 
+import { plainSpot } from "../tests-e2e/mapspot.js";
 import { installRider, ride } from "./rider.js";
 
 declare global {
@@ -178,7 +179,8 @@ test("Escape doesn't wipe the trip mid-ride", async ({ page }) => {
 test("tapping the map asks in-page without freezing guidance", async ({ page }) => {
   const path = await startRide(page);
   await ride(page, path, { speedKmh: 12, timeScale: 30, untilM: 150 });
-  await page.mouse.click(195, 640);
+  const spot = await plainSpot(page, 195, 640);
+  await page.mouse.click(spot.x, spot.y);
   await expect(page.locator("#nav-ask")).toBeVisible();
   // the ride keeps running while the question is on screen — window.confirm
   // used to block the page entirely

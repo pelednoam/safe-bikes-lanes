@@ -3333,6 +3333,15 @@ map.on("load", () => {
 });
 
 map.on("click", (e: MapMouseEvent) => {
+  // A tap that dismisses the open stops menu is that and nothing else — it
+  // must not also offer to throw the ride away. MapLibre's preventDefault
+  // doesn't stop other listeners, so the guard lives here, where the acting
+  // handler is. First, before the inspectable check below: a tap that happened
+  // to land on a construction site would otherwise leave the menu open.
+  if (navActive && el<HTMLButtonElement>("nav-stops").getAttribute("aria-expanded") === "true") {
+    stopsOpen(false);
+    return;
+  }
   // A project line is a thing to inspect, not a place to ride to. Without this
   // the layer's own handler selected the project AND this one dropped a
   // destination pin and re-routed underneath it. The same held for a
@@ -3367,14 +3376,6 @@ map.on("click", (e: MapMouseEvent) => {
   // Mid-ride the map is for looking at, not re-planning: a stray tap on the
   // handlebars used to silently swap the route out from under the rider.
   if (navActive) {
-    // A tap that dismisses the open stops menu is that and nothing else — it
-    // must not also offer to throw the ride away. MapLibre's preventDefault
-    // doesn't stop other listeners, so the guard lives here, where the acting
-    // handler is.
-    if (el<HTMLButtonElement>("nav-stops").getAttribute("aria-expanded") === "true") {
-      stopsOpen(false);
-      return;
-    }
     askDuringRide(
       "End this ride and route to the spot you tapped instead?",
       () => {

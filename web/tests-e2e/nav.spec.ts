@@ -5,6 +5,7 @@
 import { expect, test } from "@playwright/test";
 
 import { budget } from "./budget.js";
+import { plainSpot } from "./mapspot.js";
 import type { Map as MLMap } from "maplibre-gl";
 
 declare global {
@@ -317,7 +318,8 @@ test("tapping the map mid-ride asks before it throws the route away", async ({ p
 
   // asked in-page, not via window.confirm (which blocked the whole page and
   // froze guidance until answered)
-  await page.mouse.click(700, 620);
+  let spot = await plainSpot(page, 700, 620);
+  await page.mouse.click(spot.x, spot.y);
   await expect(page.locator("#nav-ask")).toBeVisible();
 
   // decline: the ride carries on untouched
@@ -326,9 +328,60 @@ test("tapping the map mid-ride asks before it throws the route away", async ({ p
   await expect(page.locator("#nav-banner")).toBeVisible();
 
   // accept: the ride ends and the planner comes back
-  await page.mouse.click(700, 620);
+  spot = await plainSpot(page, 700, 620);
+  await page.mouse.click(spot.x, spot.y);
   await page.locator("#nav-ask-yes").click();
   await expect(page.locator("#nav-banner")).not.toBeVisible();
+});
+
+test("a tap that lands on a construction site still just closes the stops menu", async ({
+  page,
+}) => {
+  // Taps on an info marker open its card and nothing else, and that check ran
+  // before the one that lets a tap put the stops menu away, so a tap that
+  // happened to land on a permit left the menu open over the ride.
+  await page.route(/construction\.geojson/, async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        type: "FeatureCollection",
+        features: [
+          {
+            type: "Feature",
+            // just north-east of the ride's start, where the camera is
+            geometry: { type: "Point", coordinates: [-71.1215, 42.3972] },
+            properties: { src: "cambridge", name: "Water main", start: "2026-01-01", end: "2027-01-01" },
+          },
+        ],
+      }),
+    });
+  });
+  await startNav(page);
+  await page.locator("#nav-stops").click();
+  await expect(page.locator("#nav-stops-menu")).toBeVisible();
+  // where the site is now, with the ride's camera settled — it eases into the
+  // ride view, and a spot taken mid-ease is somewhere else by the tap
+  const handle = await page.waitForFunction(
+    () => {
+      const map = window._map;
+      if (map === undefined || map.isMoving()) return null;
+      const f = map.queryRenderedFeatures(undefined, { layers: ["construction-pts"] })[0];
+      if (f === undefined) return null;
+      const p = map.project((f.geometry as GeoJSON.Point).coordinates as [number, number]);
+      const at: [number, number] = [Math.round(p.x), Math.round(p.y)];
+      return map.queryRenderedFeatures(at, { layers: ["construction-pts"] }).length > 0
+        ? { x: at[0], y: at[1] }
+        : null;
+    },
+    null,
+    { timeout: budget(30_000) },
+  );
+  const at = (await handle.jsonValue()) as { x: number; y: number };
+  await page.mouse.click(at.x, at.y);
+  // it did land on the site: its card is up
+  await expect(page.locator(".maplibregl-popup", { hasText: "Water main" })).toBeVisible();
+  await expect(page.locator("#nav-stops-menu")).toBeHidden();
+  await expect(page.locator("#nav-ask")).toBeHidden();
 });
 
 test("the camera takes itself back after the rider stops panning", async ({ page, context }) => {
