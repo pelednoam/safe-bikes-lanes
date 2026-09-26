@@ -20,7 +20,13 @@ interface Manifest {
   originLon: number;
   originLat: number;
   tileDeg: number;
+  /** The class table as it stood before any class was appended to it: what an
+   * app from then reads, so an index past its end falls back to a quiet street
+   * rather than naming a class that app has no price for. */
   classes: ProtectionClass[];
+  /** The full, append-only class table (pipeline config.TILE_CLASSES). Absent
+   * from snapshots published before it existed. */
+  classTable?: ProtectionClass[];
   tiles: string[];
 }
 
@@ -124,7 +130,7 @@ export class TileStore {
   async loadManifest(): Promise<void> {
     const m = await this.fetchJson<Manifest>("tiles/manifest.json");
     this.grid = new TileGrid(m.originLon, m.originLat, m.tileDeg, m.tiles);
-    this.classList = m.classes;
+    this.classList = m.classTable ?? m.classes;
   }
 
   get classes(): ProtectionClass[] {

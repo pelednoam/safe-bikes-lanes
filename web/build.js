@@ -10,6 +10,7 @@ const CLASS_WORDS = {
     moderate_street: "moderate street",
     busy_street: "busy street",
     service: "alley or service road",
+    unpaved: "unpaved path",
 };
 const N = (n) => n.toLocaleString("en-US");
 /** How many rows the panel draws. The ranking is not truncated — this is only

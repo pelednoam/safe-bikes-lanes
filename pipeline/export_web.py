@@ -5,10 +5,15 @@ precomputed — the browser computes them from raw components so rider profiles
 are fully client-side:
   nodes:   [[lon, lat, elev_m], ...]             graph nodes
   names:   ["", "Main Street", ...]              deduped street names
-  classes: ["path", ...]                         protection classes
+  classTable: ["buffered", ...]                 protection classes (manifest;
+                                                 `classes` is its legacy prefix)
   edges:   [[u, v, len_m, clsIdx, nameIdx, geomIdx, crashFactor, pen_m,
-             climb_m, busyRoad01], ...]
-           pen_m = busy-crossing penalty meters, climb_m = elevation gain u->v
+             climb_m, busyRoad01, roadClsIdx], ...]
+           pen_m = busy-crossing penalty meters, climb_m = elevation gain u->v,
+           roadClsIdx = the street's own class without its bike facility (an
+           index into the same table): a painted facility never costs more
+           than this class does. Appended last so a client that reads ten
+           fields is unaffected.
   geoms:   [[lon, lat, lon, lat, ...], ...]      flat coords, edge u->v order;
            geomIdx = -1 when the edge is a straight line between its nodes
 Also copies network.geojson + pois.geojson for map layers, writes
@@ -310,6 +315,7 @@ def _build_tile(
                 e[7],
                 e[8],
                 int(e[9]),
+                int(e[10]),
             ]
         )
     return {
@@ -367,12 +373,13 @@ def export_tiles(
         total_bytes += len(data)
         (tiles_dir / f"{key}.json").write_text(data)
 
-    classes: list[str] = sorted(config.CLASS_MULTIPLIER)
     manifest = {
         "originLon": config.TILE_ORIGIN_LON,
         "originLat": config.TILE_ORIGIN_LAT,
         "tileDeg": config.TILE_DEG,
-        "classes": classes,
+        # what clients from before a class existed read; see config.TILE_CLASSES
+        "classes": list(config.LEGACY_TILE_CLASSES),
+        "classTable": list(config.TILE_CLASSES),
         "tiles": sorted(keys),
     }
     (tiles_dir / "manifest.json").write_text(json.dumps(manifest, separators=(",", ":")))
@@ -434,8 +441,7 @@ def export() -> None:
 
     name_index: dict[str, int] = {"": 0}
     names: list[str] = [""]
-    classes: list[str] = sorted(config.CLASS_MULTIPLIER)
-    cls_index = {c: i for i, c in enumerate(classes)}
+    cls_index = {c: i for i, c in enumerate(config.TILE_CLASSES)}
 
     edges: list[list[float]] = []
     geoms: list[list[float]] = []
@@ -477,6 +483,8 @@ def export() -> None:
                 round(float(d.get("xpen", 0.0)), 1),
                 round(float(d.get("climb", 0.0)), 1),
                 1 if d.get("road_busy") else 0,
+                # a graph from before road_cls existed: the class is its own floor
+                cls_index[d.get("road_cls", d["cls"])],
             ]
         )
 
@@ -495,7 +503,13 @@ def export() -> None:
     export_lane_heatmap(graph)
     export_elevation_heatmap()
     export_construction()
-    export_meta()
+    export_meta(
+        {
+            "nodes": graph.number_of_nodes(),
+            "edges": graph.number_of_edges(),
+            "crashes_joined": int(graph.graph.get("crashes_joined") or 0),
+        }
+    )
 
 
 def _in_bbox(coords: list[Any]) -> bool:
@@ -583,9 +597,13 @@ def export_construction() -> None:
     print(f"wrote {path} ({len(features)} active construction features)")
 
 
-def export_meta() -> None:
+def export_meta(graph_stats: dict[str, int] | None = None) -> None:
     """Data-freshness manifest for the app's About dialog: when each source
-    was last retrieved (from the fetch sidecars) and when the graph was built."""
+    was last retrieved (from the fetch sidecars) and when the graph was built.
+
+    `graph_stats` (node, edge and joined-crash counts) are what the publish
+    step's sanity gate (sanity_gate.py) compares against the snapshot the site
+    is serving, alongside each source's feature count."""
     sources: list[dict[str, Any]] = []
     for meta_path in sorted(config.RAW_DIR.glob("*.meta.json")):
         info = json.loads(meta_path.read_text())
@@ -602,6 +620,8 @@ def export_meta() -> None:
         "format": config.DATA_FORMAT,
         "sources": sources,
     }
+    if graph_stats is not None:
+        out["graph"] = graph_stats
     path = WEB_DATA / "meta.json"
     path.write_text(json.dumps(out, indent=1))
     print(f"wrote {path} ({len(sources)} sources)")

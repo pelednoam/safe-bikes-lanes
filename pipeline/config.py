@@ -146,6 +146,11 @@ CLASS_MULTIPLIER: Final[dict[str, float]] = {
     "sharrow": 6.0,         # shared-lane marking on a real road
     "moderate_street": 8.0, # tertiary etc., no facility
     "busy_street": 25.0,    # primary/secondary/trunk, no protection: near-ban
+    # Off-street but dirt, grass, sand or loose gravel: no cars, but slow and
+    # hard work on small wheels, and some of it is a horse trail. Between a
+    # quiet street and a painted lane, and still inside SAFE_MULT_MAX — it is
+    # safe from traffic, which is what "kid-safe" measures.
+    "unpaved": 2.0,
 }
 
 # On busy/moderate streets a painted lane only helps so much with kids —
@@ -164,6 +169,7 @@ SOLO_CLASS_MULTIPLIER: Final[dict[str, float]] = {
     "sharrow": 2.0,
     "moderate_street": 2.5,
     "busy_street": 6.0,
+    "unpaved": 1.2,  # an adult rides a dirt path fine, if a little slower
 }
 SOLO_BUSY_ROAD_LANE_MULTIPLIER: Final[float] = 2.5
 SOLO_BUSY_ROAD_BUFFERED_MULTIPLIER: Final[float] = 1.8
@@ -260,7 +266,7 @@ MAPC_ALLTRAILS_LAYERS: Final[dict[int, str]] = {
     0: "separated",  # Existing Protected Bike Lanes
     2: "lane",  # Existing Bike Lanes
     8: "path",  # Existing Paved Shared Use Paths
-    11: "path",  # Existing Unimproved Shared Use Paths
+    11: "unpaved",  # Existing Unimproved Shared Use Paths
 }
 
 # Boston 'ExisFacil' facility code -> protection class (data dictionary /
@@ -372,4 +378,19 @@ CLASS_COLOR: Final[dict[str, str]] = {
     "sharrow": "#fdae61",
     "moderate_street": "#f46d43",
     "busy_street": "#d73027",
+    "unpaved": "#a6761d",  # brown: off the road, but not a paved path
 }
+
+# The class table the routing tiles index into, in index order. Append-only:
+# a tile edge carries a class *index*, and a client built before a class existed
+# reads the manifest's `classes` list, which stays exactly the first nine
+# (LEGACY_TILE_CLASSES). An index past the end of that list comes back
+# undefined, which the app has always read as a quiet street — so an old app
+# routes an unpaved path as a quiet street rather than pricing it NaN, which is
+# what looking up a class name it has never heard of would do. New clients read
+# the full table from `classTable`.
+LEGACY_TILE_CLASSES: Final[tuple[str, ...]] = (
+    "buffered", "busy_street", "lane", "moderate_street", "path", "quiet_street",
+    "separated", "service", "sharrow",
+)
+TILE_CLASSES: Final[tuple[str, ...]] = (*LEGACY_TILE_CLASSES, "unpaved")

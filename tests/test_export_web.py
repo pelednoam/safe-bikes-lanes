@@ -144,8 +144,8 @@ def test_a_tile_holds_its_own_edges_and_renumbers_locally(
     nodes = [[-71.100, 42.380, 5.0], [-71.098, 42.380, 6.0], [-71.300, 42.500, 7.0]]
     names = ["", "Near St", "Far St"]
     edges = [
-        [0, 1, 100.0, 0, 1, -1, 1.0, 0.0, 0.0, 0],
-        [1, 2, 9000.0, 0, 2, -1, 1.0, 0.0, 0.0, 0],
+        [0, 1, 100.0, 0, 1, -1, 1.0, 0.0, 0.0, 0, 0],
+        [1, 2, 9000.0, 0, 2, -1, 1.0, 0.0, 0.0, 0, 0],
     ]
     export_web.export_tiles(nodes, names, edges, [])
     manifest = json.loads((tmp_path / "tiles" / "manifest.json").read_text())

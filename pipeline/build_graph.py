@@ -8,21 +8,26 @@ crash overlay adjust per-edge protection class and cost. Outputs:
   data/network.geojson  undirected edge layer for map display
 """
 
+import itertools
 import json
 import math
 import os
 import pickle
 import time
 from collections import Counter
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
+from contextlib import contextmanager
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Final
 
 import config
 import geopandas as gpd
 import networkx as nx
+import numpy as np
 import osmnx as ox
 import pandas as pd
+import shapely
 from elevation import ElevationSampler
 from shapely.geometry import LineString, Point
 
@@ -59,12 +64,27 @@ ROAD_MODERATE: Final[set[str]] = {"tertiary", "tertiary_link"}
 PATHLIKE: Final[set[str]] = {
     "cycleway", "path", "footway", "pedestrian", "track", "bridleway", "steps",
 }
+# Off-street classes: an official layer drawing one of these beside a road must
+# not upgrade the road (see overlay_match).
+OFFSTREET: Final[frozenset[str]] = frozenset({"path", "unpaved"})
+# Ways that are dirt unless someone has said otherwise.
+UNSURFACED_BY_DEFAULT: Final[set[str]] = {"track", "bridleway"}
+# Surfaces a child's bike does badly on. `gravel` is here and `fine_gravel` and
+# `compacted` are not: in OSM, gravel is loose crushed rock, while fine_gravel
+# and compacted are the packed stone dust of rail trails, which a kid rides
+# like pavement. `natural` is not a documented value but is in this region's
+# data (126 edges), always on woodland trails.
+UNPAVED_SURFACES: Final[frozenset[str]] = frozenset({
+    "unpaved", "dirt", "ground", "earth", "grass", "mud", "sand", "gravel",
+    "pebblestone", "rock", "stone", "woodchips", "grass_paver", "natural", "soil",
+})
 
 ox.settings.useful_tags_way = list(
     set(ox.settings.useful_tags_way)
     | {
         "cycleway", "cycleway:left", "cycleway:right", "cycleway:both",
         "bicycle", "maxspeed", "surface", "segregated", "oneway:bicycle",
+        "tracktype",
     }
 )
 ox.settings.useful_tags_node = ["ref", "highway", "crossing"]
@@ -72,6 +92,12 @@ ox.settings.useful_tags_node = ["ref", "highway", "crossing"]
 
 def listy(v: Any) -> list[Any]:
     return v if isinstance(v, list) else [v]
+
+
+def tag_values(tags: Mapping[str, Any], key: str) -> list[str]:
+    """A tag's values as strings, without the None/NaN/"" that stand for
+    "absent" once edges have been through a DataFrame."""
+    return [str(v) for v in listy(tags.get(key)) if v is not None and v == v and v != ""]
 
 
 def mult(cls: str) -> float:
@@ -86,57 +112,357 @@ def safer(a: str | None, b: str | None) -> str | None:
     return a if mult(a) <= mult(b) else b
 
 
+KMH_PER_MPH: Final[float] = 1.609344
+
+
 def parse_maxspeed_mph(v: Any) -> float | None:
+    """The highest posted limit on an edge, in mph.
+
+    Highest, not first: a simplified edge that merges ways with different limits
+    is as stressful as its fastest part, which is what classify_osm's "worst
+    part" rule promises. An explicit "km/h" is converted. Words ("walk",
+    "none", "signals") and values like "US:urban" say nothing numeric and are
+    skipped.
+
+    A bare number stays mph, although OSM's default unit is km/h. Every sign in
+    Massachusetts is in mph, so a bare "40" here is a mapper who left the unit
+    off a 40 mph road, not a 25 mph street; 117 edges carry one. Converting
+    would read those roads as calmer than their signs, the one direction a tool
+    that puts children on streets must not err in. (tests/test_overlays.py has
+    locked this in on purpose since it was first noticed.)
+    """
+    best: float | None = None
     for item in listy(v):
         if not item:
             continue
-        try:
-            return float(str(item).split()[0])
-        except ValueError:
-            continue
-    return None
+        for part in str(item).split(";"):
+            words = part.strip().lower().split()
+            if not words:
+                continue
+            number, unit = words[0], " ".join(words[1:])
+            if number.endswith("mph"):
+                number, unit = number[: -len("mph")], "mph"
+            try:
+                value = float(number)
+            except ValueError:
+                continue
+            if unit == "mph":
+                mph = value
+            elif unit == "":
+                mph = value  # see above: the sign says mph
+            elif unit in ("km/h", "kmh", "kph"):
+                mph = value / KMH_PER_MPH
+            else:  # knots and anything unforeseen: not a road speed we can read
+                continue
+            best = mph if best is None else max(best, mph)
+    return best
 
 
-def classify_osm(tags: Mapping[str, Any]) -> tuple[str, bool]:
-    """Base protection class from OSM tags alone, plus a busy-road flag.
+def parse_lanes(v: Any) -> int | None:
+    """The most motor-traffic lanes any part of an edge has."""
+    best: int | None = None
+    for item in listy(v):
+        for part in str(item).split(";"):
+            try:
+                n = int(float(part.strip()))
+            except ValueError:
+                continue
+            best = n if best is None else max(best, n)
+    return best
 
-    Conservative: when a tag is a list (simplified edge spans several ways),
-    road class uses the worst part but a facility tag anywhere counts —
-    mixed segments are rare and short."""
+
+MULTILANE_MIN_LANES: Final[int] = 3
+
+
+def multilane(tags: Mapping[str, Any]) -> bool:
+    """A road built to move traffic, whatever its highway tag says: three or
+    more motor lanes, i.e. two in at least one direction (or two plus a turn
+    lane).
+
+    Deliberately not "two on a one-way street", though that is also two in a
+    direction. In this region the tag does not mean that: 4,689 one-way
+    residential edges (412 km) carry lanes=2, and the ones checked by name —
+    Dacia St, Bodwell St, Sagamore St in Dorchester — are narrow one-lane
+    streets with parking, the parking lane counted as a lane. Escalating them
+    would move 412 km of quiet streets to 8x cost on the strength of a tagging
+    habit; lanes >= 3 is where the tag and the street agree.
+    """
+    n = parse_lanes(tags.get("lanes"))
+    return n is not None and n >= MULTILANE_MIN_LANES
+
+
+def rough_surface(tags: Mapping[str, Any]) -> bool:
+    """Someone has tagged some part of this way with a rough surface."""
+    return any(s.strip().lower() in UNPAVED_SURFACES for s in tag_values(tags, "surface"))
+
+
+def offstreet_class(tags: Mapping[str, Any], hws: list[str]) -> str:
+    """"path" or "unpaved" for a way that is off the street.
+
+    `surface` was downloaded and never read, so a mud bridleway and a paved
+    rail trail were both "path", the best class there is, and a family could be
+    routed down a horse trail as the safest way home. Unpaved if any part is
+    tagged rough (the worst part governs, as for roads), or if it is a track or
+    bridleway nobody has described as surfaced: those are farm and forest
+    roads unless tagged otherwise (tracktype=grade1 is the solid kind).
+    """
+    if rough_surface(tags):
+        return "unpaved"
+    if any(h in UNSURFACED_BY_DEFAULT for h in hws):
+        surfaced = bool(tag_values(tags, "surface")) or "grade1" in tag_values(
+            tags, "tracktype"
+        )
+        if not surfaced:
+            return "unpaved"
+    return "path"
+
+
+def classify_road(tags: Mapping[str, Any]) -> str:
+    """The class a way has on its own merits, before any bike facility.
+
+    This is the price floor for painted facilities: a lane or sharrow can only
+    make a street better than it already is (see facility_multiplier)."""
     hws: list[str] = [h for h in listy(tags.get("highway")) if h]
 
     def hw_in(group: set[str]) -> bool:
         return any(h in group for h in hws)
 
     if hws and all(h in PATHLIKE for h in hws):
-        return "path", False
-    cw: set[str] = set()
-    for key in ("cycleway", "cycleway:left", "cycleway:right", "cycleway:both"):
-        cw.update(v for v in listy(tags.get(key)) if v)
-    busy = hw_in(ROAD_BUSY)
-    if {"track", "separate", "separated"} & cw:
-        return "separated", busy
-    if "buffered_lane" in cw:
-        return "buffered", busy
-    if "lane" in cw:
-        return "lane", busy
-    if {"shared_lane", "share_busway"} & cw:
-        return "sharrow", busy
-    if busy:
-        return "busy_street", True
+        return offstreet_class(tags, hws)
+    if hw_in(ROAD_BUSY):
+        return "busy_street"
     if hw_in(ROAD_MODERATE):
-        return "moderate_street", False
+        return "moderate_street"
     if hw_in({"service"}):
-        return "service", False
+        return "service"
     ms = parse_maxspeed_mph(tags.get("maxspeed"))
     if ms is not None and ms > 30:
-        return "moderate_street", False
-    return "quiet_street", False
+        return "moderate_street"
+    if multilane(tags):
+        return "moderate_street"
+    return "quiet_street"
+
+
+def facility_class(values: Iterable[Any]) -> str | None:
+    """The protection class a set of `cycleway*` values describes, if any.
+
+    `track` is a protected lane on this carriageway. `separate` is the opposite
+    claim: the bike facility is mapped as its own way beside the road, and the
+    road carries none — that way gets its own edge and its own class, and the
+    road is classified as the road it is. Reading `separate` as protection put
+    1,033 edge-directions (57 km) in the best class, 638 of them (35 km) bare
+    arterial. `separated` is not an OSM value at all; it gets no benefit of the
+    doubt."""
+    cw = {str(v) for v in values if v}
+    if "track" in cw:
+        return "separated"
+    if "buffered_lane" in cw:
+        return "buffered"
+    if "lane" in cw:
+        return "lane"
+    if {"shared_lane", "share_busway"} & cw:
+        return "sharrow"
+    return None
+
+
+CYCLEWAY_KEYS: Final[tuple[str, ...]] = (
+    "cycleway", "cycleway:left", "cycleway:right", "cycleway:both",
+)
+
+
+def car_oneway(tags: Mapping[str, Any]) -> bool:
+    """osmnx's `oneway`: a bool (numpy's, after a DataFrame), maybe a list."""
+    return any(str(o) == "True" for o in listy(tags.get("oneway")))
+
+
+def bike_contraflow(tags: Mapping[str, Any]) -> bool:
+    """Bikes may ride this one-way street against the traffic."""
+    if "no" in tag_values(tags, "oneway:bicycle"):
+        return True
+    return any(
+        v.startswith("opposite") for key in CYCLEWAY_KEYS for v in tag_values(tags, key)
+    )
+
+
+def travel_direction(tags: Mapping[str, Any]) -> str | None:
+    """Whether an edge runs with ("forward") or against ("backward") the OSM
+    way it came from, or None when a merged edge mixes both."""
+    rev = {bool(r) for r in listy(tags.get("reversed")) if r is not None and r == r}
+    if rev == {False}:
+        return "forward"
+    if rev == {True}:
+        return "backward"
+    return None
+
+
+def facility_values(tags: Mapping[str, Any]) -> list[str]:
+    """The `cycleway*` values that describe the side of the street this edge
+    rides on.
+
+    OSM's sides are relative to the way's direction, and traffic keeps right:
+    on a two-way street cycleway:right serves riders travelling with the way
+    and cycleway:left riders travelling against it. Counting both for both
+    directions gave the whole street a lane that only one side has. On a
+    one-way street every side serves the one direction — unless bikes may ride
+    it both ways, when the left side is the contraflow lane (the usual tagging,
+    with or without cycleway:left:oneway=-1). `opposite_lane`/`opposite_track`
+    on `cycleway` are the older way of saying the same, and `opposite` means
+    contraflow with no facility at all.
+    """
+    def vals(key: str) -> list[str]:
+        return tag_values(tags, key)
+
+    plain = [v for v in vals("cycleway") if not v.startswith("opposite")]
+    opposite = [
+        v.removeprefix("opposite").lstrip("_")
+        for key in CYCLEWAY_KEYS
+        for v in vals(key)
+        if v.startswith("opposite")
+    ]
+    direction = travel_direction(tags)
+    one_way = car_oneway(tags)
+    contraflow = one_way and bike_contraflow(tags)
+    if direction == "forward":
+        out = plain + vals("cycleway:both") + vals("cycleway:right")
+        if one_way and not contraflow:
+            out += vals("cycleway:left")
+        return out
+    if direction == "backward":
+        out = vals("cycleway:both") + vals("cycleway:left") + opposite
+        if not one_way:
+            out += plain
+        return out
+    # a merged edge running both ways along its parts: any facility counts, as
+    # it always has (and as for roads, mixed segments are rare and short)
+    return [v for key in CYCLEWAY_KEYS for v in vals(key) if not v.startswith("opposite")]
+
+
+def classify_osm(tags: Mapping[str, Any]) -> tuple[str, bool]:
+    """Base protection class from OSM tags alone, plus a busy-road flag.
+
+    Conservative: when a tag is a list (simplified edge spans several ways),
+    road class uses the worst part. The facility is the one on this edge's
+    side of the street (facility_values)."""
+    road = classify_road(tags)
+    if road in OFFSTREET:
+        return road, False
+    busy = road == "busy_street"
+    return facility_class(facility_values(tags)) or road, busy
+
+
+def add_contraflow_edges(graph: nx.MultiDiGraph) -> int:
+    """Give bikes the direction a one-way street allows them and cars.
+
+    osmnx builds edge directions from `oneway` alone, so oneway:bicycle=no and
+    cycleway=opposite* were downloaded and ignored: the router could not ride a
+    contraflow lane it was drawing on the map, and sent families round the
+    block instead. Each such edge gets its reverse, geometry flipped and marked
+    `contraflow`, classified later by facility_values like any other.
+
+    Only for an edge that is a single OSM way. osmnx merges a chain of ways
+    into one edge and keeps each tag's distinct values, dropping the ways that
+    lack the tag — so oneway:bicycle="no" on a merged edge cannot say whether
+    every way in the chain allows contraflow, and routing a child the wrong way
+    down the part that doesn't is the one mistake this must not make.
+    """
+    added = 0
+    for u, v, _k, d in list(graph.edges(keys=True, data=True)):
+        if not car_oneway(d) or isinstance(d.get("osmid"), list):
+            continue
+        if not bike_contraflow(d) or travel_direction(d) is None:
+            continue
+        existing = graph.get_edge_data(v, u, default={}).values()
+        if any(e.get("osmid") == d.get("osmid") for e in existing):
+            continue  # already two-way here
+        back = dict(d)
+        back["reversed"] = not bool(d.get("reversed"))
+        back["contraflow"] = True
+        if isinstance(d.get("geometry"), LineString):
+            back["geometry"] = LineString(list(d["geometry"].coords)[::-1])
+        graph.add_edge(v, u, **back)
+        added += 1
+    return added
+
+
+def facility_multiplier(
+    cls: str,
+    road_cls: str,
+    busy: bool,
+    table: Mapping[str, float],
+    busy_lane: float,
+    busy_buffered: float,
+) -> float:
+    """What riding an edge of class `cls` costs per metre, for one profile.
+
+    Two rules on top of the class table:
+
+    On a busy road, paint buys little: a lane or buffered lane there has its own
+    (higher) price, and a sharrow — a marking, not a space — buys nothing, so it
+    costs what the busy road costs. It used to cost 6.0, a quarter of the bare
+    arterial it is painted on.
+
+    And paint can only help. A marked facility never costs more than the same
+    street without it: a residential street was 1.4 bare, 3.0 with a painted
+    lane and 6.0 with sharrows, so the router steered families off quiet streets
+    because someone had improved them. `road_cls` is the street's own class
+    (classify_road), and the class shown to riders stays the facility.
+    """
+    m = table[cls]
+    if busy:
+        if cls == "lane":
+            m = busy_lane
+        elif cls == "buffered":
+            m = busy_buffered
+        elif cls == "sharrow":
+            m = table["busy_street"]
+    return min(m, table[road_cls])
 
 
 # ---------------------------------------------------------------------------
 # geometry helpers
 # ---------------------------------------------------------------------------
+
+CLIMB_STEP_M: Final[float] = 35.0  # terrain is ~14 m/pixel; one sample per few
+CLIMB_DEAD_BAND_M: Final[float] = 1.0  # rises smaller than this are DEM noise
+
+
+def profile_points(coords: list[tuple[float, float]], step: float) -> list[tuple[float, float]]:
+    """Points along a lon/lat polyline, no more than ~`step` metres apart,
+    first and last vertex included."""
+    out: list[tuple[float, float]] = []
+    for (x1, y1), (x2, y2) in itertools.pairwise(coords):
+        dx = (x2 - x1) * 111_320 * math.cos(math.radians(y1))
+        dy = (y2 - y1) * 110_540
+        n = max(1, round(math.hypot(dx, dy) / step))
+        out.extend((x1 + (x2 - x1) * i / n, y1 + (y2 - y1) * i / n) for i in range(n))
+    out.append(coords[-1])
+    return out
+
+
+def climb_along(elevations: list[float], dead_band: float = CLIMB_DEAD_BAND_M) -> float:
+    """Metres climbed riding a profile from its first sample to its last.
+
+    Summed along the way, not taken from the ends: a street over a hill whose
+    ends are level used to count as flat (climb 0), which is exactly the street
+    a parent choosing "prefer flat" most needs to avoid. A rise only counts
+    once it clears a small dead band from the last low point — the terrain is
+    ~14 m/pixel and every pixel step of noise would otherwise add up — and the
+    total is never less than the net rise from end to end.
+    """
+    if not elevations:
+        return 0.0
+    ref = elevations[0]
+    climbed = 0.0
+    for e in elevations[1:]:
+        if e > ref + dead_band:
+            climbed += e - ref
+            ref = e
+        elif e < ref - dead_band:
+            ref = e
+    if elevations[-1] > ref:
+        climbed += elevations[-1] - ref
+    return climbed
+
 
 def bearing_near(line: LineString, pt: Point, chord: float = 6.0) -> float:
     """Bearing (0-180) of `line` around the point nearest to `pt`."""
@@ -152,6 +478,19 @@ def angle_diff(a: float, b: float) -> float:
     return min(d, 180 - d)
 
 
+def _bearings(lines: Any, at: Any, chord: float = 6.0) -> Any:
+    """bearing_near for arrays: each line's bearing (0-180) around the point on
+    it nearest the matching point in `at`."""
+    d = shapely.line_locate_point(lines, at)
+    length = shapely.length(lines)
+    p1 = shapely.line_interpolate_point(lines, np.maximum(d - chord, 0.0))
+    p2 = shapely.line_interpolate_point(lines, np.minimum(d + chord, length))
+    ang = np.degrees(
+        np.arctan2(shapely.get_y(p2) - shapely.get_y(p1), shapely.get_x(p2) - shapely.get_x(p1))
+    )
+    return np.mod(ang, 180.0)
+
+
 def overlay_match(
     edges: gpd.GeoDataFrame,
     overlay: gpd.GeoDataFrame,
@@ -161,33 +500,53 @@ def overlay_match(
     """For each edge, the overlay feature running along it (None if no match).
 
     `edges` and `overlay` must be in a metric CRS. Overlay rows need columns
-    `geometry` and `cls`. Path-class overlay features only match path-like OSM
-    edges — otherwise an off-street path would upgrade the parallel roadway.
-    Returns a list aligned with edges.index of overlay row positions or None.
+    `geometry` and `cls`. Off-street overlay features (path, unpaved) only match
+    path-like OSM edges — otherwise an off-street path would upgrade the
+    parallel roadway. Returns a list aligned with edges.index of overlay row
+    positions (in the exploded overlay) or None.
+
+    One bulk spatial-index query for all edges, then numpy over the candidate
+    pairs. It was a Python loop with a query and a pandas .iloc per edge, which
+    was tolerable against a 1,000-feature layer and is not against MassDOT's
+    LTS layer at its real size (251,046 features in this bbox; the old paging
+    only ever fetched the first 1,000).
     """
     overlay = overlay.explode(index_parts=False).reset_index(drop=True)
-    sindex = overlay.sindex
-    results: list[int | None] = []
-    for geom, is_path in zip(edges.geometry, edges["is_pathlike"], strict=True):
-        mid = geom.interpolate(0.5, normalized=True)
-        edge_brg = bearing_near(geom, mid)
-        best: int | None = None
-        best_d: float | None = None
-        for pos in sindex.query(mid.buffer(radius)):
-            row = overlay.iloc[pos]
-            if row["cls"] == "path" and not is_path:
-                continue
-            d = row.geometry.distance(mid)
-            if d > radius:
-                continue
-            # polygons (e.g. corridor areas) match on distance alone
-            if row.geometry.geom_type == "LineString" and (
-                angle_diff(edge_brg, bearing_near(row.geometry, mid)) > max_angle
-            ):
-                continue
-            if best_d is None or d < best_d:
-                best, best_d = pos, d
-        results.append(best)
+    n = len(edges)
+    if n == 0 or len(overlay) == 0:
+        return [None] * n
+    lines = np.asarray(edges.geometry.array, dtype=object)
+    mids = shapely.line_interpolate_point(lines, 0.5, normalized=True)
+    edge_brg = _bearings(lines, mids)
+    is_path = edges["is_pathlike"].to_numpy(dtype=bool)
+    ogeoms = np.asarray(overlay.geometry.array, dtype=object)
+    offstreet = overlay["cls"].isin(OFFSTREET).to_numpy()
+
+    ei, oi = overlay.sindex.query(mids, predicate="dwithin", distance=radius)
+    keep = ~(offstreet[oi] & ~is_path[ei])
+    ei, oi = ei[keep], oi[keep]
+    dist = shapely.distance(ogeoms[oi], mids[ei])
+    keep = dist <= radius
+    ei, oi, dist = ei[keep], oi[keep], dist[keep]
+    # polygons (e.g. corridor areas) match on distance alone; lines must also
+    # run the same way (the bearing gate that rejects cross streets)
+    is_line = shapely.get_type_id(ogeoms[oi]) == 1
+    if is_line.any():
+        lp = np.flatnonzero(is_line)
+        diff = np.abs(edge_brg[ei[lp]] - _bearings(ogeoms[oi[lp]], mids[ei[lp]])) % 180.0
+        bad = lp[np.minimum(diff, 180.0 - diff) > max_angle]
+        keep = np.ones(len(ei), dtype=bool)
+        keep[bad] = False
+        ei, oi, dist = ei[keep], oi[keep], dist[keep]
+
+    # nearest per edge; ties to the lowest overlay position, so it is stable
+    order = np.lexsort((oi, dist, ei))
+    ei, oi = ei[order], oi[order]
+    first = np.ones(len(ei), dtype=bool)
+    first[1:] = ei[1:] != ei[:-1]
+    results: list[int | None] = [None] * n
+    for e, o in zip(ei[first].tolist(), oi[first].tolist(), strict=True):
+        results[e] = o
     return results
 
 
@@ -215,11 +574,26 @@ def edge_schema(graph: nx.MultiDiGraph) -> list[str]:
     return sorted(common or ())
 
 
+ALLOW_MISSING_ENV: Final[str] = "ALLOW_MISSING_SOURCES"
+
+
 def load_geojson(name: str) -> gpd.GeoDataFrame | None:
+    """A fetched source, or an error if it was never fetched.
+
+    A missing file used to print "(missing ... — skipping)" and build on
+    without it, so a failed fetch became a graph with no Cambridge lanes, or
+    no crashes, that was published as a good week. Set ALLOW_MISSING_SOURCES=1
+    to build without a source on purpose (tests, partial local runs).
+    """
     path = config.RAW_DIR / name
     if not path.exists():
-        print(f"  (missing {name} — skipping)")
-        return None
+        if os.environ.get(ALLOW_MISSING_ENV) == "1":
+            print(f"  (missing {name} — skipping, {ALLOW_MISSING_ENV}=1)")
+            return None
+        raise FileNotFoundError(
+            f"{path} is missing. Run `python fetch.py` first, or set "
+            f"{ALLOW_MISSING_ENV}=1 to build without it on purpose."
+        )
     gdf = gpd.GeoDataFrame.from_features(json.loads(path.read_text()), crs="EPSG:4326")
     return gdf.to_crs(METRIC_CRS)
 
@@ -335,6 +709,12 @@ def overrides_overlay() -> gpd.GeoDataFrame | None:
 # build
 # ---------------------------------------------------------------------------
 
+# MassDOT LTS 3-4 on a street we think is calm: one step more stressful.
+LTS_ESCALATION: Final[dict[str, str]] = {
+    "quiet_street": "moderate_street",
+    "moderate_street": "busy_street",
+}
+
 FOOT_FILTER: Final[str] = (
     '["highway"~"footway|pedestrian|path"]["bicycle"~"yes|designated|permissive"]'
 )
@@ -352,6 +732,64 @@ OVERPASS_MIRRORS: Final[list[str]] = [
 ]
 
 
+class OverpassRemark(RuntimeError):
+    """Overpass answered, but with a remark saying the answer is incomplete."""
+
+
+@contextmanager
+def strict_overpass() -> Iterator[None]:
+    """Make a partial Overpass answer an error instead of a smaller graph.
+
+    When a query times out or runs out of memory part-way, Overpass still
+    answers 200 with whatever it had, plus a `remark` such as "runtime error:
+    Query timed out in "query" at line 3 after 181 seconds." osmnx logs the
+    remark as a warning and builds from the partial elements, so a refresh
+    could publish a network missing whole towns with nothing failing. Raised
+    here, it goes to with_overpass_retry like any other failure: the next
+    mirror, then a loud stop.
+    """
+    import osmnx._http as http
+
+    original = http._parse_response
+
+    def parse(response: Any) -> Any:
+        data = original(response)
+        if isinstance(data, dict) and data.get("remark"):
+            raise OverpassRemark(f"partial Overpass response: {data['remark']}")
+        return data
+
+    http._parse_response = parse
+    try:
+        yield
+    finally:
+        http._parse_response = original
+
+
+OSM_CACHE_ENV: Final[str] = "OSM_CACHE_HOURS"
+
+
+def configure_osm_cache() -> None:
+    """Don't let a local rebuild quietly reuse old Overpass answers.
+
+    osmnx caches every response under ./cache by default and never expires
+    them, so a rebuild on a machine that built once before was a rebuild of
+    that week's OSM, however fresh everything else was. The cache is now off
+    unless OSM_CACHE_HOURS is set (useful when iterating on the pipeline), and
+    then responses older than that are deleted before they can be read.
+    """
+    hours = float(os.environ.get(OSM_CACHE_ENV, "0") or 0)
+    ox.settings.use_cache = hours > 0
+    if hours <= 0:
+        print(f"  OSM cache off (set {OSM_CACHE_ENV}=N to reuse answers under N hours old)")
+        return
+    folder = Path(ox.settings.cache_folder)
+    cutoff = time.time() - hours * 3600
+    stale = [p for p in folder.glob("*.json") if p.stat().st_mtime < cutoff]
+    for p in stale:
+        p.unlink()
+    print(f"  OSM cache on: reusing answers under {hours:g} h old ({len(stale)} older deleted)")
+
+
 def with_overpass_retry(what: str, fetch: Callable[[], nx.MultiDiGraph]) -> nx.MultiDiGraph:
     """Try each Overpass mirror, twice round, backing off between attempts.
 
@@ -364,7 +802,8 @@ def with_overpass_retry(what: str, fetch: Callable[[], nx.MultiDiGraph]) -> nx.M
     for attempt, (round_no, url) in enumerate(attempts):
         ox.settings.overpass_url = url
         try:
-            return fetch()
+            with strict_overpass():
+                return fetch()
         except Exception as exc:
             last = exc
             remaining = len(attempts) - attempt - 1
@@ -377,6 +816,79 @@ def with_overpass_retry(what: str, fetch: Callable[[], nx.MultiDiGraph]) -> nx.M
     raise RuntimeError(f"{what}: every Overpass mirror failed — last error: {last}")
 
 
+def _coord_key(x: float, y: float) -> tuple[int, int]:
+    """A node's position as an exact key: 1e-7 degrees is ~1 cm, and both sides
+    of the comparison are the same OSM node's stored coordinates."""
+    return (round(x * 1e7), round(y * 1e7))
+
+
+def _metres(coords: list[tuple[float, float]]) -> float:
+    total = 0.0
+    for (x1, y1), (x2, y2) in itertools.pairwise(coords):
+        total += float(ox.distance.great_circle(y1, x1, y2, x2))
+    return total
+
+
+def connect_midblock_junctions(graph: nx.MultiDiGraph, candidates: set[Any]) -> int:
+    """Join paths that meet a road partway along one of its edges.
+
+    The bike and footpath networks are downloaded and simplified separately,
+    so an OSM node where a footpath meets a road mid-block is simplified out
+    of the bike graph (to the road it is just a bend) while the footpath still
+    ends on it. The two then touch without connecting: the path is a dead end
+    0 m from the road it joins, and the router cannot turn onto it. Measured
+    on the current graph: 3,024 such junctions, 796 of them where a path ends
+    (the rest are paths crossing the road mid-block, joined to each other but
+    not to the road they cross).
+
+    `candidates` are the footpath nodes the bike graph did not have. Any that
+    sits on a vertex inside a bike edge's geometry is where that edge is split,
+    both directions, so the road passes through the junction node; the pieces
+    keep the edge's attributes with their own geometry and length.
+
+    This, rather than one simplify over both networks: the whole-area download
+    is simplified by osmnx on arrival, and holding the unsimplified graph to
+    simplify once would raise a peak that is already ~11 GB.
+    """
+    if not candidates:
+        return 0
+    at: dict[tuple[int, int], Any] = {}
+    for n in candidates:
+        nd = graph.nodes[n]
+        at[_coord_key(float(nd["x"]), float(nd["y"]))] = n
+    splits: list[tuple[Any, Any, Any, list[tuple[int, Any]]]] = []
+    for u, v, k, d in graph.edges(keys=True, data=True):
+        geom = d.get("geometry")
+        if not isinstance(geom, LineString) or u in candidates or v in candidates:
+            continue
+        coords = list(geom.coords)
+        cuts = [
+            (i, at[key])
+            for i in range(1, len(coords) - 1)
+            if (key := _coord_key(coords[i][0], coords[i][1])) in at
+        ]
+        if cuts:
+            splits.append((u, v, k, cuts))
+    for u, v, k, cuts in splits:
+        d = graph.edges[u, v, k]
+        coords = [(float(x), float(y)) for x, y in d["geometry"].coords]
+        ux, uy = float(graph.nodes[u]["x"]), float(graph.nodes[u]["y"])
+        if _coord_key(ux, uy) != _coord_key(*coords[0]) and _coord_key(
+            ux, uy
+        ) == _coord_key(*coords[-1]):
+            coords.reverse()
+            cuts = [(len(coords) - 1 - i, n) for i, n in reversed(cuts)]
+        stops = [(0, u), *cuts, (len(coords) - 1, v)]
+        graph.remove_edge(u, v, k)
+        for (i, a), (j, b) in itertools.pairwise(stops):
+            piece = coords[i : j + 1]
+            attrs = dict(d)
+            attrs["geometry"] = LineString(piece)
+            attrs["length"] = _metres(piece)
+            graph.add_edge(a, b, **attrs)
+    return len(splits)
+
+
 def acquire_osm(bbox: tuple[float, float, float, float]) -> nx.MultiDiGraph:
     """Whole-area bike network + bike-permitted footpaths.
 
@@ -386,6 +898,7 @@ def acquire_osm(bbox: tuple[float, float, float, float]) -> nx.MultiDiGraph:
     So this keeps the correct whole-area download but merges footpaths IN PLACE
     (bike attributes win, matching the old nx.compose(foot, bike)) rather than
     building a third full graph — that copy was pure transient overhead."""
+    configure_osm_cache()
     G: nx.MultiDiGraph = with_overpass_retry(
         "bike network",
         lambda: ox.graph_from_bbox(
@@ -409,12 +922,43 @@ def acquire_osm(bbox: tuple[float, float, float, float]) -> nx.MultiDiGraph:
         print(f"  footpath layer failed ({e}) — bike graph only")
         return G
     # add only footpath nodes/edges the bike graph lacks (bike precedence)
-    G.add_nodes_from((n, d) for n, d in gf.nodes(data=True) if n not in G)
+    new_nodes = {n for n in gf.nodes if n not in G}
+    G.add_nodes_from((n, d) for n, d in gf.nodes(data=True) if n in new_nodes)
     G.add_edges_from(
         (u, v, k, d) for u, v, k, d in gf.edges(keys=True, data=True) if not G.has_edge(u, v, k)
     )
     del gf
+    joined = connect_midblock_junctions(G, new_nodes)
+    print(f"  joined footpaths to {joined} road edges they meet mid-block")
     return G
+
+
+def edge_climb(
+    graph: nx.MultiDiGraph,
+    u: Any,
+    v: Any,
+    data: Mapping[str, Any],
+    elev: Mapping[Any, float],
+    sampler: Any,
+) -> float:
+    """Climb riding edge u->v, sampled along its geometry (see climb_along)."""
+    geom = data.get("geometry")
+    if not isinstance(geom, LineString):
+        coords = [
+            (float(graph.nodes[u]["x"]), float(graph.nodes[u]["y"])),
+            (float(graph.nodes[v]["x"]), float(graph.nodes[v]["y"])),
+        ]
+    else:
+        coords = [(float(x), float(y)) for x, y in geom.coords]
+        ux, uy = float(graph.nodes[u]["x"]), float(graph.nodes[u]["y"])
+        # geometry keeps the way's direction; ride it from u
+        if abs(coords[-1][0] - ux) + abs(coords[-1][1] - uy) < abs(coords[0][0] - ux) + abs(
+            coords[0][1] - uy
+        ):
+            coords.reverse()
+    pts = profile_points(coords, CLIMB_STEP_M)
+    heights = [elev[u], *(sampler.elevation(x, y) for x, y in pts[1:-1]), elev[v]]
+    return climb_along(heights)
 
 
 def build() -> None:
@@ -422,16 +966,22 @@ def build() -> None:
     print("downloading OSM (bike + footpaths) ...")
     G = acquire_osm(BBOX)
     print(f"  merged graph: {len(G.nodes)} nodes, {len(G.edges)} edges")
+    print(f"  added {add_contraflow_edges(G)} contraflow edges (bikes both ways)")
     mem("after download+compose")
     nodes, edges = ox.graph_to_gdfs(G)
     edges = edges.to_crs(METRIC_CRS)
     mem("after graph_to_gdfs")
 
     # base classification from OSM tags
-    base = [classify_osm(t) for t in edges.to_dict("records")]
+    records = edges.to_dict("records")
+    base = [classify_osm(t) for t in records]
     edges["cls"] = [c for c, _ in base]
     edges["road_busy"] = [b for _, b in base]
-    edges["is_pathlike"] = edges["cls"] == "path"
+    # the street's own class, without its facility: what paint is priced against
+    edges["road_cls"] = [classify_road(t) for t in records]
+    edges["rough"] = [rough_surface(t) for t in records]
+    del records
+    edges["is_pathlike"] = edges["cls"].isin(OFFSTREET)
     edges["source"] = "osm"
     edges["lts"] = 0
 
@@ -450,14 +1000,20 @@ def build() -> None:
             continue
         print(f"matching {name} overlay ({len(overlay)} features) ...")
         matches = overlay_match(edges, overlay, radius)
-        exploded = overlay.explode(index_parts=False).reset_index(drop=True)
+        ex_cls = overlay.explode(index_parts=False)["cls"].tolist()
+        rough = edges["rough"].tolist()
         upgraded = 0
         for i, pos in enumerate(matches):
             if pos is None:
                 continue
-            cls = exploded.iloc[pos]["cls"]
+            cls = ex_cls[pos]
             # official path can't upgrade an on-road edge past "separated"
-            cur = edges.iloc[i]["cls"]
+            cur = edges.iat[i, edges.columns.get_loc("cls")]
+            # An official "shared-use path" says nothing about its surface, and
+            # OSM saying "mud" does: it stays unpaved. (A track with no surface
+            # tag is unpaved only by default, and an official path wins there.)
+            if cur == "unpaved" and rough[i]:
+                continue
             new = safer(cur, cls)
             if new != cur:
                 edges.iat[i, edges.columns.get_loc("cls")] = new
@@ -471,19 +1027,24 @@ def build() -> None:
     if lts is not None and not lts.empty:
         print(f"matching MassDOT LTS ({len(lts)} features) ...")
         matches = overlay_match(edges, lts, radius=15)
-        exploded = lts.explode(index_parts=False).reset_index(drop=True)
+        ex_lts = lts.explode(index_parts=False)["lts"].tolist()
         escalated = 0
         for i, pos in enumerate(matches):
             if pos is None:
                 continue
-            score = int(exploded.iloc[pos]["lts"])
+            score = int(ex_lts[pos])
             edges.iat[i, edges.columns.get_loc("lts")] = score
             if score >= 3:
-                cur = edges.iloc[i]["cls"]
-                new = {"quiet_street": "moderate_street", "moderate_street": "busy_street"}.get(cur)
+                cur = edges.iat[i, edges.columns.get_loc("cls")]
+                new = LTS_ESCALATION.get(cur)
                 if new:
                     edges.iat[i, edges.columns.get_loc("cls")] = new
                     escalated += 1
+                # and the street under any paint: a painted lane on a street
+                # MassDOT rates LTS 3 must not be priced as a quiet street
+                road = edges.iat[i, edges.columns.get_loc("road_cls")]
+                if road in LTS_ESCALATION:
+                    edges.iat[i, edges.columns.get_loc("road_cls")] = LTS_ESCALATION[road]
         print(f"  escalated {escalated} edges via LTS>=3")
 
     # manual overrides trump everything (can downgrade too)
@@ -495,6 +1056,8 @@ def build() -> None:
         for i, pos in enumerate(matches):
             if pos is not None:
                 edges.iat[i, edges.columns.get_loc("cls")] = exploded.iloc[pos]["cls"]
+                # an override is a person saying what the street is, all of it
+                edges.iat[i, edges.columns.get_loc("road_cls")] = exploded.iloc[pos]["cls"]
                 edges.iat[i, edges.columns.get_loc("source")] = "override"
 
     # crash density
@@ -504,6 +1067,10 @@ def build() -> None:
         if gdf is not None:
             crash_frames.append(gdf[["geometry"]])
     edges["crash_count"] = 0
+    # which crashes, not just how many: a crash is joined to every edge within
+    # CRASH_JOIN_RADIUS_M, so adding counts along a corridor counts it once per
+    # edge it is near. Ids are row numbers of this build's crash table.
+    crash_ids: list[tuple[int, ...]] = [()] * len(edges)
     crashes_joined = 0
     if crash_frames:
         crashes = pd.concat(crash_frames, ignore_index=True)
@@ -521,6 +1088,13 @@ def build() -> None:
         cc = edges.columns.get_loc("crash_count")
         for pos, n in counts.items():
             edges.iat[pos, cc] = n
+        by_edge: dict[int, list[int]] = {}
+        for cid, pos in zip(_crash_idx.tolist(), edge_pos.tolist(), strict=True):
+            by_edge.setdefault(pos, []).append(cid)
+        for pos, ids in by_edge.items():
+            crash_ids[pos] = tuple(sorted(ids))
+    edges["crash_ids"] = crash_ids
+    del crash_ids
 
     edges["crash_per_100m"] = edges["crash_count"] / (edges["length"].clip(lower=20) / 100)
     edges["crash_factor"] = (1 + config.CRASH_WEIGHT * edges["crash_per_100m"]).clip(
@@ -540,24 +1114,23 @@ def build() -> None:
             edges.iat[i, cf] = min(edges.iat[i, cf] * config.SOMERVILLE_HIGH_CRASH_FACTOR, cap)
         print(f"  {len(flagged)} edges inside Somerville high-crash corridors")
 
-    # class multiplier, with busy-road override for painted facilities
-    def edge_mult(row: "pd.Series[Any]") -> float:
-        if row["road_busy"] and row["cls"] == "lane":
-            return config.BUSY_ROAD_LANE_MULTIPLIER
-        if row["road_busy"] and row["cls"] == "buffered":
-            return config.BUSY_ROAD_BUFFERED_MULTIPLIER
-        return mult(row["cls"])
-
-    def edge_mult_solo(row: "pd.Series[Any]") -> float:
-        if row["road_busy"] and row["cls"] == "lane":
-            return config.SOLO_BUSY_ROAD_LANE_MULTIPLIER
-        if row["road_busy"] and row["cls"] == "buffered":
-            return config.SOLO_BUSY_ROAD_BUFFERED_MULTIPLIER
-        return config.SOLO_CLASS_MULTIPLIER[row["cls"]]
-
     mem("after crash join")
-    edges["stress_mult"] = edges.apply(edge_mult, axis=1)
-    edges["stress_mult_solo"] = edges.apply(edge_mult_solo, axis=1)
+    triples = list(zip(edges["cls"], edges["road_cls"], edges["road_busy"], strict=True))
+    edges["stress_mult"] = [
+        facility_multiplier(
+            c, r, bool(b), config.CLASS_MULTIPLIER,
+            config.BUSY_ROAD_LANE_MULTIPLIER, config.BUSY_ROAD_BUFFERED_MULTIPLIER,
+        )
+        for c, r, b in triples
+    ]
+    edges["stress_mult_solo"] = [
+        facility_multiplier(
+            c, r, bool(b), config.SOLO_CLASS_MULTIPLIER,
+            config.SOLO_BUSY_ROAD_LANE_MULTIPLIER, config.SOLO_BUSY_ROAD_BUFFERED_MULTIPLIER,
+        )
+        for c, r, b in triples
+    ]
+    del triples
 
     # node crossing penalties: nodes touching a busy street
     busy_nodes: set[int] = set()
@@ -578,7 +1151,7 @@ def build() -> None:
             return config.SIGNALIZED_BUSY_CROSSING_PENALTY_M
         return config.UNSIGNALIZED_BUSY_CROSSING_PENALTY_M
 
-    # node elevations -> per-edge climb (positive rise along travel direction)
+    # node elevations; per-edge climb is sampled along each edge below
     print("sampling node elevations (AWS terrain tiles) ...")
     sampler = ElevationSampler()
     elev: dict[int, float] = {}
@@ -594,14 +1167,16 @@ def build() -> None:
         if not (row["cls"] == "busy_street" or row["road_busy"]):
             pen = (node_penalty(u) + node_penalty(v)) / 2
         data = G.edges[u, v, k]
-        data["climb"] = round(max(0.0, elev[v] - elev[u]), 2)
+        data["climb"] = round(edge_climb(G, u, v, data, elev, sampler), 2)
         data["xpen"] = round(pen, 1)
         data["road_busy"] = bool(row["road_busy"])
         # exact crash count, not just the derived factor: the where-to-build
         # report quotes counts to cities, and a capped factor can't be inverted
         # back into one (crash_factor saturates at CRASH_FACTOR_CAP)
         data["crash_count"] = int(row["crash_count"])
+        data["crash_ids"] = row["crash_ids"]
         data["cls"] = row["cls"]
+        data["road_cls"] = row["road_cls"]
         data["stress_mult"] = float(row["stress_mult"])
         data["crash_factor"] = float(row["crash_factor"])
         data["weight"] = float(

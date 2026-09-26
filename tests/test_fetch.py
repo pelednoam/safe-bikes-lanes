@@ -65,6 +65,23 @@ def test_poi_kinds_map_from_tags(monkeypatch: pytest.MonkeyPatch) -> None:
     assert len(fc["features"]) == 8
 
 
+def test_a_partial_overpass_answer_is_not_a_poi_layer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A query that times out part-way still answers 200, with the elements it
+    had and a `remark`. That was saved as the POI layer."""
+    place = {"lon": -71.1, "lat": 42.38, "tags": {"leisure": "playground"}}
+    answers = [
+        {"elements": [place], "remark": "runtime error: Query timed out"},
+        {"elements": [place, place, place]},
+    ]
+    monkeypatch.setattr(
+        urllib.request,
+        "urlopen",
+        lambda *_a, **_k: _FakeResponse(json.dumps(answers.pop(0)).encode()),
+    )
+    fc = fetch.fetch_pois()
+    assert len(fc["features"]) == 3  # the complete answer, from the next mirror
+
+
 def test_towns_keep_only_their_name(monkeypatch: pytest.MonkeyPatch) -> None:
     raw = {
         "type": "FeatureCollection",
@@ -111,25 +128,78 @@ def test_population_trims_to_people_and_outer_rings(monkeypatch: pytest.MonkeyPa
     assert fc["features"][1]["properties"]["pop"] == 0
 
 
-def test_arcgis_query_pages_until_short_and_raises_on_error(
+class FakeArcGIS:
+    """Just enough of an ArcGIS layer: its info, a count, and pages of at most
+    its own maxRecordCount, in OBJECTID order."""
+
+    def __init__(
+        self,
+        n: int,
+        max_records: int,
+        flag: bool = True,
+        truncate_at: int | None = None,
+        ignore_offset: bool = False,
+    ) -> None:
+        self.rows = [{"type": "Feature", "id": i, "properties": {"OBJECTID": i}} for i in range(n)]
+        self.max_records = max_records
+        self.flag = flag
+        self.truncate_at = truncate_at
+        self.ignore_offset = ignore_offset
+        self.calls: list[dict[str, str]] = []
+
+    def __call__(self, url: str, *_a: Any, **_k: Any) -> bytes:
+        import urllib.parse
+
+        parsed = urllib.parse.urlparse(url)
+        q = dict(urllib.parse.parse_qsl(parsed.query))
+        self.calls.append(q)
+        if not parsed.path.endswith("/query"):
+            info = {"objectIdField": "OBJECTID", "maxRecordCount": self.max_records}
+            return json.dumps(info).encode()
+        if q.get("returnCountOnly") == "true":
+            return json.dumps({"count": len(self.rows)}).encode()
+        assert q["orderByFields"] == "OBJECTID", "pages of an unordered query can skip rows"
+        offset = 0 if self.ignore_offset else int(q["resultOffset"])
+        size = min(int(q["resultRecordCount"]), self.max_records)
+        end = len(self.rows) if self.truncate_at is None else self.truncate_at
+        batch = self.rows[offset : min(offset + size, end)]
+        page: dict[str, Any] = {"type": "FeatureCollection", "features": batch}
+        if self.flag:
+            page["properties"] = {"exceededTransferLimit": offset + size < end}
+        return json.dumps(page).encode()
+
+
+def test_arcgis_paging_follows_the_servers_own_page_size(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    pages = [
-        {"features": [{"id": i} for i in range(1000)]},
-        {"features": [{"id": 1000}]},
-    ]
-    calls: list[str] = []
-
-    def fake_get(url: str, *_a: Any, **_k: Any) -> bytes:
-        calls.append(url)
-        return json.dumps(pages[len(calls) - 1]).encode()
-
-    monkeypatch.setattr(fetch, "_get", fake_get)
+    """A layer capped at 500 per page returned its first 500 and stopped: the
+    loop ended on any page shorter than 1,000."""
+    server = FakeArcGIS(n=1234, max_records=500)
+    monkeypatch.setattr(fetch, "_get", server)
     fc = fetch.arcgis_query("https://example.test/layer/0")
-    assert len(fc["features"]) == 1001
-    assert len(calls) == 2
-    assert "resultOffset=1000" in calls[1]
+    assert len(fc["features"]) == 1234
+    assert [f["id"] for f in fc["features"]] == list(range(1234))
 
+
+def test_arcgis_paging_without_a_transfer_limit_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    server = FakeArcGIS(n=2001, max_records=1000, flag=False)
+    monkeypatch.setattr(fetch, "_get", server)
+    assert len(fetch.arcgis_query("https://example.test/layer/0")["features"]) == 2001
+
+
+def test_a_short_arcgis_answer_is_an_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fewer features than the server's own count is a failed fetch, not a
+    smaller layer."""
+    monkeypatch.setattr(fetch, "_get", FakeArcGIS(n=1500, max_records=1000, truncate_at=1000))
+    with pytest.raises(RuntimeError, match="got 1000 features but the server counts 1500"):
+        fetch.arcgis_query("https://example.test/layer/0")
+    # a server that ignores resultOffset would otherwise loop on page one forever
+    monkeypatch.setattr(fetch, "_get", FakeArcGIS(n=1500, max_records=1000, ignore_offset=True))
+    with pytest.raises(RuntimeError, match="server counts 1500"):
+        fetch.arcgis_query("https://example.test/layer/0")
+
+
+def test_arcgis_query_raises_on_error(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         fetch, "_get", lambda *_a, **_k: json.dumps({"error": {"message": "nope"}}).encode()
     )
@@ -185,6 +255,22 @@ def test_cambridge_permits_become_dated_points(monkeypatch: pytest.MonkeyPatch) 
     assert props["start"] == "2026-08-01"
     assert props["end"] == "2026-09-01"
     assert fc["features"][0]["geometry"]["coordinates"] == [-71.1, 42.38]
+
+
+def test_cambridge_permits_are_paged_past_five_thousand(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One request with $limit=5000 ended the list at 5,000 without a word."""
+    import urllib.parse
+
+    rows = [{"longitude": "-71.1", "latitude": "42.38", "permit_type": "X"}] * 6200
+
+    def socrata(url: str, *_a: Any, **_k: Any) -> bytes:
+        q = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(url).query))
+        assert q["$order"] == ":id"
+        offset, limit = int(q.get("$offset", 0)), int(q["$limit"])
+        return json.dumps(rows[offset : offset + min(limit, 50_000)]).encode()
+
+    monkeypatch.setattr(fetch, "_get", socrata)
+    assert len(fetch.fetch_cambridge_permits()["features"]) == 6200
 
 
 def test_workzones_say_how_to_enable_them_when_unconfigured(
@@ -270,8 +356,38 @@ def test_fetch_all_reports_failures_instead_of_dying(
     for name in ("fetch_pois", "fetch_towns", "fetch_population", "fetch_workzones",
                  "fetch_cambridge_permits", "fetch_mapc"):
         monkeypatch.setattr(fetch, name, lambda: {"type": "FeatureCollection", "features": []})
-    fetch.fetch_all(refresh=True)
+    failures = fetch.fetch_all(refresh=True)
     err = capsys.readouterr().err
     assert "FAILED" in err
     # and the sources that did work were still written
     assert (tmp_path / "pois.geojson").exists()
+    assert failures and all(msg == "endpoint down" for _name, msg in failures)
+
+
+def test_a_failed_source_fails_the_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """fetch.py exited 0 with sources failed, so the weekly refresh went on to
+    build and publish without them."""
+    monkeypatch.setattr(config, "RAW_DIR", tmp_path)
+    monkeypatch.setattr(fetch, "fetch_all", lambda refresh: [("pois.geojson", "504")])
+    assert fetch.main(["--refresh"]) == 1
+    monkeypatch.setattr(fetch, "fetch_all", lambda refresh: [])
+    assert fetch.main(["--refresh"]) == 0
+
+
+def test_no_work_zone_key_is_not_a_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The one source that needs a key: without it, it is not configured,
+    which must not fail every refresh of a fork without the secret."""
+    monkeypatch.setattr(config, "RAW_DIR", tmp_path)
+    monkeypatch.delenv(config.WZDX_KEY_ENV, raising=False)
+    empty: dict[str, Any] = {"type": "FeatureCollection", "features": []}
+    monkeypatch.setattr(fetch, "_get", lambda *_a, **_k: json.dumps(empty).encode())
+    monkeypatch.setattr(fetch, "arcgis_query", lambda *_a, **_k: empty)
+    for name in ("fetch_pois", "fetch_towns", "fetch_population",
+                 "fetch_cambridge_permits", "fetch_mapc"):
+        monkeypatch.setattr(fetch, name, lambda: empty)
+    assert fetch.fetch_all(refresh=True) == []
+    assert not (tmp_path / "workzones.geojson").exists()

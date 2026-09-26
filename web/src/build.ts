@@ -75,6 +75,7 @@ const CLASS_WORDS: Record<string, string> = {
   moderate_street: "moderate street",
   busy_street: "busy street",
   service: "alley or service road",
+  unpaved: "unpaved path",
 };
 
 const N = (n: number): string => n.toLocaleString("en-US");

@@ -148,6 +148,7 @@ const CLASS_COLORS: Record<ProtectionClass, string> = {
   sharrow: "#fdae61",
   moderate_street: "#f46d43",
   busy_street: "#d73027",
+  unpaved: "#a6761d",
 };
 
 const POI_META: Record<string, { emoji: string; label: string; color: string }> = {
@@ -288,6 +289,7 @@ const AVOIDABLE: [ProtectionClass, string][] = [
   ["sharrow", "sharrows"],
   ["moderate_street", "moderate streets"],
   ["busy_street", "busy streets"],
+  ["unpaved", "unpaved paths"],
 ];
 let avoidTypes = new Set<ProtectionClass>(
   JSON.parse(localStorage.getItem("avoidTypes") ?? "[]") as ProtectionClass[],

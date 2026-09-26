@@ -24,6 +24,7 @@ const CLASS_COLORS = {
     sharrow: "#fdae61",
     moderate_street: "#f46d43",
     busy_street: "#d73027",
+    unpaved: "#a6761d",
 };
 const POI_META = {
     playground: { emoji: "🛝", label: "playground", color: "#e67e22" },
@@ -150,6 +151,7 @@ const AVOIDABLE = [
     ["sharrow", "sharrows"],
     ["moderate_street", "moderate streets"],
     ["busy_street", "busy streets"],
+    ["unpaved", "unpaved paths"],
 ];
 let avoidTypes = new Set(JSON.parse(localStorage.getItem("avoidTypes") ?? "[]"));
 function syncAvoidSummary() {

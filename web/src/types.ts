@@ -10,7 +10,8 @@ export type ProtectionClass =
   | "lane"
   | "sharrow"
   | "moderate_street"
-  | "busy_street";
+  | "busy_street"
+  | "unpaved";
 
 /** Rider profiles: all weighting is client-side, computed from raw edge data. */
 export type ProfileId = "young_kids" | "older_kids" | "solo";

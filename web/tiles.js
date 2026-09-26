@@ -85,7 +85,7 @@ export class TileStore {
     async loadManifest() {
         const m = await this.fetchJson("tiles/manifest.json");
         this.grid = new TileGrid(m.originLon, m.originLat, m.tileDeg, m.tiles);
-        this.classList = m.classes;
+        this.classList = m.classTable ?? m.classes;
     }
     get classes() {
         return this.classList;

@@ -47,44 +47,96 @@ def _save(name: str, data: GeoJSON, source: str) -> None:
     print(f"  {name}: {meta['features']} features")
 
 
+ARCGIS_PAGE: Final[int] = 1000
+
+
+def _arcgis_json(layer_url: str, path: str, params: dict[str, str | int]) -> Any:
+    url = layer_url + path + "?" + urllib.parse.urlencode(params)
+    data = json.loads(_get(url))
+    if isinstance(data, dict) and "error" in data:
+        raise RuntimeError(f"{layer_url}: {data['error']}")
+    return data
+
+
 def arcgis_query(layer_url: str, where: str = "1=1", bbox: bool = True) -> GeoJSON:
     """Query an ArcGIS FeatureServer/MapServer layer, paging until exhausted.
 
     Returns a GeoJSON FeatureCollection (f=geojson is supported on all the
     servers we use; verified 2026-07).
+
+    Paging used to stop at the first page shorter than 1,000 — but a server's
+    page is its own maxRecordCount, so a layer capped at 500 returned 500
+    features and stopped as if that were all of them. It now asks the layer
+    for its object-id field and page size, orders by the object id (paging an
+    unordered query can skip and repeat rows), follows exceededTransferLimit,
+    and at the end checks what it got against the server's own count, so a
+    short answer is an error rather than a smaller layer.
     """
+    info = _arcgis_json(layer_url, "", {"f": "json"})
+    oid = str(info.get("objectIdField") or "")
+    if not oid:
+        oid = next(
+            (f["name"] for f in info.get("fields") or [] if f.get("type") == "esriFieldTypeOID"),
+            "OBJECTID",
+        )
+    page_size = min(ARCGIS_PAGE, int(info.get("maxRecordCount") or ARCGIS_PAGE))
+
+    base: dict[str, str | int] = {"where": where}
+    if bbox:
+        base.update(
+            {
+                "geometry": (
+                    f"{config.BBOX_WEST},{config.BBOX_SOUTH},"
+                    f"{config.BBOX_EAST},{config.BBOX_NORTH}"
+                ),
+                "geometryType": "esriGeometryEnvelope",
+                "inSR": 4326,
+                "spatialRel": "esriSpatialRelIntersects",
+            }
+        )
+    expected = int(
+        _arcgis_json(layer_url, "/query", {**base, "returnCountOnly": "true", "f": "json"})[
+            "count"
+        ]
+    )
+
     features: list[dict[str, Any]] = []
+    seen: set[Any] = set()
     offset = 0
-    while True:
-        params: dict[str, str | int] = {
-            "where": where,
-            "outFields": "*",
-            "outSR": 4326,
-            "f": "geojson",
-            "resultOffset": offset,
-            "resultRecordCount": 1000,
-        }
-        if bbox:
-            params.update(
-                {
-                    "geometry": (
-                        f"{config.BBOX_WEST},{config.BBOX_SOUTH},"
-                        f"{config.BBOX_EAST},{config.BBOX_NORTH}"
-                    ),
-                    "geometryType": "esriGeometryEnvelope",
-                    "inSR": 4326,
-                    "spatialRel": "esriSpatialRelIntersects",
-                }
-            )
-        url = layer_url + "/query?" + urllib.parse.urlencode(params)
-        page: GeoJSON = json.loads(_get(url))
-        if "error" in page:
-            raise RuntimeError(f"{layer_url}: {page['error']}")
+    while len(features) < expected:
+        page: GeoJSON = _arcgis_json(
+            layer_url,
+            "/query",
+            {
+                **base,
+                "outFields": "*",
+                "outSR": 4326,
+                "f": "geojson",
+                "orderByFields": oid,
+                "resultOffset": offset,
+                "resultRecordCount": page_size,
+            },
+        )
         batch: list[dict[str, Any]] = page.get("features", [])
-        features.extend(batch)
-        if len(batch) < 1000:
+        fresh = 0
+        for feat in batch:
+            fid = (feat.get("properties") or {}).get(oid, feat.get("id"))
+            if fid is not None and fid in seen:
+                continue
+            seen.add(fid)
+            features.append(feat)
+            fresh += 1
+        more = page.get("exceededTransferLimit")
+        if more is None:
+            more = (page.get("properties") or {}).get("exceededTransferLimit")
+        if not batch or fresh == 0 or more is False:
             break
         offset += len(batch)
+    if len(features) != expected:
+        raise RuntimeError(
+            f"{layer_url}: got {len(features)} features but the server counts {expected} "
+            "— paging stopped early or the server ignored resultOffset"
+        )
     return {"type": "FeatureCollection", "features": features}
 
 
@@ -118,9 +170,15 @@ out center tags;"""
             try:
                 req = urllib.request.Request(ep, data=body, headers=UA)
                 with urllib.request.urlopen(req, timeout=180) as r:
-                    raw = json.load(r)
+                    answer = json.load(r)
+                # A query that times out part-way still answers 200, with what
+                # it had and a `remark` saying so. Taking it published a POI
+                # layer missing whatever the query had not reached.
+                if isinstance(answer, dict) and answer.get("remark"):
+                    raise ValueError(f"partial Overpass response: {answer['remark']}")
+                raw = answer
                 break
-            except (OSError, ValueError) as e:  # HTTP/timeout/JSON
+            except (OSError, ValueError) as e:  # HTTP/timeout/JSON/partial
                 last_err = e
                 continue
         if raw is not None:
@@ -213,16 +271,24 @@ def fetch_population() -> GeoJSON:
     return {"type": "FeatureCollection", "features": out}
 
 
+SOCRATA_PAGE: Final[int] = 1000
+
+
 def fetch_cambridge_permits() -> GeoJSON:
     """Active Cambridge street/excavation permits (geocoded, with end dates)."""
     today = datetime.date.today().isoformat()
     where = f"status='Active' AND end_date>='{today}T00:00:00.000'"
-    url = (
-        config.CAMBRIDGE_PERMITS_URL
-        + "?"
-        + urllib.parse.urlencode({"$where": where, "$limit": 5000})
-    )
-    rows: list[dict[str, Any]] = json.loads(_get(url))
+    # Paged, and in a fixed order: one request with $limit=5000 silently ended
+    # the list at 5,000, and Socrata pages without $order can skip and repeat.
+    rows: list[dict[str, Any]] = []
+    while True:
+        query = {"$where": where, "$order": ":id", "$limit": SOCRATA_PAGE, "$offset": len(rows)}
+        page: list[dict[str, Any]] = json.loads(
+            _get(config.CAMBRIDGE_PERMITS_URL + "?" + urllib.parse.urlencode(query))
+        )
+        rows.extend(page)
+        if len(page) < SOCRATA_PAGE:
+            break
     features: list[dict[str, Any]] = []
     for row in rows:
         try:
@@ -276,7 +342,14 @@ def fetch_mapc() -> GeoJSON:
     return {"type": "FeatureCollection", "features": features}
 
 
-def fetch_all(refresh: bool = False) -> None:
+def fetch_all(refresh: bool = False) -> list[tuple[str, str]]:
+    """Fetch every source; return the ones that failed.
+
+    One dead endpoint doesn't stop the others being fetched, but it is a
+    failure (see main): the build that follows would otherwise run without
+    that layer — or, locally, on last month's copy of it — and publish the
+    result as this week's data.
+    """
     jobs: dict[str, Callable[[], GeoJSON]] = {
         "cambridge_bike_facilities.geojson": lambda: json.loads(
             _get(config.CAMBRIDGE_FACILITIES_URL)
@@ -300,7 +373,11 @@ def fetch_all(refresh: bool = False) -> None:
     jobs["towns.geojson"] = fetch_towns
     jobs["population.geojson"] = fetch_population
     jobs["cambridge_permits.geojson"] = fetch_cambridge_permits
-    jobs["workzones.geojson"] = fetch_workzones
+    # needs a key; without one it is a configuration choice, not a failure
+    if os.environ.get(config.WZDX_KEY_ENV):
+        jobs["workzones.geojson"] = fetch_workzones
+    else:
+        print(f"  workzones.geojson: {config.WZDX_KEY_ENV} not set, not configured — skipping")
     for year in config.IMPACT_CRASH_YEARS:
         service_year = config.IMPACT_CRASH_SERVICE_YEAR.get(year, str(year))
         jobs[f"crashes_{year}.geojson"] = (
@@ -325,9 +402,17 @@ def fetch_all(refresh: bool = False) -> None:
             print(f"  {name}: FAILED - {e}", file=sys.stderr)
     if failures:
         print(f"\n{len(failures)} source(s) failed: {[f[0] for f in failures]}", file=sys.stderr)
+    return failures
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--refresh", action="store_true", help="re-download cached sources")
+    failures = fetch_all(refresh=ap.parse_args(argv).refresh)
+    # Exit non-zero, so the weekly refresh stops here instead of building and
+    # publishing a snapshot without the layers that failed.
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--refresh", action="store_true", help="re-download cached sources")
-    fetch_all(refresh=ap.parse_args().refresh)
+    sys.exit(main())
