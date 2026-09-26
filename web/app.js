@@ -10,7 +10,7 @@ import { dataUrl, initDataSource, loadJson, usingRemoteData } from "./data.js";
 import { buildCues, PROFILES, Router, routeCacheKey, toGPX } from "./router.js";
 import { distVoice, fmtDist, fmtClimb, fmtDistTight, fmtSpeed, fromMeters, getUnits, navRound, setUnits, toMeters, unitName, } from "./units.js";
 import { NetworkTiles, TileStore } from "./tiles.js";
-import { Lane } from "./planner.js";
+import { Lane, withUpgraded } from "./planner.js";
 import { drawRideCard, drawTotalsCard, rideShareText, totalsShareText } from "./sharecard.js";
 // ---------------------------------------------------------------------------
 // constants
@@ -620,6 +620,8 @@ function setPoint(kind, lngLat) {
  * a request that has returned without drawing anything. */
 function beginPlan() {
     const ticket = routeLane.begin();
+    // a hypothetical trip belongs to the ends and settings it was asked about
+    endWhatIf();
     el("loading").style.display = "none";
     return ticket;
 }
@@ -4513,6 +4515,8 @@ function navOnFix(fix) {
     navZoomTarget = distToNext <= NAV_ZOOM_TURN_M ? NAV_ZOOM_TURN : NAV_ZOOM_CRUISE;
 }
 async function startNav() {
+    // a ride follows the streets as they are, never a what-if's proposed lane
+    clearWhatIf();
     if (!rebuildNavFromSelected())
         return;
     const destLngLat = end?.getLngLat() ?? start?.getLngLat();
@@ -5339,6 +5343,22 @@ function repaintProjects(scored) {
 // check it against their own trip, which is the difference between a number
 // and an argument.
 let whatIfPid = null;
+/** The trip as really planned, kept while the what-if's version of it is on
+ * screen. The hypothetical is computed against a street that does not exist, so
+ * it lives only in the what-if view: undo, a new plan and starting a ride all
+ * leave it, and none of them ever see a router with the project applied (see
+ * withUpgraded). */
+let whatIfReal = null;
+/** Leave the what-if view without touching what is drawn — for a new plan,
+ * which is about to replace the drawn trip anyway. */
+function endWhatIf() {
+    if (whatIfPid === null && whatIfReal === null)
+        return;
+    whatIfPid = null;
+    whatIfReal = null;
+    el("whatif-clear").style.display = "none";
+    el("whatif-result").textContent = "";
+}
 function whatIfPoints(pid) {
     const feature = projectFC?.features.find((f) => f.properties?.pid === pid);
     if (!feature)
@@ -5350,12 +5370,18 @@ function whatIfPoints(pid) {
             : [];
     return parts;
 }
+/** Undo: the real trip back on screen, exactly as it was planned. */
 function clearWhatIf() {
-    whatIfPid = null;
-    router?.setUpgradedPoints([]);
-    el("whatif-clear").style.display = "none";
-    el("whatif-result").textContent = "";
-    void requestRoute();
+    const real = whatIfReal;
+    endWhatIf();
+    if (real === null)
+        return;
+    // anything still working out a what-if is for a view that is gone
+    routeLane.cancel();
+    options = real.options;
+    const back = real.selected ?? options[0]?.id;
+    if (back !== undefined)
+        selectOption(back);
 }
 async function runWhatIf(pid) {
     const out = el("whatif-result");
@@ -5373,9 +5399,9 @@ async function runWhatIf(pid) {
         }
         const at = from.getLngLat();
         const budget = 2500;
-        const before = router.safeShed([at.lng, at.lat], budget, profileId, preferFlat);
-        router.setUpgradedPoints(points);
-        const after = router.safeShed([at.lng, at.lat], budget, profileId, preferFlat);
+        const r = router;
+        const before = r.safeShed([at.lng, at.lat], budget, profileId, preferFlat);
+        const { result: after } = withUpgraded(r, points, () => r.safeShed([at.lng, at.lat], budget, profileId, preferFlat));
         whatIfPid = pid;
         el("whatif-clear").style.display = "";
         const gain = Math.round((after.reachableKm - before.reachableKm) * 10) / 10;
@@ -5386,21 +5412,48 @@ async function runWhatIf(pid) {
                 : "From your start, this one doesn't change what's in reach.";
         return;
     }
-    const chosen = options.find((o) => o.id === selectedId) ?? options[0];
-    if (!chosen || !router) {
+    // measured against the real trip, even when another what-if is on screen —
+    // which goes first, so a failure below leaves the real trip drawn
+    clearWhatIf();
+    const real = { options, selected: selectedId };
+    const chosen = real.options.find((o) => o.id === real.selected) ?? real.options[0];
+    if (!chosen) {
         out.textContent = "plan a trip first, then ask";
         return;
     }
     const was = chosen.payload.summary;
-    const covered = router.setUpgradedPoints(points);
-    whatIfPid = pid;
-    el("whatif-clear").style.display = "";
-    await requestRoute();
-    const now = (options.find((o) => o.id === selectedId) ?? options[0])?.payload.summary;
-    if (!now) {
+    const s = start.getLngLat();
+    const d = end.getLngLat();
+    const a = [s.lng, s.lat];
+    const b = [d.lng, d.lat];
+    const ticket = beginPlan();
+    const r = await ensureRouter([a, b], 1200, 1);
+    if (ticket.stale())
+        return;
+    let hypothetical = [];
+    let covered = 0;
+    try {
+        if (r === null)
+            throw new Error("unmapped");
+        // applied for this one computation and taken off again before anything
+        // else can route: the next trip, a search grade or a ride must never be
+        // planned along a lane that has only been proposed
+        ({ covered, result: hypothetical } = withUpgraded(r, points, () => r.routeOptions(a, b, profileId, preferFlat, undefined, avoidTypes, walkMaxM)));
+    }
+    catch {
+        hypothetical = [];
+    }
+    const shown = hypothetical.find((o) => o.id === chosen.id) ?? hypothetical[0];
+    if (!shown) {
         out.textContent = "couldn't re-plan with that built";
         return;
     }
+    whatIfReal = real;
+    whatIfPid = pid;
+    options = hypothetical;
+    selectOption(shown.id);
+    el("whatif-clear").style.display = "";
+    const now = shown.payload.summary;
     const dKm = Math.round((now.meters - was.meters) / 100) / 10;
     const dProt = now.pct_protected - was.pct_protected;
     const parts = [];

@@ -423,6 +423,70 @@ test("what-if re-costs your own trip, and undoes cleanly", async ({ page }) => {
   await expect(page.locator("#whatif-clear")).toBeHidden();
 });
 
+test("a what-if never reaches the next plan, or the ride", async ({ page }) => {
+  // The what-if used to be applied to the live router and left there until
+  // undo. Every plan after it — a changed setting, a search grade, the ride
+  // itself — was then routed along a lane that has only been proposed, and
+  // guidance would send a child down a street as if it were protected.
+  test.slow();
+  // A trip that Mill Street (Arlington) moves if it were protected: measured
+  // offline, it takes the trip from 0% to 21% protected.
+  await page.goto("/#s=-71.16197,42.41345&e=-71.15319,42.42201&m=young_kids");
+  await page.waitForFunction(() => window._map !== undefined, null, { timeout: budget(60_000) });
+  await expect(page.locator(".option-card").first()).toBeVisible({ timeout: budget(90_000) });
+  const drawn = (): Promise<string> =>
+    page.evaluate(() => {
+      const src = window._map?.getSource("route") as
+        | { _data?: GeoJSON.FeatureCollection }
+        | undefined;
+      return JSON.stringify(
+        (src?._data?.features ?? []).flatMap((f) =>
+          f.geometry.type === "LineString" ? f.geometry.coordinates : [],
+        ),
+      );
+    });
+  const real = await drawn();
+  // compared as a yes/no, so a failure reads as a sentence, not two coordinate dumps
+  const isReal = async (): Promise<boolean> => (await drawn()) === real;
+
+  await expect(page.locator("#build-box")).toBeVisible({ timeout: budget(30_000) });
+  await page.locator("#build-box > summary").click();
+  await expect(page.locator(".build-row").first()).toBeVisible({ timeout: budget(30_000) });
+  await page.locator("#build-town").selectOption("Arlington");
+  const project = page.locator('.build-row[data-pid="c04059"]');
+  await project.click();
+  await page.locator("#whatif-run").click();
+  await expect(page.locator("#whatif-result")).toContainText("Your trip:", {
+    timeout: budget(60_000),
+  });
+  await expect.poll(isReal, { timeout: budget(30_000) }).toBe(false);
+
+  // a setting changed and changed back is a new plan of the same trip: it must
+  // come out as the real one, not the one with the proposed lane built
+  await page.evaluate(() => {
+    const box = document.getElementById("prefer-flat") as HTMLInputElement;
+    for (const on of [true, false]) {
+      box.checked = on;
+      box.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  });
+  await expect
+    .poll(isReal, {
+      timeout: budget(60_000),
+      message: "the next plan was routed along the proposed lane",
+    })
+    .toBe(true);
+  await expect(page.locator("#whatif-clear")).toBeHidden();
+
+  // and a ride started from the what-if view rides the streets as they are
+  await project.click();
+  await page.locator("#whatif-run").click();
+  await expect.poll(isReal, { timeout: budget(60_000) }).toBe(false);
+  await page.locator("#nav-btn").click();
+  await expect(page.locator("#nav-banner")).toBeVisible();
+  expect(await isReal(), "the ride follows the hypothetical trip").toBe(true);
+});
+
 test("with no trip planned, what-if answers with reach instead", async ({ page }) => {
   await page.goto("/#c=-71.105,42.383,13");
   await page.waitForFunction(() => window._map !== undefined && window._map.loaded(), null, {

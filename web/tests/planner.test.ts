@@ -1,7 +1,8 @@
-// Who owns a planner output while a computation waits.
+// Who owns a planner output while a computation waits, and how a what-if is
+// kept from outliving the question it answers.
 import { describe, expect, it } from "vitest";
 
-import { Lane } from "../src/planner.js";
+import { Lane, withUpgraded } from "../src/planner.js";
 
 describe("Lane", () => {
   it("keeps only the newest piece of work current", () => {
@@ -42,5 +43,42 @@ describe("Lane", () => {
     };
     await Promise.all([work("far", 30), work("near", 1)]);
     expect(written).toEqual(["near"]);
+  });
+});
+
+describe("withUpgraded", () => {
+  class FakeRouter {
+    applied: [number, number][] = [];
+    history: number[] = [];
+    setUpgradedPoints(points: [number, number][]): number {
+      this.applied = points;
+      this.history.push(points.length);
+      return points.length * 2;
+    }
+  }
+
+  it("answers with the upgrade applied and leaves the router clean", () => {
+    const r = new FakeRouter();
+    const pts: [number, number][] = [
+      [-71.1, 42.38],
+      [-71.09, 42.38],
+    ];
+    const out = withUpgraded(r, pts, (covered) => {
+      expect(r.applied).toBe(pts); // the question is asked of the built street
+      return covered + 1;
+    });
+    expect(out).toEqual({ covered: 4, result: 5 });
+    expect(r.applied).toEqual([]);
+  });
+
+  it("clears the upgrade even when the question throws", () => {
+    const r = new FakeRouter();
+    expect(() =>
+      withUpgraded(r, [[-71.1, 42.38]], () => {
+        throw new Error("no path found");
+      }),
+    ).toThrow("no path found");
+    expect(r.applied).toEqual([]);
+    expect(r.history).toEqual([1, 0]);
   });
 });

@@ -36,3 +36,31 @@ export class Lane {
     this.gen++;
   }
 }
+
+/** The part of a Router a what-if needs. */
+export interface Upgradable {
+  setUpgradedPoints(points: [number, number][]): number;
+}
+
+/** Run `fn` against a router that costs these points as if already built, and
+ * put the router back as it was before returning — including when `fn` throws.
+ *
+ * A what-if is a question about a street that does not exist yet. Left applied,
+ * it was the answer to every question after it: the next route, the search
+ * grades and turn-by-turn guidance all treated a proposed lane as a built one,
+ * which is a safety claim about a street a child would actually ride. Scoping it
+ * to one synchronous call also means a router rebuilt while tiles load can never
+ * silently drop half of a hypothetical — there is nothing left applied to drop.
+ */
+export function withUpgraded<T>(
+  router: Upgradable,
+  points: [number, number][],
+  fn: (covered: number) => T,
+): { covered: number; result: T } {
+  const covered = router.setUpgradedPoints(points);
+  try {
+    return { covered, result: fn(covered) };
+  } finally {
+    router.setUpgradedPoints([]);
+  }
+}
