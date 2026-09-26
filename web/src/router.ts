@@ -187,6 +187,188 @@ class MinHeap {
 }
 
 // ---------------------------------------------------------------------------
+// nearest-point index
+// ---------------------------------------------------------------------------
+
+/** Metres per degree, as every distance in this file measures them. */
+const M_PER_DEG_LON_AT_EQUATOR = 111_320;
+const M_PER_DEG_LAT = 110_540;
+/** Grid cell edge in degrees: ~110 m north-south, ~80 m east-west here, which
+ * holds a handful of edge midpoints in a dense street grid. */
+const INDEX_CELL_DEG = 0.001;
+/** Relative and absolute give on the "nothing outside this ring can be
+ * closer" bound, so floating-point rounding in the bound can only make the
+ * search look one ring further, never stop one ring short. */
+const BOUND_SLACK_REL = 1e-9;
+const BOUND_SLACK_M = 1e-6;
+
+/** Nearest-point lookups over a fixed set of lon/lat points.
+ *
+ * Snapping used to scan every point for every query. That is fine for the
+ * start and end of a route and ruinous for the construction zones, which are
+ * snapped a vertex at a time — 55,956 of them against every edge of every tile
+ * loaded, on each router rebuild: 18.8 s here for Davis to Kendall, as
+ * one long task, and again every time a search result pulled in a new tile.
+ *
+ * The points go into a uniform grid, and a query searches outward in square
+ * rings of cells until nothing unsearched could be closer than the best found
+ * so far, or than maxM. The answer is the brute-force one exactly, ties
+ * included: the same metric (metres scaled at the query's latitude), and among
+ * equally near points the lowest index wins, as it did when the scan ran in
+ * index order and kept the first strict improvement.
+ */
+export class PointIndex {
+  private readonly cells = new Map<number, number[]>();
+  private readonly originX: number;
+  private readonly originY: number;
+  private readonly minX: number;
+  private readonly minY: number;
+  private readonly maxX: number;
+  private readonly maxY: number;
+  private readonly colMin: number;
+  private readonly colMax: number;
+  private readonly rowMin: number;
+  private readonly rowMax: number;
+  /** Cell keys are col * ROW_SPAN + row, with cols and rows made non-negative
+   * by the origin; every finite point on Earth fits well inside 2^53. */
+  private static readonly ROW_SPAN = 1 << 30;
+
+  constructor(
+    private readonly xs: ArrayLike<number>,
+    private readonly ys: ArrayLike<number>,
+  ) {
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (let i = 0; i < xs.length; i++) {
+      const x = xs[i] as number;
+      const y = ys[i] as number;
+      // a non-finite point can never win a comparison, so it is never an
+      // answer and need not be stored
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+    this.minX = minX;
+    this.minY = minY;
+    this.maxX = maxX;
+    this.maxY = maxY;
+    this.originX = Number.isFinite(minX) ? minX : 0;
+    this.originY = Number.isFinite(minY) ? minY : 0;
+    let colMin = Infinity;
+    let colMax = -Infinity;
+    let rowMin = Infinity;
+    let rowMax = -Infinity;
+    for (let i = 0; i < xs.length; i++) {
+      const x = xs[i] as number;
+      const y = ys[i] as number;
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      const c = this.col(x);
+      const r = this.row(y);
+      if (c < colMin) colMin = c;
+      if (c > colMax) colMax = c;
+      if (r < rowMin) rowMin = r;
+      if (r > rowMax) rowMax = r;
+      const key = c * PointIndex.ROW_SPAN + r;
+      const list = this.cells.get(key);
+      if (list) list.push(i);
+      else this.cells.set(key, [i]);
+    }
+    this.colMin = colMin;
+    this.colMax = colMax;
+    this.rowMin = rowMin;
+    this.rowMax = rowMax;
+  }
+
+  private col(x: number): number {
+    return Math.floor((x - this.originX) / INDEX_CELL_DEG);
+  }
+
+  private row(y: number): number {
+    return Math.floor((y - this.originY) / INDEX_CELL_DEG);
+  }
+
+  /** Index of the point nearest (lon, lat), or null when none is within maxM. */
+  nearest(lon: number, lat: number, maxM: number): number | null {
+    if (this.cells.size === 0) return null;
+    const scaleX = Math.cos((lat * Math.PI) / 180) * M_PER_DEG_LON_AT_EQUATOR;
+    const scaleY = M_PER_DEG_LAT;
+    const maxD2 = maxM * maxM;
+    // Nowhere near any point at all — the usual case for a construction zone
+    // in a town no loaded tile covers — is answered without touching a cell.
+    const gapX = Math.max(this.minX - lon, 0, lon - this.maxX) * scaleX;
+    const gapY = Math.max(this.minY - lat, 0, lat - this.maxY) * scaleY;
+    const gap = Math.hypot(gapX, gapY) * (1 - BOUND_SLACK_REL) - BOUND_SLACK_M;
+    if (gap > maxM) return null;
+
+    const xs = this.xs;
+    const ys = this.ys;
+    const c0 = this.col(lon);
+    const r0 = this.row(lat);
+    let best = -1;
+    let bestD2 = Infinity;
+    const visit = (c: number, r: number): void => {
+      const list = this.cells.get(c * PointIndex.ROW_SPAN + r);
+      if (list === undefined) return;
+      for (const i of list) {
+        const dx = ((xs[i] as number) - lon) * scaleX;
+        const dy = ((ys[i] as number) - lat) * scaleY;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < bestD2 || (d2 === bestD2 && i < best)) {
+          bestD2 = d2;
+          best = i;
+        }
+      }
+    };
+    const { colMin, colMax, rowMin, rowMax } = this;
+    // Rings that lie wholly outside the occupied cells hold nothing, so start
+    // at the first one that reaches them, and walk only the part of each ring
+    // that overlaps them: a query from far off costs rings across the data,
+    // not rings across the gap.
+    const kStart = Math.max(0, colMin - c0, c0 - colMax, rowMin - r0, r0 - rowMax);
+    for (let k = kStart; ; k++) {
+      const cLo = Math.max(c0 - k, colMin);
+      const cHi = Math.min(c0 + k, colMax);
+      const rLo = Math.max(r0 - k + 1, rowMin);
+      const rHi = Math.min(r0 + k - 1, rowMax);
+      const rowAt = (r: number): void => {
+        if (r >= rowMin && r <= rowMax) for (let c = cLo; c <= cHi; c++) visit(c, r);
+      };
+      const colAt = (c: number): void => {
+        if (c >= colMin && c <= colMax) for (let r = rLo; r <= rHi; r++) visit(c, r);
+      };
+      rowAt(r0 - k);
+      if (k > 0) {
+        rowAt(r0 + k);
+        colAt(c0 - k);
+        colAt(c0 + k);
+      }
+      // the square searched so far covers every occupied cell: nothing is left
+      if (c0 - k <= colMin && c0 + k >= colMax && r0 - k <= rowMin && r0 + k >= rowMax) break;
+      // anything not yet searched is at least as far as the square's nearest side
+      const left = this.originX + (c0 - k) * INDEX_CELL_DEG;
+      const right = this.originX + (c0 + k + 1) * INDEX_CELL_DEG;
+      const bottom = this.originY + (r0 - k) * INDEX_CELL_DEG;
+      const top = this.originY + (r0 + k + 1) * INDEX_CELL_DEG;
+      const side = Math.min(
+        (lon - left) * scaleX,
+        (right - lon) * scaleX,
+        (lat - bottom) * scaleY,
+        (top - lat) * scaleY,
+      );
+      const bound = side * (1 - BOUND_SLACK_REL) - BOUND_SLACK_M;
+      // strictly beyond: a point exactly as near as the best could still hold
+      // the lower index, and the brute force would have preferred it
+      if (bound > maxM || (best >= 0 && bound * bound > bestD2)) break;
+    }
+    return best >= 0 && bestD2 <= maxD2 ? best : null;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // router
 // ---------------------------------------------------------------------------
 
@@ -288,41 +470,32 @@ export class Router {
 
   // -- snapping --------------------------------------------------------------
 
+  /** Built on first use and kept for the Router's life: the graph never
+   * changes under a Router, a new tile set means a new Router. */
+  private nodeIndex: PointIndex | null = null;
+  private edgeIndex: PointIndex | null = null;
+
   nearestNode(lon: number, lat: number): number {
-    const scaleX = Math.cos((lat * Math.PI) / 180) * 111_320;
-    const scaleY = 110_540;
-    let best = -1;
-    let bestD2 = Infinity;
-    this.g.nodes.forEach(([nx, ny], i) => {
-      const dx = (nx - lon) * scaleX;
-      const dy = (ny - lat) * scaleY;
-      const d2 = dx * dx + dy * dy;
-      if (d2 < bestD2) {
-        bestD2 = d2;
-        best = i;
-      }
-    });
-    if (best < 0 || bestD2 > MAX_SNAP_METERS ** 2) {
-      throw new Error("point is too far from the mapped bike network");
+    if (this.nodeIndex === null) {
+      const n = this.g.nodes.length;
+      const xs = new Float64Array(n);
+      const ys = new Float64Array(n);
+      this.g.nodes.forEach(([nx, ny], i) => {
+        xs[i] = nx;
+        ys[i] = ny;
+      });
+      this.nodeIndex = new PointIndex(xs, ys);
     }
+    const best = this.nodeIndex.nearest(lon, lat, MAX_SNAP_METERS);
+    if (best === null) throw new Error("point is too far from the mapped bike network");
     return best;
   }
 
-  private nearestEdge(lon: number, lat: number, maxM: number): number | null {
-    const scaleX = Math.cos((lat * Math.PI) / 180) * 111_320;
-    const scaleY = 110_540;
-    let best = -1;
-    let bestD2 = Infinity;
-    for (let i = 0; i < this.midX.length; i++) {
-      const dx = ((this.midX[i] as number) - lon) * scaleX;
-      const dy = ((this.midY[i] as number) - lat) * scaleY;
-      const d2 = dx * dx + dy * dy;
-      if (d2 < bestD2) {
-        bestD2 = d2;
-        best = i;
-      }
-    }
-    return best >= 0 && bestD2 <= maxM ** 2 ? best : null;
+  /** The edge whose midpoint is nearest (lon, lat), or null beyond maxM.
+   * Public for the tests that hold it to the brute-force answer. */
+  nearestEdge(lon: number, lat: number, maxM: number): number | null {
+    this.edgeIndex ??= new PointIndex(this.midX, this.midY);
+    return this.edgeIndex.nearest(lon, lat, maxM);
   }
 
   private pointsToEdgeSet(points: [number, number][], snapM: number): Set<number> {
