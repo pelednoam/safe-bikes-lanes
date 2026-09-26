@@ -27,6 +27,22 @@ async function drawnRoute(page: Page): Promise<[number, number][]> {
   });
 }
 
+/** Compass bearing of the path `atM` metres along it. */
+function headingAt(path: [number, number][], atM: number): number {
+  let m = 0;
+  for (let i = 1; i < path.length; i++) {
+    const a = path[i - 1] as [number, number];
+    const b = path[i] as [number, number];
+    const dx = (b[0] - a[0]) * 111_320 * Math.cos((a[1] * Math.PI) / 180);
+    const dy = (b[1] - a[1]) * 110_540;
+    m += Math.hypot(dx, dy);
+    if (m >= atM && Math.hypot(dx, dy) > 0) {
+      return ((Math.atan2(dx, dy) * 180) / Math.PI + 360) % 360;
+    }
+  }
+  return 0;
+}
+
 function length(path: [number, number][]): number {
   let m = 0;
   for (let i = 1; i < path.length; i++) {
@@ -53,12 +69,16 @@ test("a wrong turn on a round trip rejoins the loop, not the way home", async ({
 
   // a quarter of the way round, the rider takes a wrong turn and keeps going
   const divertAtM = loopM * 0.25;
+  // Square to the route, not a fixed compass bearing: a loop is whatever the
+  // week's data makes it, and when this one ran at 27° at the quarter mark, a
+  // "wrong turn" at 45° rode almost alongside it and never left.
+  const heading = headingAt(loop, divertAtM);
   await ride(page, loop, {
     speedKmh: 12,
     jitterM: 3,
     timeScale: 8,
     divertAtM,
-    divertBearingDeg: 45,
+    divertBearingDeg: (heading + 90) % 360,
     divertM: 160,
     untilM: divertAtM + 4,
   });

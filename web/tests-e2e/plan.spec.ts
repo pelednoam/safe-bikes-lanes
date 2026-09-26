@@ -453,25 +453,31 @@ test("the wait is narrated, and something moves while it waits", async ({ page }
   // The wait is mostly the map downloading — about 90 tiles for an ordinary trip
   // — and it used to show one motionless "routing…" through all of it, which
   // reads as a frozen app rather than a busy one.
-  const seen: string[] = [];
+  //
+  // Every change to the line is recorded in the page as it happens. Sampling
+  // it from here every 90 ms was a round trip to the browser per sample, and
+  // on a loaded runner one of those outlasts a whole stage, so the test failed
+  // on what it missed rather than on what the app showed.
+  await page.addInitScript(() => {
+    const w = window as unknown as { __loadingLines: string[] };
+    w.__loadingLines = [];
+    new MutationObserver(() => {
+      const box = document.getElementById("loading");
+      const line = (box?.textContent ?? "").replace(/\s+/g, " ").trim();
+      const seen = w.__loadingLines;
+      if (line !== "" && seen[seen.length - 1] !== line) seen.push(line);
+    }).observe(document, { childList: true, subtree: true, characterData: true });
+  });
   await page.goto("/#s=-71.122258,42.396748&e=-71.086705,42.362552&m=young_kids");
-  await page.waitForFunction(() => window._map !== undefined, null, { timeout: budget(60_000) });
-  const poll = setInterval(() => {
-    void page
-      .locator("#loading")
-      .innerText()
-      .then((t) => {
-        const line = t.replace(/\s+/g, " ").trim();
-        if (line !== "" && seen[seen.length - 1] !== line) seen.push(line);
-      })
-      .catch(() => undefined);
-  }, 90);
   await expect(page.locator(".option-card").first()).toBeVisible({ timeout: budget(60_000) });
-  clearInterval(poll);
+  const seen = await page.evaluate(
+    () => (window as unknown as { __loadingLines: string[] }).__loadingLines,
+  );
 
   // it said what it was doing, and the count moved while it did it
-  expect(seen.some((l) => /Loading the map/i.test(l))).toBe(true);
-  expect(seen.some((l) => /\d+ of \d+/.test(l))).toBe(true);
+  const saw = `the loading line read: ${JSON.stringify(seen)}`;
+  expect(seen.some((l) => /Loading the map/i.test(l)), saw).toBe(true);
+  expect(seen.some((l) => /\d+ of \d+/.test(l)), saw).toBe(true);
   expect(new Set(seen).size, "the line never changed — that's the frozen look").toBeGreaterThan(1);
   // and it stopped claiming to be routing while it was really downloading
   expect(seen.some((l) => /Finding the safest way/i.test(l))).toBe(true);

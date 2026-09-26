@@ -617,19 +617,35 @@ test.describe("at a desk", () => {
     await expect(page.getByRole("radiogroup", { name: "Route options" })).toBeVisible();
     const first = page.locator(".option-card").first();
     await expect(first).toHaveAttribute("aria-checked", "true");
+    // The cards repaint once the chosen line is on the map, which waits for the
+    // map to draw it, up to 3 s (paintPanelWithRoute). The default five-second
+    // expect left a loaded runner two seconds of slack, and it failed there
+    // with the keypress measured landing on a live card every time.
+    const repaint = { timeout: budget(10_000) };
     await first.focus();
     await page.keyboard.press("ArrowDown");
-    await expect(page.locator(".option-card").nth(1)).toHaveAttribute("aria-checked", "true");
+    await expect(page.locator(".option-card").nth(1)).toHaveAttribute(
+      "aria-checked",
+      "true",
+      repaint,
+    );
     // focus stayed with the choice through the repaint
     await expect
-      .poll(() => page.evaluate(() => document.activeElement?.classList.contains("option-card")))
+      .poll(
+        () => page.evaluate(() => document.activeElement?.classList.contains("option-card")),
+        repaint,
+      )
       .toBe(true);
 
     // and the chips on the map
     const chip = page.locator(".opt-chip").first();
     await chip.focus();
     await page.keyboard.press("Enter");
-    await expect(page.locator(".option-card").first()).toHaveAttribute("aria-checked", "true");
+    await expect(page.locator(".option-card").first()).toHaveAttribute(
+      "aria-checked",
+      "true",
+      repaint,
+    );
   });
 
   test("the rider choice shows where the keyboard is, and which is chosen", async ({ page }) => {

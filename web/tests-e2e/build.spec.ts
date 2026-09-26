@@ -453,7 +453,11 @@ test("a what-if never reaches the next plan, or the ride", async ({ page }) => {
   await page.locator("#build-box > summary").click();
   await expect(page.locator(".build-row").first()).toBeVisible({ timeout: budget(30_000) });
   await page.locator("#build-town").selectOption("Arlington");
-  const project = page.locator('.build-row[data-pid="c04059"]');
+  // By name, not by pid: a pid is the project's place in this week's ranking,
+  // and each data rebuild hands it to a different street (c04059 was Mill
+  // Street in one build and a street in Woburn in the next).
+  const project = page.locator(".build-row", { hasText: "Mill Street" });
+  await expect(project).toHaveCount(1);
   await project.click();
   await page.locator("#whatif-run").click();
   await expect(page.locator("#whatif-result")).toContainText("Your trip:", {
