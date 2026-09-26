@@ -116,6 +116,7 @@ import {
 import { NetworkTiles, TileStore } from "./tiles.js";
 import { Lane, type Ticket, withUpgraded } from "./planner.js";
 import { type SpeakPriority, SpeechQueue } from "./speech.js";
+import { DeferredReload, ScreenLock, type WakeLockApi } from "./lifecycle.js";
 import { drawRideCard, drawTotalsCard, rideShareText, totalsShareText } from "./sharecard.js";
 import type {
   PoiFeature,
@@ -4067,7 +4068,24 @@ let navDest: [number, number] | null = null;
 let navOffCount = 0;
 let navDot: Marker | null = null;
 let navArrived = false;
-let wakeLock: WakeLockSentinel | null = null;
+/** The screen stays on for the whole ride, taken back after every app switch
+ * (see lifecycle.ts). */
+const screenLock = new ScreenLock(
+  // typed as always-present; Safari before 16.4 has none
+  () => navigator.wakeLock as WakeLockApi | undefined,
+  () => document.visibilityState === "visible",
+);
+document.addEventListener("visibilitychange", () => {
+  void screenLock.onVisibilityChange();
+});
+/** A new build waits for the ride to end before the page reloads into it. */
+const swReload = new DeferredReload(
+  () => navActive,
+  () => location.reload(),
+);
+/** How long after a ride ends a held-back reload waits: long enough for the
+ * "ride saved" line to be heard. */
+const RELOAD_AFTER_RIDE_MS = 5000;
 let navAlerts: RideAlert[] = [];
 let navAlertNext = 0;
 let navLastPos: [number, number] | null = null;
@@ -4825,11 +4843,8 @@ async function startNav(): Promise<void> {
   // come after the wake lock and the GPS watcher, which on an iPhone meant a
   // silent ride and a false "no voice on this phone" warning.
   speak("navigation started", "chat");
-  try {
-    wakeLock = await navigator.wakeLock.request("screen");
-  } catch {
-    wakeLock = null; // unsupported or denied — navigation still works
-  }
+  // unsupported or denied, navigation still works
+  await screenLock.acquire();
   if (isNativeApp()) {
     // native app: background watcher keeps GPS + voice alive with the
     // screen off (shows a persistent notification while navigating)
@@ -4864,8 +4879,7 @@ function exitNav(): void {
   navWatchId = null;
   if (navBgWatcherId !== null) void stopBackgroundWatcher(navBgWatcherId);
   navBgWatcherId = null;
-  void wakeLock?.release().catch(() => undefined);
-  wakeLock = null;
+  screenLock.release();
   closeAsk();
   hideClassify();
   hideRideAlert();
@@ -4884,6 +4898,8 @@ function exitNav(): void {
   getSource("route-done").setData(emptyFC());
   const threeD = el<HTMLInputElement>("show-3d").checked;
   map.easeTo({ pitch: threeD ? 60 : 0, bearing: 0, duration: 800 });
+  // a new build that arrived mid-ride is loaded now the ride is over
+  if (swReload.waiting) window.setTimeout(() => swReload.idle(), RELOAD_AFTER_RIDE_MS);
 }
 
 /** Mid-ride detour: reroute to the nearest kid stop of a kind, remembering
@@ -5521,7 +5537,7 @@ if ("serviceWorker" in navigator) {
       navigator.serviceWorker.addEventListener("controllerchange", () => {
         if (reloaded) return;
         reloaded = true;
-        location.reload();
+        swReload.request(); // not mid-ride: held until the ride ends
       });
     }
     // updateViaCache:"none" — always fetch sw.js fresh so updates are detected

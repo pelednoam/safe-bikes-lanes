@@ -28,6 +28,7 @@ const ASSETS = [
   "basemap.js",
   "data.js",
   "hazards.js",
+  "lifecycle.js",
   "native.js",
   "nav.js",
   "places.js",
