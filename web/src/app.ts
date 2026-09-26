@@ -263,7 +263,9 @@ map.addControl(
   }),
   "top-right",
 );
-map.addControl(new maplibregl.ScaleControl({}), "bottom-left");
+// in the rider's unit: it read "500 m" under a panel that said miles
+const scaleBar = new maplibregl.ScaleControl({ unit: getUnits() });
+map.addControl(scaleBar, "bottom-left");
 
 // ---------------------------------------------------------------------------
 // state
@@ -5157,6 +5159,7 @@ el<HTMLButtonElement>("nav-hazard").addEventListener("click", () => {
     const wasM = toMeters(Number(el<HTMLInputElement>("loop-dist").value) || 0);
     setUnits(pref.value === "metric" ? "metric" : "imperial");
     syncUnitLabels();
+    scaleBar.setUnit(getUnits());
     // the number in the box meant a distance, not a digit: keep the distance
     if (wasM > 0) {
       el<HTMLInputElement>("loop-dist").value = String(Math.round(fromMeters(wasM) * 10) / 10);

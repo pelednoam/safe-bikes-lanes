@@ -50,6 +50,15 @@ test.describe("units", () => {
     await page.locator("#units-pref").selectOption("metric");
     expect(await labels()).toEqual(["0 m", "100 m", "250 m", "500 m", "1 km"]);
   });
+
+  test("the map's scale bar follows the preference", async ({ page }) => {
+    await boot(page);
+    const scale = page.locator(".maplibregl-ctrl-scale");
+    await expect(scale).toHaveText(/\d+\s(ft|mi)$/);
+    await page.locator("summary", { hasText: "Preferences" }).click();
+    await page.locator("#units-pref").selectOption("metric");
+    await expect(scale).toHaveText(/\d+\s(m|km)$/);
+  });
 });
 
 /** Pretend to be a phone with a status bar, a notch and a home indicator —
