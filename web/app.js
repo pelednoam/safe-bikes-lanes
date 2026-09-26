@@ -10,6 +10,7 @@ import { dataUrl, initDataSource, loadJson, usingRemoteData } from "./data.js";
 import { buildCues, PROFILES, Router, routeCacheKey, toGPX } from "./router.js";
 import { distVoice, fmtDist, fmtClimb, fmtDistTight, fmtSpeed, fromMeters, getUnits, navRound, setUnits, toMeters, unitName, } from "./units.js";
 import { NetworkTiles, TileStore } from "./tiles.js";
+import { withRetry } from "./retry.js";
 import { Lane, planOptions, withUpgraded } from "./planner.js";
 import { SpeechQueue } from "./speech.js";
 import { loopRejoinPoint, payloadLength, rejoinOption } from "./rejoin.js";
@@ -301,17 +302,35 @@ async function ensureRouter(points, padM, margin = 1, onProgress) {
     }
     return router;
 }
+/** Say, in words, that something the app needs did not load and when it will
+ * be tried again (see retry.ts). The error line used to read "failed to load
+ * routing tiles: TypeError: Failed to fetch" under a "loading map…" that never
+ * went away, and nothing was ever tried again. */
+function dataLoadTrouble(what, delayMs) {
+    const errBox = el("error");
+    errBox.textContent =
+        `Couldn't load ${what} — trying again in ${Math.round(delayMs / 1000)} s. ` +
+            "Check the phone has a connection.";
+    errBox.dataset["from"] = "dataload";
+    errBox.style.display = "block";
+}
+/** Take the message down once what it was about has loaded — only if it is
+ * still that message, and not a routing error written since. */
+function dataLoadRecovered() {
+    const errBox = el("error");
+    if (errBox.dataset["from"] !== "dataload")
+        return;
+    delete errBox.dataset["from"];
+    errBox.style.display = "none";
+}
 const manifestReady = dataReady
-    .then(() => tiles.loadManifest())
+    .then(() => withRetry(() => tiles.loadManifest(), {
+    onRetry: (_err, _attempt, delayMs) => dataLoadTrouble("the map data", delayMs),
+}))
     .then(() => {
+    dataLoadRecovered();
     void refreshHazards();
     el("loading").style.display = "none";
-    dataProgress();
-})
-    .catch((err) => {
-    const errBox = el("error");
-    errBox.textContent = `failed to load routing tiles: ${String(err)}`;
-    errBox.style.display = "block";
     dataProgress();
 });
 el("loading").textContent = "loading map…";
@@ -322,7 +341,9 @@ el("loading").style.display = "block";
 // tiles, so the layer clears — pan/zoom in and it repopulates.
 const NET_MIN_ZOOM = 12;
 const netTiles = new NetworkTiles(loadJson);
-const networkReady = dataReady.then(() => netTiles.loadManifest());
+const networkReady = dataReady.then(() => withRetry(() => netTiles.loadManifest(), {
+    onRetry: (_err, _attempt, delayMs) => dataLoadTrouble("the street safety map", delayMs),
+}).then(dataLoadRecovered));
 let netToken = 0;
 /** Fill the network source with the streets in the current viewport. */
 async function refreshNetworkTiles() {
@@ -346,7 +367,14 @@ async function refreshNetworkTiles() {
         north: b.getNorth(),
     };
     const token = ++netToken;
-    const features = await netTiles.visibleFeatures(box, 1);
+    let features;
+    try {
+        features = await netTiles.visibleFeatures(box, 1);
+    }
+    catch {
+        // a tile that would not load: keep what is drawn, the next move asks again
+        return;
+    }
     if (token !== netToken)
         return; // a newer move superseded this fetch
     src.setData({ type: "FeatureCollection", features });

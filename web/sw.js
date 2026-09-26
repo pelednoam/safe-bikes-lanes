@@ -34,6 +34,7 @@ const ASSETS = [
   "places.js",
   "planner.js",
   "rejoin.js",
+  "retry.js",
   "rides.js",
   "router.js",
   "search.js",
