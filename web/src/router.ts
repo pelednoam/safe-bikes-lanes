@@ -218,30 +218,28 @@ const BOUND_SLACK_M = 1e-6;
  * index order and kept the first strict improvement.
  */
 export class PointIndex {
-  private readonly cells = new Map<number, number[]>();
-  private readonly originX: number;
-  private readonly originY: number;
+  /** Point indices grouped by cell (column-major), ascending within a cell;
+   * cell k's points are items[start[k]] .. items[start[k + 1] - 1]. */
+  private readonly items: Int32Array;
+  private readonly start: Int32Array;
+  private readonly cellDeg: number;
+  private readonly cols: number;
+  private readonly rows: number;
   private readonly minX: number;
   private readonly minY: number;
   private readonly maxX: number;
   private readonly maxY: number;
-  private readonly colMin: number;
-  private readonly colMax: number;
-  private readonly rowMin: number;
-  private readonly rowMax: number;
-  /** Cell keys are col * ROW_SPAN + row, with cols and rows made non-negative
-   * by the origin; every finite point on Earth fits well inside 2^53. */
-  private static readonly ROW_SPAN = 1 << 30;
 
   constructor(
     private readonly xs: ArrayLike<number>,
     private readonly ys: ArrayLike<number>,
   ) {
+    const n = xs.length;
     let minX = Infinity;
     let minY = Infinity;
     let maxX = -Infinity;
     let maxY = -Infinity;
-    for (let i = 0; i < xs.length; i++) {
+    for (let i = 0; i < n; i++) {
       const x = xs[i] as number;
       const y = ys[i] as number;
       // a non-finite point can never win a comparison, so it is never an
@@ -252,51 +250,66 @@ export class PointIndex {
       if (y < minY) minY = y;
       if (y > maxY) maxY = y;
     }
-    this.minX = minX;
-    this.minY = minY;
-    this.maxX = maxX;
-    this.maxY = maxY;
-    this.originX = Number.isFinite(minX) ? minX : 0;
-    this.originY = Number.isFinite(minY) ? minY : 0;
-    let colMin = Infinity;
-    let colMax = -Infinity;
-    let rowMin = Infinity;
-    let rowMax = -Infinity;
-    for (let i = 0; i < xs.length; i++) {
-      const x = xs[i] as number;
-      const y = ys[i] as number;
-      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-      const c = this.col(x);
-      const r = this.row(y);
-      if (c < colMin) colMin = c;
-      if (c > colMax) colMax = c;
-      if (r < rowMin) rowMin = r;
-      if (r > rowMax) rowMax = r;
-      const key = c * PointIndex.ROW_SPAN + r;
-      const list = this.cells.get(key);
-      if (list) list.push(i);
-      else this.cells.set(key, [i]);
+    const empty = minX > maxX;
+    this.minX = empty ? 0 : minX;
+    this.minY = empty ? 0 : minY;
+    this.maxX = empty ? 0 : maxX;
+    this.maxY = empty ? 0 : maxY;
+    // A dense grid, so a lookup is arithmetic rather than a hash probe. Its
+    // cells are widened only if the points are spread so thin that the grid
+    // would dwarf them; the search is exact at any cell size.
+    let cellDeg = INDEX_CELL_DEG;
+    const cellsFor = (d: number): number =>
+      (Math.floor((this.maxX - this.minX) / d) + 1) * (Math.floor((this.maxY - this.minY) / d) + 1);
+    const maxCells = 4 * n + 4096;
+    while (cellsFor(cellDeg) > maxCells) cellDeg *= 2;
+    this.cellDeg = cellDeg;
+    this.cols = Math.floor((this.maxX - this.minX) / cellDeg) + 1;
+    this.rows = Math.floor((this.maxY - this.minY) / cellDeg) + 1;
+
+    // counting sort into cells, in index order so each cell lists ascending
+    const cellOf = new Int32Array(n).fill(-1);
+    const start = new Int32Array(this.cols * this.rows + 1);
+    if (!empty) {
+      for (let i = 0; i < n; i++) {
+        const x = xs[i] as number;
+        const y = ys[i] as number;
+        if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+        const k = this.col(x) * this.rows + this.row(y);
+        cellOf[i] = k;
+        start[k + 1] = (start[k + 1] as number) + 1;
+      }
     }
-    this.colMin = colMin;
-    this.colMax = colMax;
-    this.rowMin = rowMin;
-    this.rowMax = rowMax;
+    for (let k = 0; k < this.cols * this.rows; k++) {
+      start[k + 1] = (start[k + 1] as number) + (start[k] as number);
+    }
+    const fill = start.slice(0, -1);
+    const items = new Int32Array(start[this.cols * this.rows] as number);
+    for (let i = 0; i < n; i++) {
+      const k = cellOf[i] as number;
+      if (k < 0) continue;
+      items[fill[k] as number] = i;
+      fill[k] = (fill[k] as number) + 1;
+    }
+    this.items = items;
+    this.start = start;
   }
 
+  /** Grid column/row of a stored point. The last column is col(maxX) by
+   * construction; the clamp only guards that promise. */
   private col(x: number): number {
-    return Math.floor((x - this.originX) / INDEX_CELL_DEG);
+    return Math.min(this.cols - 1, Math.floor((x - this.minX) / this.cellDeg));
   }
 
   private row(y: number): number {
-    return Math.floor((y - this.originY) / INDEX_CELL_DEG);
+    return Math.min(this.rows - 1, Math.floor((y - this.minY) / this.cellDeg));
   }
 
   /** Index of the point nearest (lon, lat), or null when none is within maxM. */
   nearest(lon: number, lat: number, maxM: number): number | null {
-    if (this.cells.size === 0) return null;
+    if (this.items.length === 0) return null;
     const scaleX = Math.cos((lat * Math.PI) / 180) * M_PER_DEG_LON_AT_EQUATOR;
     const scaleY = M_PER_DEG_LAT;
-    const maxD2 = maxM * maxM;
     // Nowhere near any point at all — the usual case for a construction zone
     // in a town no loaded tile covers — is answered without touching a cell.
     const gapX = Math.max(this.minX - lon, 0, lon - this.maxX) * scaleX;
@@ -304,16 +317,17 @@ export class PointIndex {
     const gap = Math.hypot(gapX, gapY) * (1 - BOUND_SLACK_REL) - BOUND_SLACK_M;
     if (gap > maxM) return null;
 
-    const xs = this.xs;
-    const ys = this.ys;
-    const c0 = this.col(lon);
-    const r0 = this.row(lat);
+    const { xs, ys, items, start, cols, rows, cellDeg } = this;
+    // the query's cell, which may lie outside the grid (unclamped here)
+    const c0 = Math.floor((lon - this.minX) / cellDeg);
+    const r0 = Math.floor((lat - this.minY) / cellDeg);
     let best = -1;
     let bestD2 = Infinity;
     const visit = (c: number, r: number): void => {
-      const list = this.cells.get(c * PointIndex.ROW_SPAN + r);
-      if (list === undefined) return;
-      for (const i of list) {
+      const k = c * rows + r;
+      const end = start[k + 1] as number;
+      for (let j = start[k] as number; j < end; j++) {
+        const i = items[j] as number;
         const dx = ((xs[i] as number) - lon) * scaleX;
         const dy = ((ys[i] as number) - lat) * scaleY;
         const d2 = dx * dx + dy * dy;
@@ -323,22 +337,20 @@ export class PointIndex {
         }
       }
     };
-    const { colMin, colMax, rowMin, rowMax } = this;
-    // Rings that lie wholly outside the occupied cells hold nothing, so start
-    // at the first one that reaches them, and walk only the part of each ring
-    // that overlaps them: a query from far off costs rings across the data,
-    // not rings across the gap.
-    const kStart = Math.max(0, colMin - c0, c0 - colMax, rowMin - r0, r0 - rowMax);
+    // Rings that lie wholly outside the grid hold nothing, so start at the
+    // first one that reaches it, and walk only the part of each ring inside
+    // it: a query from far off costs rings across the data, not across the gap.
+    const kStart = Math.max(0, -c0, c0 - (cols - 1), -r0, r0 - (rows - 1));
     for (let k = kStart; ; k++) {
-      const cLo = Math.max(c0 - k, colMin);
-      const cHi = Math.min(c0 + k, colMax);
-      const rLo = Math.max(r0 - k + 1, rowMin);
-      const rHi = Math.min(r0 + k - 1, rowMax);
+      const cLo = Math.max(c0 - k, 0);
+      const cHi = Math.min(c0 + k, cols - 1);
+      const rLo = Math.max(r0 - k + 1, 0);
+      const rHi = Math.min(r0 + k - 1, rows - 1);
       const rowAt = (r: number): void => {
-        if (r >= rowMin && r <= rowMax) for (let c = cLo; c <= cHi; c++) visit(c, r);
+        if (r >= 0 && r < rows) for (let c = cLo; c <= cHi; c++) visit(c, r);
       };
       const colAt = (c: number): void => {
-        if (c >= colMin && c <= colMax) for (let r = rLo; r <= rHi; r++) visit(c, r);
+        if (c >= 0 && c < cols) for (let r = rLo; r <= rHi; r++) visit(c, r);
       };
       rowAt(r0 - k);
       if (k > 0) {
@@ -346,25 +358,22 @@ export class PointIndex {
         colAt(c0 - k);
         colAt(c0 + k);
       }
-      // the square searched so far covers every occupied cell: nothing is left
-      if (c0 - k <= colMin && c0 + k >= colMax && r0 - k <= rowMin && r0 + k >= rowMax) break;
-      // anything not yet searched is at least as far as the square's nearest side
-      const left = this.originX + (c0 - k) * INDEX_CELL_DEG;
-      const right = this.originX + (c0 + k + 1) * INDEX_CELL_DEG;
-      const bottom = this.originY + (r0 - k) * INDEX_CELL_DEG;
-      const top = this.originY + (r0 + k + 1) * INDEX_CELL_DEG;
-      const side = Math.min(
-        (lon - left) * scaleX,
-        (right - lon) * scaleX,
-        (lat - bottom) * scaleY,
-        (top - lat) * scaleY,
-      );
-      const bound = side * (1 - BOUND_SLACK_REL) - BOUND_SLACK_M;
+      // the square searched so far covers the whole grid: nothing is left
+      if (c0 - k <= 0 && c0 + k >= cols - 1 && r0 - k <= 0 && r0 + k >= rows - 1) break;
+      // Anything not yet searched is at least as far as the square's nearest
+      // side. A side on or past the grid's own edge has nothing beyond it, so
+      // it bounds nothing and is left out.
+      const sides: number[] = [];
+      if (c0 - k > 0) sides.push((lon - (this.minX + (c0 - k) * cellDeg)) * scaleX);
+      if (c0 + k < cols - 1) sides.push((this.minX + (c0 + k + 1) * cellDeg - lon) * scaleX);
+      if (r0 - k > 0) sides.push((lat - (this.minY + (r0 - k) * cellDeg)) * scaleY);
+      if (r0 + k < rows - 1) sides.push((this.minY + (r0 + k + 1) * cellDeg - lat) * scaleY);
+      const bound = Math.min(...sides) * (1 - BOUND_SLACK_REL) - BOUND_SLACK_M;
       // strictly beyond: a point exactly as near as the best could still hold
       // the lower index, and the brute force would have preferred it
       if (bound > maxM || (best >= 0 && bound * bound > bestD2)) break;
     }
-    return best >= 0 && bestD2 <= maxD2 ? best : null;
+    return best >= 0 && bestD2 <= maxM * maxM ? best : null;
   }
 }
 
@@ -376,8 +385,6 @@ export class Router {
   private readonly g: GraphData;
   private readonly adj: number[][];
   private readonly hillPen: Float64Array;
-  /** "u,v" -> edge indices, for reverse-edge lookups */
-  private readonly uvIndex = new Map<string, number[]>();
   /** edge midpoints (lon, lat) for nearest-edge snapping */
   private readonly midX: Float64Array;
   private readonly midY: Float64Array;
@@ -400,10 +407,6 @@ export class Router {
       const climb = e[8];
       const grade = e[2] > 0 ? climb / e[2] : 0;
       this.hillPen[i] = climb * HILL_EQUIV_M * (grade > STEEP_GRADE ? 2 : 1);
-      const key = `${e[0]},${e[1]}`;
-      const list = this.uvIndex.get(key);
-      if (list) list.push(i);
-      else this.uvIndex.set(key, [i]);
       const a = data.nodes[e[0]];
       const b = data.nodes[e[1]];
       if (a && b) {
@@ -498,6 +501,20 @@ export class Router {
     return this.edgeIndex.nearest(lon, lat, maxM);
   }
 
+  /** Edges running the other way along the same pair of nodes, in index order.
+   *
+   * Read off the far node's outgoing edges rather than kept in a "u,v" map:
+   * a node has a handful of edges, and building half a million key strings
+   * was the largest part of constructing a Router over a long session's tiles,
+   * which happens on every rebuild. */
+  private reverseOf(e: GraphData["edges"][number]): number[] {
+    const out: number[] = [];
+    for (const ei of this.adj[e[1]] ?? []) {
+      if (this.g.edges[ei]?.[1] === e[0]) out.push(ei);
+    }
+    return out;
+  }
+
   private pointsToEdgeSet(points: [number, number][], snapM: number): Set<number> {
     const set = new Set<number>();
     for (const [lon, lat] of points) {
@@ -506,7 +523,7 @@ export class Router {
       set.add(ei);
       const e = this.g.edges[ei];
       if (!e) continue;
-      for (const rev of this.uvIndex.get(`${e[1]},${e[0]}`) ?? []) set.add(rev);
+      for (const rev of this.reverseOf(e)) set.add(rev);
     }
     return set;
   }
@@ -1346,7 +1363,7 @@ export class Router {
         reuse.set(ei, LOOP_REUSE_MULT);
         const e = this.g.edges[ei];
         if (!e) continue;
-        for (const rev of this.uvIndex.get(`${e[1]},${e[0]}`) ?? []) {
+        for (const rev of this.reverseOf(e)) {
           reuse.set(rev, LOOP_REUSE_MULT);
         }
       }

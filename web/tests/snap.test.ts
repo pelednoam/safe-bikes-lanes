@@ -311,3 +311,41 @@ describe("snapping on the real map", () => {
     expect(ms).toBeLessThan(2_000);
   }, 60_000);
 });
+
+describe("rebuilding the router over a long session's tiles", () => {
+  it("builds and makes its first snaps in a fraction of a second", { timeout: 60_000 }, () => {
+    // Every time the loaded tiles grow, the app builds a new Router and snaps
+    // construction, marks and the route ends to it. After an afternoon of
+    // searching and riding that is hundreds of tiles; 800,000 edges here, a
+    // street grid about 30 km on a side.
+    const n = 450;
+    const nodes: [number, number, number][] = [];
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < n; j++) nodes.push([-71.3 + i * 0.0008, 42.2 + j * 0.0006, 10]);
+    }
+    const edges: GraphData["edges"] = [];
+    const road = (u: number, v: number): void => {
+      edges.push([u, v, 66, 0, 0, -1, 1, 0, 0, 0], [v, u, 66, 0, 0, -1, 1, 0, 0, 0]);
+    };
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < n; j++) {
+        if (i + 1 < n) road(i * n + j, (i + 1) * n + j);
+        if (j + 1 < n) road(i * n + j, i * n + j + 1);
+      }
+    }
+    const graph: GraphData = { nodes, names: [""], classes: ["quiet_street"], edges, geoms: [] };
+    // fastest of three, so a busy machine's worst moment is not the measure
+    let fastest = Infinity;
+    for (let run = 0; run < 3; run++) {
+      const t0 = performance.now();
+      const router = new Router(graph);
+      router.setConstructionPoints([[-71.2, 42.3]]);
+      router.nearestNode(-71.2, 42.3);
+      fastest = Math.min(fastest, performance.now() - t0);
+    }
+    // 1,100-1,500 ms when reverse edges were looked up by "u,v" strings and
+    // the grid was a hash map, 120-290 ms after, on the machine this was
+    // written on
+    expect(fastest).toBeLessThan(600);
+  });
+});
