@@ -19,6 +19,7 @@
 // this app puts on top — the route, the network, the overlays — on each flip.
 // Label-free mode is the same layers with the symbol ones hidden.
 // ---------------------------------------------------------------------------
+import { cachedStyle, installTileCache } from "./tilecache.js";
 /**
  * The vector tiles behind every Carto GL style (OpenMapTiles schema), named
  * directly rather than through their TileJSON.
@@ -30,9 +31,9 @@
  * never answers at all.
  *
  * Carto serves these from four hosts and MapLibre picks one per tile; the
- * service worker folds them back into a single cache key (see tileKey in
- * sw.js), so an offline route cached against one host is found whichever host
- * is asked for next.
+ * tile cache folds them back into a single key (see tileKey in tilecache.ts),
+ * so an offline route cached against one host is found whichever host is asked
+ * for next.
  */
 export const CARTO_TILES = [
     "https://tiles-a.basemaps.cartocdn.com/vectortiles/carto.streets/v1/{z}/{x}/{y}.mvt",
@@ -47,7 +48,9 @@ export const CARTO_MAXZOOM = 14;
 /** Carto's own glyph server, for pages that do not vendor their glyphs. See
  * VENDORED_FONT_STACK for why the planner cannot use it. */
 export const CARTO_GLYPHS = "https://tiles.basemaps.cartocdn.com/fonts/{fontstack}/{range}.pbf";
-const STYLE_URL = {
+/** The planner's two basemaps. Exported for the offline download, which has to
+ * store both: a rider can switch to night mode halfway through a ride. */
+export const STYLE_URL = {
     light: "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
     dark: "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
 };
@@ -104,11 +107,16 @@ function themeLayers(theme, style, textFont, labelsOnly, prefix) {
     }
     return out;
 }
-async function fetchStyle(url) {
-    const resp = await fetch(url);
-    if (!resp.ok)
-        throw new Error(`carto style ${resp.status}`);
-    return (await resp.json());
+/** The style from Carto, or the copy kept from the last time it was fetched —
+ * otherwise a cold start with no signal has tiles downloaded and nothing to
+ * paint them with. See cachedStyle. */
+function fetchStyle(url) {
+    return cachedStyle(url);
+}
+/** MapLibre's addProtocol, from the global build every page loads. */
+function globalAddProtocol() {
+    const lib = globalThis.maplibregl;
+    return lib?.addProtocol;
 }
 export function createBasemap(map, anchor, options = {}) {
     const styleUrl = options.styles ?? STYLE_URL;
@@ -116,6 +124,13 @@ export function createBasemap(map, anchor, options = {}) {
     const labelsOnly = options.labelsOnly ?? false;
     const prefix = options.prefix ?? "bm";
     const fetchJson = options.fetchJson ?? fetchStyle;
+    // Here rather than at each call site because every page that draws Carto's
+    // tiles builds its basemap through this, right after constructing its map —
+    // before the first tile is asked for, which is when it has to be in place.
+    const addProtocol = globalAddProtocol();
+    if ((options.tileCache ?? true) && addProtocol !== undefined && "setTransformRequest" in map) {
+        installTileCache(map, addProtocol);
+    }
     const installed = new Map();
     const inflight = new Map();
     /** The most recent show() request, re-applied when the label layers land. */

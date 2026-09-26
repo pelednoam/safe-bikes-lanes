@@ -43,7 +43,14 @@ function loadWorker(fetchImpl: FetchFn, caches = new FakeCacheStorage()): Worker
     clients: { claim: async () => undefined },
     location: new URL(`${ORIGIN}/sw.js`),
   };
-  const names = ["CACHE", "TILE_CACHE", "BROWSE_CACHE", "BROWSE_MAX", "NETWORK_TIMEOUT_MS"];
+  const names = [
+    "CACHE",
+    "TILE_CACHE",
+    "BROWSE_CACHE",
+    "BROWSE_MAX",
+    "TRIM_EVERY",
+    "NETWORK_TIMEOUT_MS",
+  ];
   const exportConsts = `return { ${names
     .map((n) => `${n}: typeof ${n} === "undefined" ? undefined : ${n}`)
     .join(", ")} };`;
@@ -82,7 +89,20 @@ function loadWorker(fetchImpl: FetchFn, caches = new FakeCacheStorage()): Worker
           waits.push(p);
         },
       });
-      return { answered: response !== null, response, lifetime: Promise.all(waits) };
+      // The event's lifetime, as a browser keeps it: until the response has
+      // settled and every waitUntil — including ones added after the response,
+      // as the worker does once a fetch comes back — has too.
+      const answer: Promise<Response> | null = response;
+      const lifetime = (async (): Promise<unknown[]> => {
+        await Promise.resolve(answer).catch(() => undefined);
+        let seen = -1;
+        while (seen !== waits.length) {
+          seen = waits.length;
+          await Promise.all(waits);
+        }
+        return waits;
+      })();
+      return { answered: response !== null, response, lifetime };
     },
   };
 }
@@ -217,5 +237,74 @@ describe("a connection that is barely there", () => {
     const otherTab = w.request("app.js", { clientId: "tab-2" });
     expect(await (await (otherTab.response as Promise<Response>)).text()).toBe("new module");
     expect(calls).toBeGreaterThan(0);
+  });
+});
+
+describe("third-party map resources", () => {
+  const TILE = "https://tiles-b.basemaps.cartocdn.com/vectortiles/carto.streets/v1/14/4956/6057.mvt";
+  const STYLE = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
+  const AERIAL = "https://tiles.arcgis.com/tiles/x/arcgis/rest/services/o/MapServer/tile/14/6057/";
+
+  it("leaves Carto's vector tiles and styles to the page, which caches them itself", () => {
+    // The page reads and fills the tile cache on its own (tilecache.ts), in the
+    // web app and in the Android app where there is no worker at all. A
+    // second, worker-side cache of the same tiles would store each one twice.
+    const w = loadWorker(hangs);
+    expect(w.request(TILE).answered).toBe(false);
+    expect(w.request(STYLE).answered).toBe(false);
+  });
+
+  it("does not store an opaque response it cannot read back", async () => {
+    const opaque = {
+      type: "opaque",
+      ok: false,
+      status: 0,
+      headers: new Headers(),
+      clone() {
+        return this;
+      },
+      arrayBuffer: async () => new ArrayBuffer(0),
+    } as unknown as Response;
+    const w = loadWorker(async () => opaque);
+    const { response, lifetime } = w.request(`${AERIAL}1`);
+    await response;
+    await lifetime;
+    for (const name of await w.caches.keys()) {
+      expect((await w.caches.open(name)).urls(), `${name} kept an opaque body`).toEqual([]);
+    }
+  });
+
+  it("bounds what it caches while browsing, and never touches a downloaded route", async () => {
+    const w = loadWorker(async () => body("tile"));
+    const max = Number(w.consts["BROWSE_MAX"]);
+    expect(max, "no browse cache bound").toBeGreaterThan(0);
+    const pinned = await w.caches.open(String(w.consts["TILE_CACHE"]));
+    await pinned.put("https://tiles-a.basemaps.cartocdn.com/downloaded.mvt", body("route"));
+    for (let i = 0; i < max + 60; i++) {
+      const { response, lifetime } = w.request(`${AERIAL}${i}`);
+      await response;
+      await lifetime;
+    }
+    const browse = await w.caches.open(String(w.consts["BROWSE_CACHE"]));
+    // Trimmed in batches rather than on every put, so it may overshoot by
+    // less than one batch — and no more.
+    expect(browse.urls().length).toBeLessThan(max + Number(w.consts["TRIM_EVERY"] ?? 1));
+    // oldest out first
+    expect(browse.urls()).not.toContain(`${AERIAL}0`);
+    expect(browse.urls()).toContain(`${AERIAL}${max + 59}`);
+    expect(pinned.urls()).toEqual(["https://tiles-a.basemaps.cartocdn.com/downloaded.mvt"]);
+  });
+
+  it("answers from a downloaded route before going to the network", async () => {
+    let calls = 0;
+    const w = loadWorker(async () => {
+      calls++;
+      return body("network");
+    });
+    const pinned = await w.caches.open(String(w.consts["TILE_CACHE"]));
+    await pinned.put(`${AERIAL}7`, body("downloaded"));
+    const { response } = w.request(`${AERIAL}7`);
+    expect(await (await (response as Promise<Response>)).text()).toBe("downloaded");
+    expect(calls).toBe(0);
   });
 });

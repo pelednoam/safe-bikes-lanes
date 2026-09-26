@@ -36,6 +36,7 @@ const ASSETS = [
   "search.js",
   "segment.js",
   "sharecard.js",
+  "tilecache.js",
   "tiles.js",
   "types.js",
   "units.js",
@@ -95,42 +96,45 @@ self.addEventListener("activate", (event) => {
   );
 });
 
+// Map caches. The same names, and the same rules, as tilecache.ts, which owns
+// them: the page reads and fills them itself, in the Android app too, where
+// there is no worker at all.
+//   TILE_CACHE    routes the rider downloaded. Read here, never written or
+//                 trimmed: they go when the rider says, not when we need room.
+//   BROWSE_CACHE  what was seen while browsing. Bounded, oldest out first.
 const TILE_CACHE = "bike-tiles-v1";
-// tile.openstreetmap.org stays listed only so basemap tiles cached by an older
-// build still serve offline; nothing requests it any more. basemaps.cartocdn.com
-// is now the vector *styles* rather than raster tiles — Carto stamps "API KEY
-// REQUIRED" across those — while tiles(-a…d).basemaps.cartocdn.com serve the
-// TileJSON and the .mvt tiles themselves.
-const TILE_HOSTS = [
-  "tile.openstreetmap.org",
-  "basemaps.cartocdn.com",
-  "tiles.basemaps.cartocdn.com",
-  "tiles-a.basemaps.cartocdn.com",
-  "tiles-b.basemaps.cartocdn.com",
-  "tiles-c.basemaps.cartocdn.com",
-  "tiles-d.basemaps.cartocdn.com",
-  "tiles.arcgis.com",
-];
+const BROWSE_CACHE = "bike-tiles-browse-v1";
+const BROWSE_MAX = 1500;
+const TRIM_EVERY = 25;
 
-/**
- * One cache key per tile, whichever of Carto's four hosts served it.
- *
- * MapLibre spreads vector tiles across tiles-a…d by tile coordinate, so the
- * host for a given tile is not ours to predict. Keying on the URL as requested
- * would store up to four copies of the same tile and, worse, let a route
- * pre-cached against one host miss on all the others — an offline ride with
- * most of its map absent while the download had reported success.
- */
-function tileKey(requestUrl) {
-  const url = new URL(requestUrl);
-  // Anchored to Carto's own hosts, not to anything merely beginning
-  // "tiles-b.": this is only ever called for hosts in TILE_HOSTS today, but a
-  // rule that rewrites somebody else's host is a trap for whoever adds one.
-  url.hostname = url.hostname.replace(
-    /^tiles-[a-d]\.basemaps\.cartocdn\.com$/,
-    "tiles-a.basemaps.cartocdn.com",
-  );
-  return url.toString();
+// Carto's vector tiles and styles are deliberately absent: the page loads them
+// through its own cache (tilecache.ts), and handling them here as well would
+// store every tile twice. What is left is what the city and build pages draw
+// from elsewhere — Carto's glyph server and aerial imagery — and
+// tile.openstreetmap.org, only so raster tiles an older build cached still
+// serve offline; nothing requests it any more.
+const TILE_HOSTS = ["tile.openstreetmap.org", "tiles.basemaps.cartocdn.com", "tiles.arcgis.com"];
+
+/** A downloaded copy first, then a browsed one. */
+async function lookup(key) {
+  for (const name of [TILE_CACHE, BROWSE_CACHE]) {
+    const hit = await (await caches.open(name)).match(key);
+    if (hit !== undefined) return hit;
+  }
+  return undefined;
+}
+
+let putsSinceTrim = 0;
+
+/** Keep a browsed resource, and every so often drop the oldest beyond
+ * BROWSE_MAX. Keys list in insertion order, so the front is the oldest. */
+async function rememberBrowsed(key, resp) {
+  const cache = await caches.open(BROWSE_CACHE);
+  await cache.put(key, resp);
+  if (++putsSinceTrim < TRIM_EVERY) return;
+  putsSinceTrim = 0;
+  const keys = await cache.keys();
+  for (const k of keys.slice(0, Math.max(0, keys.length - BROWSE_MAX))) await cache.delete(k);
 }
 
 /** The app shell must never be served stale: bypass the HTTP cache so the
@@ -225,25 +229,24 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(networkFirst(event, req));
     return;
   }
-  // basemap tiles: cache-first (pre-cached along a route by the app, or
-  // opportunistically as you browse), so the map works offline
-  if (TILE_HOSTS.includes(url.hostname)) {
-    const key = tileKey(event.request.url);
+  // Other pages' map resources: cache-first, so what has been seen still draws
+  // offline. Vector tiles are the page's (see TILE_HOSTS).
+  if (TILE_HOSTS.includes(url.hostname) && !url.pathname.endsWith(".mvt")) {
+    const key = event.request.url;
     event.respondWith(
-      caches.open(TILE_CACHE).then((cache) =>
-        cache.match(key).then(
-          (cached) =>
-            cached ??
-            fetch(event.request).then((resp) => {
-              // Don't cache a refusal as if it were a tile: a 403 or a 500
-              // stored here is served from disk for as long as the cache lives,
-              // so one bad minute becomes a permanently broken patch of map.
-              // Opaque responses (status 0) are how no-cors image tiles come
-              // back and are still worth keeping.
-              if (resp.ok || resp.type === "opaque") void cache.put(key, resp.clone());
-              return resp;
-            }),
-        ),
+      lookup(key).then(
+        (cached) =>
+          cached ??
+          fetch(event.request).then((resp) => {
+            // Only a readable success. A 403 or a 500 stored here would be
+            // served from disk for as long as it lived, turning one bad minute
+            // into a permanently broken patch of map; and an opaque response
+            // (a no-cors fetch) stores a body nothing can read. Nothing in the
+            // app makes no-cors requests any more — MapLibre fetches with CORS
+            // — so there is nothing to keep one for.
+            if (resp.ok) event.waitUntil(rememberBrowsed(key, resp.clone()));
+            return resp;
+          }),
       ),
     );
   }
