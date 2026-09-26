@@ -908,6 +908,7 @@ function selectOption(id) {
         renderOptions();
         renderOptionChips();
         showSummary(chosen);
+        showOptionsInSheet();
         const s = chosen.payload.summary;
         announce(`${chosen.label} route, grade ${chosen.grade}: ${fmtDist(s.meters)}, ${s.minutes} min, ` +
             `${s.pct_protected}% protected.` +
@@ -2884,11 +2885,58 @@ function currentSheet() {
     // some WebViews revoke capture mid-gesture; without this the sheet sticks
     handle.addEventListener("lostpointercapture", end);
 })();
-/** After a route computes, make sure the sheet is at least half-open (mobile). */
+/** The trip whose answer was last brought into view, so a re-plan of the same
+ * trip (a preference changed, further down the sheet) does not yank the reader
+ * away from what they were changing. */
+let revealedTrip = "";
+/** Set when the next panel repaint should bring the route options into view. */
+let scrollToOptions = false;
+/** After a route computes, make sure the sheet is at least half-open (mobile),
+ * and that the answer is what it shows.
+ *
+ * "half" alone was not enough: measured on a 390x820 phone, the round-trip
+ * block, Recent routes and the rider switch filled the half-open sheet, and "3
+ * ROUTE OPTIONS" started at y=784 — the grade and ▶ Navigate needed a scroll
+ * nothing hinted at. A new trip now scrolls its options to the top of the
+ * sheet; ▶ Navigate is kept at the sheet's foot by CSS. */
 function revealSheet() {
-    if (currentSheet() === "peek")
+    const wasPeek = currentSheet() === "peek";
+    if (wasPeek)
         setSheet("half");
+    if (!sheetLayout.matches)
+        return;
+    const s = start?.getLngLat();
+    const e = end?.getLngLat();
+    const trip = s && e ? `${s.lng.toFixed(5)},${s.lat.toFixed(5)}>${e.lng.toFixed(5)},${e.lat.toFixed(5)}` : "";
+    if (!wasPeek && trip === revealedTrip)
+        return;
+    revealedTrip = trip;
+    scrollToOptions = true;
 }
+/** Scroll the sheet so the route options sit just under its handle. */
+function showOptionsInSheet() {
+    if (!scrollToOptions)
+        return;
+    scrollToOptions = false;
+    if (!sheetLayout.matches || document.body.classList.contains("searching"))
+        return;
+    const panel = el("panel");
+    const top = el("options").getBoundingClientRect().top;
+    const handle = el("sheet-handle").offsetHeight;
+    panel.scrollTop += top - (panel.getBoundingClientRect().top + handle + 6);
+}
+/** iOS scrolls the whole page to bring a focused field above its keyboard, and
+ * does not always scroll it back when the keyboard goes: the map and the sheet
+ * were left shifted up by the keyboard's height. Nothing here is meant to
+ * scroll the page itself, so any offset is leftover. */
+function resetPageScroll() {
+    if (window.scrollX !== 0 || window.scrollY !== 0)
+        window.scrollTo(0, 0);
+}
+window.visualViewport?.addEventListener("resize", () => {
+    if (!document.body.classList.contains("searching"))
+        resetPageScroll();
+});
 // ---------------------------------------------------------------------------
 // Searching on a phone
 //
@@ -2914,18 +2962,26 @@ function enterSearchMode(field) {
     if (sheetBeforeSearch === null)
         sheetBeforeSearch = currentSheet();
     document.body.classList.add("searching");
-    setSheet("full");
-    // Field to the top of the sheet. Measured as a difference of two rects so it
-    // holds while the sheet is still animating open: both move together.
     const panel = el("panel");
+    // Open at once, not over the 0.2 s transition. Animated, the sheet was still
+    // growing when the field was lifted, so the lift ran twice (now and 250 ms
+    // later) and iOS, scrolling the focused field into view on its own schedule,
+    // could act on either height. "dragging" is the class that already turns the
+    // transition off; measuring below forces the full height to apply under it.
+    panel.classList.add("dragging");
+    setSheet("full");
+    // Field to the top of the sheet, just under its (sticky) handle.
+    const handle = el("sheet-handle");
     const lift = () => {
         const gap = field.getBoundingClientRect().top - panel.getBoundingClientRect().top;
-        panel.scrollTop += gap - 8;
+        panel.scrollTop += gap - handle.offsetHeight - 6;
     };
     lift();
-    // and again once the height transition has settled, since content that was
-    // clipped a moment ago is only now scrollable
-    window.setTimeout(lift, 250);
+    window.requestAnimationFrame(() => {
+        panel.classList.remove("dragging");
+        // content hidden a moment ago (the loop block) may have changed the layout
+        lift();
+    });
 }
 /** Leave search mode. `chose` means a place was picked, so the sheet should
  * show the route that is about to appear rather than go back to how it was. */
@@ -2936,6 +2992,7 @@ function leaveSearchMode(chose) {
     const before = sheetBeforeSearch ?? "half";
     sheetBeforeSearch = null;
     el("panel").scrollTop = 0;
+    resetPageScroll();
     // A chosen place gets the map back, with the route options under it — "half",
     // the state a computed route asks for anyway (revealSheet). A search walked
     // away from goes back to where it started.

@@ -629,9 +629,10 @@
     /* h1 goes, ℹ stays — it's the only way into the explanation from a phone.
        It sits at the end of the grabber's row rather than on a row of its own,
        which is what lets it be a full 44 px without pushing "Where to?" out of
-       the collapsed sheet. */
-    #panel-head { position:absolute; top:4px; right:calc(14px + env(safe-area-inset-right));
-      z-index:1; margin:0; }
+       the collapsed sheet. A zero-height sticky row, so it stays put above the
+       handle (also sticky) when the sheet is scrolled to a route. */
+    #panel-head { position:sticky; top:0; height:0; z-index:3; margin:0;
+      justify-content:flex-end; align-items:flex-start; }
     #panel.peek { max-height:168px; overflow:hidden; }
     #panel.half { max-height:52%; }
     #panel.full { max-height:min(88%, calc(100% - 8px - env(safe-area-inset-top))); }
@@ -641,13 +642,27 @@
        answers — pushing them down toward the keyboard, and reading as if they
        were round trips. It is not what anyone typing an address is after. */
     body.searching #loop-row { display:none; }
+    /* and the whole height: the map is not what anyone typing an address is
+       looking at, and every row gained under the field is a row above the
+       keyboard */
+    body.searching #panel.full { max-height:calc(100% - 8px - env(safe-area-inset-top)); }
     /* The grabber is a thin bar, but the TARGET is the full width of the
        sheet top — a 4px-tall hit area is close to undraggable with a thumb. */
+    /* Sticky: scrolled down to a route, the sheet could not be resized or
+       closed without first scrolling back up to find its handle. It spans the
+       sheet's padding too, so what scrolls under it is covered edge to edge. */
     #sheet-handle {
-      display:block; width:100%; height:44px; min-height:0; margin:0 0 2px; padding:0;
-      position:relative; touch-action:none; cursor:grab; background:none; border:0;
-      border-radius:var(--r-sm);
+      display:block; height:44px; min-height:0; padding:0; border:0; border-radius:0;
+      width:calc(100% + 28px + env(safe-area-inset-left) + env(safe-area-inset-right));
+      margin:0 calc(-14px - env(safe-area-inset-right)) 2px calc(-14px - env(safe-area-inset-left));
+      position:sticky; top:0; z-index:2; touch-action:none; cursor:grab;
+      background:var(--solid);
     }
+    #sheet-handle:hover { background:var(--solid); }
+    /* The way off this sheet once a route is up: kept at its foot while the
+       route's details are in view, rather than below the fold under them. */
+    #nav-btn { position:sticky; bottom:env(safe-area-inset-bottom); z-index:1;
+      box-shadow:0 -6px 16px -6px rgba(10,14,18,.35); }
     #sheet-handle::before {
       content:""; position:absolute; left:50%; top:10px; transform:translateX(-50%);
       width:46px; height:5px; border-radius:3px; background:var(--muted); opacity:.4;
@@ -774,15 +789,17 @@
 <!-- main: the one landmark a screen reader can jump to; the map is a canvas
      it can say nothing useful about -->
 <main id="panel" aria-label="Plan a ride">
-  <!-- A button, so it can be reached and worked without a thumb: Enter or
-       Space steps it through the sizes, the arrow keys open and close it. -->
-  <button id="sheet-handle" type="button" title="drag to resize"
-          aria-label="Panel size" aria-controls="panel" aria-expanded="false"></button>
+  <!-- Before the handle, so on a phone ℹ can sit at the end of the handle's
+       row and stay there when the sheet scrolls (both are sticky). -->
   <div id="panel-head">
     <h1>Family Bike Router</h1>
     <button id="about-top" type="button" aria-label="About — how safety is decided"
             title="About — how safety is decided, data sources and freshness">ℹ</button>
   </div>
+  <!-- A button, so it can be reached and worked without a thumb: Enter or
+       Space steps it through the sizes, the arrow keys open and close it. -->
+  <button id="sheet-handle" type="button" title="drag to resize"
+          aria-label="Panel size" aria-controls="panel" aria-expanded="false"></button>
   <div class="hint" id="intro-hint">Cambridge, Somerville &amp; nearby towns — safety first. Search or tap the map for where you’re headed; routes start from your location.</div>
   <div id="od">
     <div class="od-row">

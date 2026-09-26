@@ -198,6 +198,77 @@ test.describe("the edges of a real phone", () => {
   });
 });
 
+test.describe("the sheet on a phone", () => {
+  test.use({ viewport: PHONE, isMobile: true, hasTouch: true });
+
+  /** Is the element fully inside both the screen and the sheet's visible part? */
+  const inView = (page: Page, sel: string): Promise<boolean> =>
+    page.evaluate((s) => {
+      const e = document.querySelector(s);
+      const panel = document.getElementById("panel");
+      if (e === null || panel === null) return false;
+      const r = e.getBoundingClientRect();
+      const p = panel.getBoundingClientRect();
+      return r.height > 0 && r.top >= p.top && r.bottom <= Math.min(p.bottom, innerHeight);
+    }, sel);
+
+  test("a route's answer is what the sheet shows once it lands", async ({ page }) => {
+    // "3 ROUTE OPTIONS" started at y=784 of 820, below the round-trip block,
+    // Recent routes and the rider switch; the grade and ▶ Navigate needed a
+    // scroll nothing hinted at
+    await routed(page);
+    await expect.poll(() => inView(page, ".option-card.selected")).toBe(true);
+    expect(await inView(page, "#nav-btn"), "▶ Navigate is below the fold").toBe(true);
+    // and the handle is still there to pull the sheet up or down
+    expect(await inView(page, "#sheet-handle")).toBe(true);
+  });
+
+  test("re-planning the same trip leaves the reader where they were", async ({ page }) => {
+    // the guard on the test above: only a new trip brings the options up, so
+    // changing a preference further down is not answered by a jump away from it
+    await routed(page);
+    await page.locator("summary", { hasText: "Preferences" }).click();
+    const flat = page.locator("#prefer-flat");
+    await flat.scrollIntoViewIfNeeded();
+    await flat.check();
+    await expect(page.locator("#loading")).toBeHidden({ timeout: budget(30_000) });
+    await page.waitForTimeout(1000); // the panel repaints once the line is drawn
+    expect(await inView(page, "#prefer-flat"), "the sheet jumped away from the preference").toBe(
+      true,
+    );
+  });
+
+  test("searching opens the sheet at once, not over an animation", async ({ page }) => {
+    // with the 0.2 s transition the field was lifted while the sheet was still
+    // growing, and iOS scrolled the focused field on its own timing
+    await boot(page);
+    const firstFrame = await page.evaluate(async () => {
+      (document.getElementById("search") as HTMLInputElement).focus();
+      await new Promise((r) => requestAnimationFrame(() => r(null)));
+      const panel = (document.getElementById("panel") as HTMLElement).getBoundingClientRect();
+      const field = (document.getElementById("search") as HTMLElement).getBoundingClientRect();
+      return { height: panel.height, fieldTop: field.top };
+    });
+    expect(firstFrame.height).toBeGreaterThan(820 * 0.8);
+    expect(firstFrame.fieldTop).toBeLessThan(820 * 0.3);
+  });
+
+  test("a page left scrolled by the keyboard is put back", async ({ page }) => {
+    await boot(page);
+    // what iOS leaves behind: the page itself scrolled to lift a focused field
+    await page.evaluate(() => {
+      const tall = document.createElement("div");
+      tall.style.cssText = "position:absolute;top:0;left:0;width:1px;height:3000px";
+      document.body.appendChild(tall);
+    });
+    await page.locator("#search").focus();
+    await page.evaluate(() => window.scrollTo(0, 300));
+    expect(await page.evaluate(() => window.scrollY)).toBe(300);
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
+  });
+});
+
 /** WCAG contrast of two computed CSS colours ("rgb(…)" / "rgba(…)"). */
 function contrast(a: string, b: string): number {
   const lum = (c: string): number => {
@@ -349,7 +420,8 @@ test.describe("at a desk", () => {
     // the chosen pill is drawn without :has(), which Firefox before 121 lacks
     const bg = (v: string): Promise<string> =>
       pill(v).evaluate((e) => getComputedStyle(e).backgroundColor);
-    expect(await bg("older_kids")).not.toBe(await bg("solo"));
+    // (polled: the pill's background eases in over 0.16 s)
+    await expect.poll(() => bg("older_kids")).not.toBe(await bg("solo"));
   });
 
   test("the loading line and errors are live regions", async ({ page }) => {
