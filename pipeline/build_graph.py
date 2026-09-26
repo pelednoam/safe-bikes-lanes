@@ -539,11 +539,26 @@ def edge_schema(graph: nx.MultiDiGraph) -> list[str]:
     return sorted(common or ())
 
 
+ALLOW_MISSING_ENV: Final[str] = "ALLOW_MISSING_SOURCES"
+
+
 def load_geojson(name: str) -> gpd.GeoDataFrame | None:
+    """A fetched source, or an error if it was never fetched.
+
+    A missing file used to print "(missing ... — skipping)" and build on
+    without it, so a failed fetch became a graph with no Cambridge lanes, or
+    no crashes, that was published as a good week. Set ALLOW_MISSING_SOURCES=1
+    to build without a source on purpose (tests, partial local runs).
+    """
     path = config.RAW_DIR / name
     if not path.exists():
-        print(f"  (missing {name} — skipping)")
-        return None
+        if os.environ.get(ALLOW_MISSING_ENV) == "1":
+            print(f"  (missing {name} — skipping, {ALLOW_MISSING_ENV}=1)")
+            return None
+        raise FileNotFoundError(
+            f"{path} is missing. Run `python fetch.py` first, or set "
+            f"{ALLOW_MISSING_ENV}=1 to build without it on purpose."
+        )
     gdf = gpd.GeoDataFrame.from_features(json.loads(path.read_text()), crs="EPSG:4326")
     return gdf.to_crs(METRIC_CRS)
 

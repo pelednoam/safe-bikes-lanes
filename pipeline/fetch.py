@@ -342,7 +342,14 @@ def fetch_mapc() -> GeoJSON:
     return {"type": "FeatureCollection", "features": features}
 
 
-def fetch_all(refresh: bool = False) -> None:
+def fetch_all(refresh: bool = False) -> list[tuple[str, str]]:
+    """Fetch every source; return the ones that failed.
+
+    One dead endpoint doesn't stop the others being fetched, but it is a
+    failure (see main): the build that follows would otherwise run without
+    that layer — or, locally, on last month's copy of it — and publish the
+    result as this week's data.
+    """
     jobs: dict[str, Callable[[], GeoJSON]] = {
         "cambridge_bike_facilities.geojson": lambda: json.loads(
             _get(config.CAMBRIDGE_FACILITIES_URL)
@@ -366,7 +373,11 @@ def fetch_all(refresh: bool = False) -> None:
     jobs["towns.geojson"] = fetch_towns
     jobs["population.geojson"] = fetch_population
     jobs["cambridge_permits.geojson"] = fetch_cambridge_permits
-    jobs["workzones.geojson"] = fetch_workzones
+    # needs a key; without one it is a configuration choice, not a failure
+    if os.environ.get(config.WZDX_KEY_ENV):
+        jobs["workzones.geojson"] = fetch_workzones
+    else:
+        print(f"  workzones.geojson: {config.WZDX_KEY_ENV} not set, not configured — skipping")
     for year in config.IMPACT_CRASH_YEARS:
         service_year = config.IMPACT_CRASH_SERVICE_YEAR.get(year, str(year))
         jobs[f"crashes_{year}.geojson"] = (
@@ -391,9 +402,17 @@ def fetch_all(refresh: bool = False) -> None:
             print(f"  {name}: FAILED - {e}", file=sys.stderr)
     if failures:
         print(f"\n{len(failures)} source(s) failed: {[f[0] for f in failures]}", file=sys.stderr)
+    return failures
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--refresh", action="store_true", help="re-download cached sources")
+    failures = fetch_all(refresh=ap.parse_args(argv).refresh)
+    # Exit non-zero, so the weekly refresh stops here instead of building and
+    # publishing a snapshot without the layers that failed.
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--refresh", action="store_true", help="re-download cached sources")
-    fetch_all(refresh=ap.parse_args().refresh)
+    sys.exit(main())

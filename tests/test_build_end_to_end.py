@@ -79,6 +79,8 @@ def sandbox(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     raw.mkdir(parents=True)
     monkeypatch.setattr(config, "DATA_DIR", data)
     monkeypatch.setattr(config, "RAW_DIR", raw)
+    # the sandbox fetches nothing: build without the official layers on purpose
+    monkeypatch.setenv(build_graph.ALLOW_MISSING_ENV, "1")
     monkeypatch.setattr(build_graph, "acquire_osm", lambda _bbox: tiny_osm())
     monkeypatch.setattr(build_graph, "ElevationSampler", lambda: StubSampler())
     return data
@@ -153,6 +155,13 @@ def test_export_turns_the_graph_into_tiles_the_app_can_load(
     # and the layers the app expects alongside them
     for name in ("nettiles/manifest.json", "heatmap.geojson", "lanemap.geojson", "meta.json"):
         assert (web / name).exists(), f"{name} missing"
+    # and what the publish step's sanity gate compares with the live snapshot
+    stats = json.loads((web / "meta.json").read_text())["graph"]
+    with (sandbox / "graph.pkl").open("rb") as fh:
+        g: nx.MultiDiGraph = pickle.load(fh)
+    assert stats == {
+        "nodes": g.number_of_nodes(), "edges": g.number_of_edges(), "crashes_joined": 0,
+    }
 
 
 def test_an_edge_survives_the_round_trip_into_a_tile(
@@ -487,3 +496,13 @@ def test_a_local_rebuild_does_not_reuse_old_osm_answers(
     build_graph.configure_osm_cache()
     assert ox.settings.use_cache is True
     assert not old.exists() and new.exists()
+
+
+def test_a_source_that_was_never_fetched_stops_the_build(
+    sandbox: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """It used to print "(missing ... — skipping)" and build on, so a failed
+    fetch became a snapshot without Cambridge's lanes, published as a good week."""
+    monkeypatch.delenv(build_graph.ALLOW_MISSING_ENV)
+    with pytest.raises(FileNotFoundError, match=r"fetch\.py"):
+        build_graph.build()

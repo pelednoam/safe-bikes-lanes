@@ -67,14 +67,11 @@ jobs:
         run: python review_page.py
       - name: Publish data tarball + deploy
         # web/data is NOT committed to git (it would bloat history ~200 MB per
-        # refresh). Publish it as a release asset the Pages deploy downloads.
-        run: |
-          tar czf web-data.tar.gz -C web --exclude=data/keys.json data
-          gh release view data-snapshot >/dev/null 2>&1 || gh release create data-snapshot \
-            --latest=false --prerelease \
-            -t "Map data snapshot" \
-            -n "Generated web/data (routing + network tiles + map layers), published outside git history."
-          gh release upload data-snapshot web-data.tar.gz --clobber
-          gh workflow run pages.yml --ref main
+        # refresh). Publish it as a release asset the Pages deploy downloads —
+        # through the same script a local publish uses, so CI gets its checks:
+        # no ranking built on zero joined crashes, and the sanity gate against
+        # the snapshot the site is serving. This step used to tar and upload by
+        # itself and skipped all of them.
+        run: scripts/publish-data.sh
         env:
           GH_TOKEN: ${{ github.token }}

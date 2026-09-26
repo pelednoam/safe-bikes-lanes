@@ -503,7 +503,13 @@ def export() -> None:
     export_lane_heatmap(graph)
     export_elevation_heatmap()
     export_construction()
-    export_meta()
+    export_meta(
+        {
+            "nodes": graph.number_of_nodes(),
+            "edges": graph.number_of_edges(),
+            "crashes_joined": int(graph.graph.get("crashes_joined") or 0),
+        }
+    )
 
 
 def _in_bbox(coords: list[Any]) -> bool:
@@ -591,9 +597,13 @@ def export_construction() -> None:
     print(f"wrote {path} ({len(features)} active construction features)")
 
 
-def export_meta() -> None:
+def export_meta(graph_stats: dict[str, int] | None = None) -> None:
     """Data-freshness manifest for the app's About dialog: when each source
-    was last retrieved (from the fetch sidecars) and when the graph was built."""
+    was last retrieved (from the fetch sidecars) and when the graph was built.
+
+    `graph_stats` (node, edge and joined-crash counts) are what the publish
+    step's sanity gate (sanity_gate.py) compares against the snapshot the site
+    is serving, alongside each source's feature count."""
     sources: list[dict[str, Any]] = []
     for meta_path in sorted(config.RAW_DIR.glob("*.meta.json")):
         info = json.loads(meta_path.read_text())
@@ -610,6 +620,8 @@ def export_meta() -> None:
         "format": config.DATA_FORMAT,
         "sources": sources,
     }
+    if graph_stats is not None:
+        out["graph"] = graph_stats
     path = WEB_DATA / "meta.json"
     path.write_text(json.dumps(out, indent=1))
     print(f"wrote {path} ({len(sources)} sources)")

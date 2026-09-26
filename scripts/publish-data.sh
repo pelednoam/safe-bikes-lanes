@@ -9,7 +9,8 @@
 #
 # Run this after a pipeline rebuild (fetch/build_graph/export_web). The Pages
 # deploy (.github/workflows/pages.yml) downloads + extracts this tarball before
-# building the site, and refresh-data.yml publishes it the same way from CI.
+# building the site, and refresh-data.yml publishes through this script too, so
+# CI and a local publish pass the same checks.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -58,6 +59,14 @@ then
     exit 1
   fi
 fi
+
+# And refuse a snapshot much smaller than the one the site is serving: a
+# fetch that failed or came back partial builds and exports cleanly, just
+# smaller. ALLOW_DATA_DROP=1 publishes anyway (see pipeline/sanity_gate.py).
+python3 pipeline/sanity_gate.py web/data/meta.json || {
+  echo "refusing to publish: the sanity gate stopped it (see above)."
+  exit 1
+}
 
 if [ -z "${GITHUB_ACTIONS:-}" ]; then
   echo "note: publishing a LOCAL build. CI publishes this asset every Monday;"

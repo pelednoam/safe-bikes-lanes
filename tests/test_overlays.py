@@ -132,11 +132,19 @@ def _line_feature(props: dict[str, object]) -> dict[str, object]:
     }
 
 
-def test_a_missing_source_is_skipped_not_fatal(
+def test_a_missing_source_is_fatal_unless_allowed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """One unavailable city layer must not take the whole build down."""
+    """This used to assert the opposite — a missing layer skipped with a line
+    in the log — and that is how a failed fetch became a published snapshot
+    without the layer. Missing is now an error; building without a source is
+    something asked for (ALLOW_MISSING_SOURCES=1), and then each overlay is
+    simply absent."""
     monkeypatch.setattr(config, "RAW_DIR", tmp_path)
+    monkeypatch.delenv(build_graph.ALLOW_MISSING_ENV, raising=False)
+    with pytest.raises(FileNotFoundError, match=r"nope\.geojson"):
+        build_graph.load_geojson("nope.geojson")
+    monkeypatch.setenv(build_graph.ALLOW_MISSING_ENV, "1")
     assert build_graph.load_geojson("nope.geojson") is None
     assert build_graph.cambridge_overlay() is None
     assert build_graph.newton_overlay() is None

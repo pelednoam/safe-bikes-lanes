@@ -356,8 +356,38 @@ def test_fetch_all_reports_failures_instead_of_dying(
     for name in ("fetch_pois", "fetch_towns", "fetch_population", "fetch_workzones",
                  "fetch_cambridge_permits", "fetch_mapc"):
         monkeypatch.setattr(fetch, name, lambda: {"type": "FeatureCollection", "features": []})
-    fetch.fetch_all(refresh=True)
+    failures = fetch.fetch_all(refresh=True)
     err = capsys.readouterr().err
     assert "FAILED" in err
     # and the sources that did work were still written
     assert (tmp_path / "pois.geojson").exists()
+    assert failures and all(msg == "endpoint down" for _name, msg in failures)
+
+
+def test_a_failed_source_fails_the_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """fetch.py exited 0 with sources failed, so the weekly refresh went on to
+    build and publish without them."""
+    monkeypatch.setattr(config, "RAW_DIR", tmp_path)
+    monkeypatch.setattr(fetch, "fetch_all", lambda refresh: [("pois.geojson", "504")])
+    assert fetch.main(["--refresh"]) == 1
+    monkeypatch.setattr(fetch, "fetch_all", lambda refresh: [])
+    assert fetch.main(["--refresh"]) == 0
+
+
+def test_no_work_zone_key_is_not_a_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The one source that needs a key: without it, it is not configured,
+    which must not fail every refresh of a fork without the secret."""
+    monkeypatch.setattr(config, "RAW_DIR", tmp_path)
+    monkeypatch.delenv(config.WZDX_KEY_ENV, raising=False)
+    empty: dict[str, Any] = {"type": "FeatureCollection", "features": []}
+    monkeypatch.setattr(fetch, "_get", lambda *_a, **_k: json.dumps(empty).encode())
+    monkeypatch.setattr(fetch, "arcgis_query", lambda *_a, **_k: empty)
+    for name in ("fetch_pois", "fetch_towns", "fetch_population",
+                 "fetch_cambridge_permits", "fetch_mapc"):
+        monkeypatch.setattr(fetch, name, lambda: empty)
+    assert fetch.fetch_all(refresh=True) == []
+    assert not (tmp_path / "workzones.geojson").exists()

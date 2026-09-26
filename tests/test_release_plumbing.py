@@ -24,6 +24,8 @@ GRADLE = ROOT / "web" / "android" / "app" / "build.gradle"
 APK_WORKFLOW = ROOT / ".github" / "workflows" / "android-apk.yml"
 PAGES_WORKFLOW = ROOT / ".github" / "workflows" / "pages.yml"
 ASSEMBLE = ROOT / "web" / "scripts" / "assemble.sh"
+REFRESH_WORKFLOW = ROOT / ".github" / "workflows" / "refresh-data.yml"
+PUBLISH = ROOT / "scripts" / "publish-data.sh"
 
 
 def steps(workflow: Path) -> list[dict[str, Any]]:
@@ -165,3 +167,32 @@ def test_the_app_reads_its_own_stamp_before_the_servers() -> None:
         "the live build.json is fetched from cache, so a stale page would compare "
         "itself against an equally stale answer and report agreement"
     )
+
+
+def test_the_weekly_refresh_publishes_through_the_checked_script() -> None:
+    """Its last step tarred web/data and ran `gh release upload` itself, so the
+    checks in publish-data.sh — no ranking resting on zero joined crashes, no
+    unstamped graph — guarded only local publishes, and CI published
+    whatever it had built."""
+    runs = [str(step.get("run", "")) for step in steps(REFRESH_WORKFLOW)]
+    assert not any("gh release upload" in r for r in runs), (
+        "the refresh uploads the snapshot itself again, around publish-data.sh"
+    )
+    assert any("scripts/publish-data.sh" in r for r in runs)
+
+
+def test_publishing_runs_the_sanity_gate_before_uploading() -> None:
+    text = PUBLISH.read_text(encoding="utf-8")
+    gate = text.index("pipeline/sanity_gate.py")
+    assert gate < text.index("gh release upload"), "the gate must run before the upload"
+    assert "exit 1" in text[gate : gate + 200], "a failed gate must stop the publish"
+
+
+def test_a_failed_fetch_fails_the_refresh() -> None:
+    """fetch.py exited 0 however many sources failed; the step must be the
+    script whose exit status says so, not something that swallows it."""
+    runs = [str(step.get("run", "")) for step in steps(REFRESH_WORKFLOW)]
+    fetch_runs = [r for r in runs if "fetch.py" in r]
+    assert fetch_runs, "the refresh no longer fetches"
+    for r in fetch_runs:
+        assert "|| true" not in r and "continue-on-error" not in r
