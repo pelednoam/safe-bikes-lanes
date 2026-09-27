@@ -103,7 +103,7 @@ const load = async (): Promise<ReturnType<typeof fakeMap> & { bm: ReturnType<typ
 describe("Carto vector basemap", () => {
   it("re-points every label at the vendored glyph stack", async () => {
     // Carto's stacks name five fonts and MapLibre asks its glyph server for the
-    // whole joined string as one fontstack. web/fonts/glyphs has only "Noto Sans
+    // whole joined string as one fontstack. web/public/fonts/glyphs has only "Noto Sans
     // Regular", so left alone each label requests a range that 404s and draws
     // nothing — no error, just a map with no names on it.
     const { layers } = await load();

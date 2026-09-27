@@ -15,7 +15,7 @@ export default defineConfig({
   grep: /@live/,
   use: { ...base.use, baseURL: "http://127.0.0.1:8324" },
   webServer: {
-    command: "python3 scripts/testserver.py 8324 .",
+    command: "python3 scripts/testserver.py 8324 dist --data data",
     url: "http://127.0.0.1:8324",
     // its own port, and never another run's server: that one may be serving the
     // pinned snapshot, which is exactly what these tests must not see

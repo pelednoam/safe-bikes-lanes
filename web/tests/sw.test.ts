@@ -33,7 +33,7 @@ interface Worker {
 }
 
 function loadWorker(fetchImpl: FetchFn, caches = new FakeCacheStorage()): Worker {
-  const src = readFileSync(join(WEB, "sw.js"), "utf8");
+  const src = readFileSync(join(WEB, "public", "sw.js"), "utf8");
   const listeners: Record<string, Listener> = {};
   const self = {
     addEventListener: (type: string, fn: Listener) => {

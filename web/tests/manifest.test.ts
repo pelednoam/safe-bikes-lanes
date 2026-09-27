@@ -16,7 +16,7 @@ interface Manifest {
   icons: { src: string; sizes: string; purpose?: string }[];
 }
 
-const manifest = JSON.parse(readFileSync(join(WEB, "manifest.json"), "utf8")) as Manifest;
+const manifest = JSON.parse(readFileSync(join(WEB, "public", "manifest.json"), "utf8")) as Manifest;
 
 describe("the web app manifest", () => {
   it("names its identity, the same one it has always had", () => {
@@ -30,17 +30,21 @@ describe("the web app manifest", () => {
   it("has a maskable icon, and every icon it names exists", () => {
     expect(manifest.icons.some((i) => i.purpose === "maskable")).toBe(true);
     for (const icon of manifest.icons) {
-      expect(existsSync(join(WEB, icon.src)), icon.src).toBe(true);
+      expect(existsSync(join(WEB, "public", icon.src)), icon.src).toBe(true);
     }
   });
 
   it("ships every icon with the site and the Android bundle", () => {
-    // the Pages deploy and the Capacitor bundle copy files by name
+    // Both are the Vite build (dist/), which copies public/ as it is: the
+    // manifest and its icons keep their names, since nothing rewrites the paths
+    // inside manifest.json. They used to be copied by name, and a list could
+    // forget one.
     const pages = readFileSync(join(WEB, "..", ".github", "workflows", "pages.yml"), "utf8");
     const assemble = readFileSync(join(WEB, "scripts", "assemble.sh"), "utf8");
+    expect(pages, "the deploy doesn't publish the build").toContain("web/dist");
+    expect(assemble, "the app bundle isn't the build").toContain("npm run build");
     for (const icon of manifest.icons) {
-      expect(pages, `pages.yml does not copy ${icon.src}`).toContain(`web/${icon.src}`);
-      expect(assemble, `assemble.sh does not copy ${icon.src}`).toContain(icon.src);
+      expect(existsSync(join(WEB, "public", icon.src)), `${icon.src} is not in public/`).toBe(true);
     }
   });
 });

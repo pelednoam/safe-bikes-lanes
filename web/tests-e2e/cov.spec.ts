@@ -96,7 +96,8 @@ test("app.js executed across a broad session", async ({ page }) => {
 
   const cov = await page.coverage.stopJSCoverage();
   let total = 0, uncovered = 0;
-  for (const entry of cov.filter((e) => e.url.endsWith("/app.js"))) {
+  // the planner's bundle: app-<hash>.js since the Vite build
+  for (const entry of cov.filter((e) => /\/app-[\w-]+\.js$/.test(e.url))) {
     total += entry.source?.length ?? 0;
     const dead = entry.functions
       .flatMap((f) => f.ranges.filter((r) => r.count === 0))

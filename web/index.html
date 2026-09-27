@@ -19,14 +19,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#1a9850">
 <title>Family Bike Router — Cambridge, Somerville &amp; neighbors</title>
-<link rel="manifest" href="manifest.json">
-<link rel="icon" href="icon-192.png">
-<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/icon-192.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Bike Router">
-<link href="maplibre-gl.css" rel="stylesheet">
+<!-- MapLibre's stylesheet, linked before this page's own <style>: the page
+     overrides some of its rules (controls clear of the notch, 44 px buttons),
+     and with equal specificity the later rule wins. Bundled, it was injected
+     after the <style> and won instead. -->
+<link href="/maplibre-gl.css" rel="stylesheet">
 <style>
   /* ── Typeface ─────────────────────────────────────────────────────────
      Barlow: a low-contrast grotesk drawn from public road signage — the
@@ -1264,7 +1268,7 @@
 </dialog>
 <!-- Before the app, and not a module: it has to run where app.js can't (see
      compat.js). CSP script-src 'self' covers it, so there's no inline script. -->
-<script src="compat.js"></script>
-<script src="app.js" type="module"></script>
+<script src="/compat.js"></script>
+<script src="/src/app.ts" type="module"></script>
 </body>
 </html>

@@ -76,7 +76,7 @@ export const NOLABEL_STYLE_URL: Record<BasemapTheme, string> = {
 };
 
 /**
- * The one glyph stack this app ships (web/fonts/glyphs, Noto Sans: Latin,
+ * The one glyph stack this app ships (web/public/fonts/glyphs, Noto Sans: Latin,
  * Latin-1 and Extended-A, general punctuation, and the box/symbol ranges that
  * hold trail-difficulty marks — see ASSETS in sw.js).
  *

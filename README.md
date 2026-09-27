@@ -78,18 +78,30 @@ python3 -m http.server -d web 8000     # or just push — CI deploys to Pages
 .venv/bin/uvicorn app:app --app-dir server --port 8000
 ```
 
-Frontend development (compiled JS is committed):
+Frontend development. Vite builds `web/` into `web/dist/`, which the deploy
+publishes, the Android app bundles and the browser tests serve. Nothing
+compiled is committed.
 
 ```bash
-cd web && npm install && npm run build   # tsc
+cd web && npm install && npm run build   # vite build into dist/, then check it
 npm run check                            # strict type-check incl. tests
-npm test                                 # vitest router tests
+npm test                                 # vitest unit tests
 ```
+
+Pages load their TypeScript directly (`/src/app.ts`, `/src/build.ts`,
+`/src/city.ts`), and Vite bundles and content-hashes them. Files the code only
+names at runtime stay in `web/public/` under fixed names: the service worker,
+map glyphs, icons, `compat.js`, and MapLibre, which is vendored whole there by
+`npm run vendor` because it starts its worker from a URL no bundler can follow.
+The service worker's precache list gets the build's hashed files written in
+(vite.config.ts), and `scripts/check-dist.mjs` fails the build if anything a
+page loads is missing or not precached.
 
 ## Tuning
 
-All safety multipliers live in `pipeline/config.py` (`CLASS_MULTIPLIER`,
-crossing penalties, crash weighting). Edit, re-run `build_graph.py`, restart.
+All safety multipliers live in `pipeline/safety_model.json` (read by
+`pipeline/config.py` and generated into the app by `npm run gen-weights`);
+crossing penalties and crash weighting are in `pipeline/config.py`. Edit, re-run `build_graph.py`, restart.
 
 Streets that changed faster than the data sources? Add a feature to
 `data/overrides.geojson` with a `class` property (e.g. `"separated"` for a
@@ -177,6 +189,6 @@ MassGIS, and Somerville layers are public open data. Crash data: MassDOT
 IMPACT. Basemap tiles: OpenStreetMap and CARTO (the label-free styles are what
 a ride displays, so street names can be drawn upright at any bearing). Map
 label glyphs: Noto Sans (SIL Open Font License 1.1), prebuilt SDF ranges from
-openmaptiles/fonts, vendored in `web/fonts/glyphs/`. UI type: Barlow (SIL OFL
+openmaptiles/fonts, vendored in `web/public/fonts/glyphs/`. UI type: Barlow (SIL OFL
 1.1). This is a personal planning tool; always use your own judgment on the
 road.

@@ -284,8 +284,9 @@ def test_build_writes_a_page_and_an_index(town_fixture: Path) -> None:
     assert '<meta name="city-slug" content="testville">' in html
     assert "<script>" not in html, "an inline script would need unsafe-inline"
     assert "Content-Security-Policy" in html
-    assert "../city.js" in html
-    assert "../city.css" in html
+    # root-absolute sources: the Vite build turns them into each page's bundle
+    assert "/src/city.ts" in html
+    assert "/city.css" in html
     assert "<title>Testville" in html
 
     data = json.loads((town_fixture / "data" / "cities" / "testville.json").read_text())

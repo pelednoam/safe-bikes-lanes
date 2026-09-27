@@ -130,35 +130,35 @@ def test_the_version_code_expression_survives_a_malformed_tag() -> None:
     assert "ALL OK" in result.stdout, result.stdout.strip()[:400]
 
 
-def test_the_build_stamp_is_substituted_and_the_build_fails_if_it_is_not() -> None:
+def test_the_build_stamp_is_baked_in_and_the_build_fails_if_it_is_not() -> None:
     """The stamp says which build a page is. A silent miss makes it say nothing.
 
-    Both producers replace the placeholder and then check their own work, because
-    "About says development build" is a symptom nobody would report and everybody
-    would ignore.
+    It is filled in by the build (vite.config.ts `define`), not substituted into
+    app.js with sed afterwards. The sed version escaped JSON badly once, app.js
+    stopped parsing, and every check passed because the placeholder was indeed
+    gone. Nine native tests failed before anything said why. Now the build fails
+    on a placeholder left behind (scripts/check-dist.mjs), and both producers
+    publish build.json from the same build.
     """
     placeholders = ("__BUILD_VERSION__", "__BUILD_TIME__", "__BUILD_COMMIT__")
-    source = (ROOT / "web" / "src" / "app.ts").read_text(encoding="utf-8")
+    web = ROOT / "web"
+    source = (web / "src" / "app.ts").read_text(encoding="utf-8")
+    config = (web / "vite.config.ts").read_text(encoding="utf-8")
+    check = (web / "scripts" / "check-dist.mjs").read_text(encoding="utf-8")
     for placeholder in placeholders:
         assert placeholder in source, f"the app no longer carries {placeholder}"
+        assert f"{placeholder}:" in config, f"vite.config.ts does not define {placeholder}"
+    assert "__BUILD_(VERSION|TIME|COMMIT)__" in check, "check-dist no longer fails on a leftover stamp"
+    assert '"build": "npm run vendor && vite build && node scripts/check-dist.mjs"' in (
+        web / "package.json"
+    ).read_text(encoding="utf-8"), "npm run build no longer checks what it built"
 
     for producer in (ASSEMBLE, PAGES_WORKFLOW):
         text = producer.read_text(encoding="utf-8")
-        for placeholder in placeholders:
-            assert placeholder in text, f"{producer.name} does not substitute {placeholder}"
         assert "build.json" in text, f"{producer.name} does not publish build.json"
-        # It verifies the substitution rather than hoping...
-        assert "grep -q" in text, (
-            f"{producer.name} substitutes the stamp without checking it worked"
-        )
-        # ...and that what replaced it is still JavaScript. The first version
-        # embedded JSON in a string literal; sed ate the backslashes, app.js
-        # stopped parsing, and every check passed because the placeholder was
-        # indeed gone. Nine native tests failed before anything said why.
-        assert "node --check" in text, (
-            f"{producer.name} does not check that app.js still parses after the "
-            "substitution — the check that would have caught the escaping bug"
-        )
+        assert "APP_VERSION" in text, f"{producer.name} doesn't say which build this is"
+        assert "sed -i" not in text, f"{producer.name} is editing the built code again"
+    assert "npm run build" in ASSEMBLE.read_text(encoding="utf-8")
 
 
 def test_the_app_reads_its_own_stamp_before_the_servers() -> None:

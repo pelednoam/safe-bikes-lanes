@@ -14,6 +14,8 @@
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
     "rootDir": "src",
+    // Vite builds; tsc only checks types (npm run check)
+    "noEmit": true,
     // The GeoJSON namespace the app types its map data with. It used to arrive
     // by accident, referenced from MapLibre 4's own types; 6's don't, and since
     // TypeScript 6 nothing is loaded that isn't asked for.

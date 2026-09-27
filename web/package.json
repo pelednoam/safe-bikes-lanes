@@ -4,17 +4,17 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "npm run vendor && tsc",
+    "build": "npm run vendor && vite build && node scripts/check-dist.mjs",
     "check": "tsc --noEmit -p tsconfig.check.json",
     "test": "vitest run",
     "build:app": "bash scripts/assemble.sh",
     "app:sync": "npm run build:app && npx cap sync android",
-    "e2e": "npm run vendor && npm run test-data && playwright test",
+    "e2e": "npm run build && npm run test-data && playwright test",
     "e2e:native": "npm run test-data && playwright test -c playwright.native.config.ts",
-    "e2e:ride": "npm run test-data && playwright test -c playwright.ride.config.ts",
-    "e2e:live": "npm run vendor && playwright test -c playwright.live.config.ts",
-    "coverage:app": "npm run test-data && playwright test --config=playwright.coverage.config.ts --reporter=list",
-    "vendor": "cd node_modules/maplibre-gl/dist && cp maplibre-gl.mjs maplibre-gl-shared.mjs maplibre-gl-worker.mjs maplibre-gl.css ../../..",
+    "e2e:ride": "npm run build && npm run test-data && playwright test -c playwright.ride.config.ts",
+    "e2e:live": "npm run build && playwright test -c playwright.live.config.ts",
+    "coverage:app": "npm run build && npm run test-data && playwright test --config=playwright.coverage.config.ts --reporter=list",
+    "vendor": "cd node_modules/maplibre-gl/dist && cp maplibre-gl.mjs maplibre-gl-shared.mjs maplibre-gl-worker.mjs maplibre-gl.css ../../../public",
     "test:coverage": "vitest run --coverage",
     "test-data": "bash scripts/test-data.sh",
     "gen-weights": "node scripts/gen-weights.mjs"
@@ -28,6 +28,7 @@
     "maplibre-gl": "^6.11.2",
     "playwright": "^1.61.1",
     "typescript": "^7.0.2",
+    "vite": "^8.3.1",
     "vitest": "^5.0.1"
   },
   "dependencies": {

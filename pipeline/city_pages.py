@@ -429,8 +429,8 @@ PAGE_TEMPLATE = """<!doctype html>
 <meta http-equiv="Content-Security-Policy" content="{csp}">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="description" content="{description}">
-<link rel="stylesheet" href="../maplibre-gl.css">
-<link rel="stylesheet" href="../city.css">
+<link rel="stylesheet" href="/maplibre-gl.css">
+<link rel="stylesheet" href="/city.css">
 <meta name="city-slug" content="{slug}">
 </head>
 <body>
@@ -481,7 +481,7 @@ PAGE_TEMPLATE = """<!doctype html>
     <a href="../build/?town={name_url}">where-to-build workspace</a>.</p>
   </div>
 </main>
-<script type="module" src="../city.js"></script>
+<script type="module" src="/src/city.ts"></script>
 </body>
 </html>
 """

@@ -4,7 +4,9 @@
 // single tsconfig project; this file is small, boilerplate, and stable.
 "use strict";
 
-const CACHE = "family-bike-router-v11";
+// v12: the first build from Vite. The page's code is now content-hashed files,
+// not app.js and its modules, so the old shell's entries are all obsolete.
+const CACHE = "family-bike-router-v12";
 // Precache the shell + the tile manifests + eager POIs. The routing graph
 // (data/tiles/*.json), the display network (data/nettiles/*.json), and the
 // heavy overlays (heatmap/elevation/lane) all load on demand — cached
@@ -13,54 +15,23 @@ const CACHE = "family-bike-router-v11";
 const ASSETS = [
   ".",
   "index.html",
-  // Every module app.js imports, not a subset. The rest were being cached
-  // opportunistically by the fetch handler, which works only if the page finishes
-  // loading them before the network goes — and a module added later (search.js
-  // was) is exactly the one a first offline load would be missing. A test asserts
-  // this list covers the import graph, so the next one cannot be forgotten.
-  "app.js",
-  // the old-browser notice runs before app.js, and must be there when app.js can't
+  // Everything the planner page loads from the build: its code (content-hashed,
+  // so a new build is a new name), its CSS, its fonts. Written in at build time
+  // from Vite's own manifest (vite.config.ts), so it can't miss a file. It
+  // replaced a hand-kept list of modules that a test had to police, and still
+  // missed one (search.js) before that test existed.
+  /* BUILD_ASSETS */
+  // the old-browser notice runs before the app, and must be there when it can't
   "compat.js",
-  // MapLibre itself, vendored: maplibre.js imports maplibre-gl.mjs, which
+  // MapLibre itself, outside the bundle: the page imports maplibre-gl.mjs, which
   // imports the shared chunk and starts the worker from its own URL. Missing any
-  // one, a first offline load has no map. A test reads the vendored module for
-  // the files it loads rather than trusting this list.
-  "maplibre.js",
+  // one, a first offline load has no map. scripts/check-dist.mjs reads the
+  // vendored module for the files it loads rather than trusting this list.
   "maplibre-gl.mjs",
   "maplibre-gl-shared.mjs",
   "maplibre-gl-worker.mjs",
   "maplibre-gl.css",
-  "basemap.js",
-  "data.js",
-  "hazards.js",
-  "lifecycle.js",
-  "native.js",
-  "nav.js",
-  "permalink.js",
-  "places.js",
-  "planner.js",
-  "rejoin.js",
-  "retry.js",
-  "rides.js",
-  "router.js",
-  "search.js",
-  "segment.js",
-  "share.js",
-  "sharecard.js",
-  "speech.js",
-  "storage.js",
-  "tilecache.js",
-  "tiles.js",
-  "types.js",
-  "units.js",
-  "weights.gen.js",
   "manifest.json",
-  "fonts/Barlow-400.woff2",
-  "fonts/Barlow-500.woff2",
-  "fonts/Barlow-600.woff2",
-  "fonts/Barlow-700.woff2",
-  "fonts/BarlowSemiCondensed-600.woff2",
-  "fonts/BarlowSemiCondensed-700.woff2",
   // map label glyphs: street names while navigating come from a symbol layer,
   // which needs these even when the ride is offline. 8192-8447 is general
   // punctuation (’ – … “ ”), in ordinary names like "St. Paul’s"; the two after

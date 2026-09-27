@@ -22,6 +22,9 @@ jobs:
   # this job is the site artifact, and nothing else.
   build:
     runs-on: ubuntu-latest
+    env:
+      # the site's build stamp (vite.config.ts); the app's is its release tag
+      APP_VERSION: web
     permissions:
       contents: read
     steps:
@@ -82,58 +85,42 @@ jobs:
         run: npm run e2e:live
         working-directory: web
       - name: Assemble site
+        # dist/ is the Vite build (npm run build, last run by the e2e step):
+        # every page, bundled and content-hashed, the vendored MapLibre and the
+        # service worker, with its precache list written and checked. The build
+        # stamp is baked in by the build itself (APP_VERSION above,
+        # vite.config.ts), no longer substituted into app.js with sed.
         run: |
-          mkdir _site
-          cp web/index.html web/*.js web/*.mjs web/*.css _site/
-          cp web/manifest.json web/icon-192.png web/icon-512.png web/icon-maskable-512.png _site/
-          cp -r web/fonts _site/fonts
-          cp -r web/install _site/install
-          cp -r web/build _site/build
+          cp -r web/dist _site
           cp -r web/data _site/data
-          # Which build this is, baked into the code and also served as a file.
-          # The About box reads the baked copy — that describes the page actually
-          # running — and compares it against the file, which describes what the
-          # site serves now. A hard refresh that appears to change nothing is
-          # otherwise indistinguishable from a deploy that never happened.
+          # Which build this is, also served as a file. The About box reads the
+          # baked copy, which describes the page actually running, and compares
+          # it with this, which describes what the site serves now. A hard
+          # refresh that appears to change nothing is otherwise indistinguishable
+          # from a deploy that never happened.
           BUILD_COMMIT=$(git rev-parse --short HEAD)
           BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           printf '{"version":"web","built":"%s","commit":"%s"}\n' \
             "$BUILD_TIME" "$BUILD_COMMIT" > _site/build.json
-          # Three plain tokens, never JSON: sed reads \" in a replacement as an
-          # escape, so embedding JSON in a string literal silently produced a
-          # syntax error and broke the whole app while every step said success.
-          sed -i \
-            -e "s|__BUILD_VERSION__|web|" \
-            -e "s|__BUILD_TIME__|$BUILD_TIME|" \
-            -e "s|__BUILD_COMMIT__|$BUILD_COMMIT|" \
-            _site/app.js
-          if grep -q "__BUILD_VERSION__\|__BUILD_COMMIT__" _site/app.js; then
-            echo "::error::build stamp not substituted — About would say 'development build'"
-            exit 1
-          fi
-          # and it is still JavaScript, which "the placeholder is gone" does not say
-          node --check _site/app.js || {
-            echo "::error::the stamp substitution broke app.js"; exit 1; }
           echo "build stamp: web $BUILD_TIME $BUILD_COMMIT"
-          # One directory per city, so the URL is /somerville rather than a
-          # query string. Driven by the generator's own index, so adding a city
-          # to the pipeline is the only step needed to publish its page.
-          if [ -f web/data/cities/index.json ]; then
-            # Newline-delimited and shape-checked. slugify() only ever emits
-            # [a-z0-9-], but these strings become paths in a `cp -r`, and the
-            # build should not depend on a data file honouring that forever.
-            python3 -c "import json; print('\n'.join(c['slug'] for c in json.load(open('web/data/cities/index.json'))))" \
-              > /tmp/city-slugs.txt
-            while IFS= read -r slug; do
-              case "$slug" in
-                "" | *[!a-z0-9-]* ) echo "  skipping unusable city slug: '$slug'"; continue ;;
-              esac
-              if [ -d "web/$slug" ]; then
-                cp -r "web/$slug" "_site/$slug"
-                echo "  city page: /$slug"
-              fi
-            done < /tmp/city-slugs.txt
-          fi
+          # City pages: the build makes one for every committed web/<slug>/, but
+          # only the cities in this snapshot's own index have data to show.
+          # A page without its data is a broken page, so it doesn't go out.
+          python3 - <<'PY'
+          import json, pathlib, shutil
+          site = pathlib.Path("_site")
+          index = pathlib.Path("web/data/cities/index.json")
+          listed = {c["slug"] for c in json.loads(index.read_text())} if index.exists() else set()
+          for page in sorted(site.glob("*/index.html")):
+              slug = page.parent.name
+              if slug in {"build", "install", "data"}:
+                  continue
+              if slug in listed:
+                  print(f"  city page: /{slug}")
+              else:
+                  shutil.rmtree(page.parent)
+                  print(f"  city page /{slug} left out: not in this snapshot's cities/index.json")
+          PY
       - name: Publish the app version manifest
         run: |
           mkdir -p _site/app

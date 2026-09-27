@@ -22,7 +22,8 @@ test.describe("an Android WebView too old for the app", () => {
 
   test("gets told to update Android System WebView", async ({ page }) => {
     // what WebView 66 makes of app.js: a syntax error, so none of it runs
-    await page.route("**/app.js", (r) =>
+    // (the planner's bundle is app-<hash>.js)
+    await page.route(/\/app-[\w-]+\.js$/, (r) =>
       r.fulfill({ contentType: "text/javascript", body: "const x = a?.b ?? c; let ;" }),
     );
     await page.goto("/");

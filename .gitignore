@@ -16,7 +16,7 @@ htmlcov/
 
 # vendored at build time from node_modules (npm run vendor), so the site
 # serves its own copy instead of executing a CDN's script at runtime
-web/maplibre-gl.mjs
-web/maplibre-gl-shared.mjs
-web/maplibre-gl-worker.mjs
-web/maplibre-gl.css
+web/public/maplibre-gl.mjs
+web/public/maplibre-gl-shared.mjs
+web/public/maplibre-gl-worker.mjs
+web/public/maplibre-gl.css

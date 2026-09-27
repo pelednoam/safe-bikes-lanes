@@ -21,8 +21,8 @@ export default defineConfig({
     viewport: { width: 390, height: 844 },
   },
   webServer: {
-    // the pinned test snapshot, not data/ (test-data.json)
-    command: "python3 scripts/testserver.py 8323 . --data test-data/data",
+    // the built site (npm run build) with the pinned test snapshot as its data
+    command: "python3 scripts/testserver.py 8323 dist --data test-data/data",
     url: "http://127.0.0.1:8323",
     reuseExistingServer: true,
   },

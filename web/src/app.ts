@@ -4617,9 +4617,11 @@ function openAbout(): void {
 // a double-quoted literal, and sed reads `\"` in a replacement as an escape for
 // `"` — so the backslashes vanished and app.js became a syntax error that broke
 // the entire app. Values with no quotes in them cannot be mangled that way.
-const BUILD_VERSION = "__BUILD_VERSION__";
-const BUILD_TIME = "__BUILD_TIME__";
-const BUILD_COMMIT = "__BUILD_COMMIT__";
+// Filled in by the build (vite.config.ts), not by sed on the output: a
+// substitution in the shell once turned app.js into a syntax error.
+const BUILD_VERSION = __BUILD_VERSION__;
+const BUILD_TIME = __BUILD_TIME__;
+const BUILD_COMMIT = __BUILD_COMMIT__;
 
 interface BuildInfo {
   version?: string;

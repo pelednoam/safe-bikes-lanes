@@ -716,21 +716,8 @@ test.describe("build identity", () => {
 
   test("a deployed build names itself and notices a newer one", async ({ page }) => {
   test.slow();
-  // The substitution the deploy performs, done here so the deployed behaviour is
-  // exercised rather than only the development fallback.
-  await page.route("**/app.js", async (route) => {
-    const res = await route.fetch();
-    const body = (await res.text())
-      .replace("__BUILD_VERSION__", "web")
-      .replace("__BUILD_TIME__", "2026-08-12T02:00:00Z")
-      .replace("__BUILD_COMMIT__", "aaaa111");
-    await route.fulfill({
-      response: res,
-      body,
-      headers: { ...res.headers(), "content-type": "text/javascript" },
-    });
-  });
-  // and a site serving a different build than this page
+  // The build bakes its own stamp in (vite.config.ts), so this page is a
+  // deployed build as far as it knows. A site serving a different build:
   await page.route("**/build.json", (route) =>
     route.fulfill({
       contentType: "application/json",
@@ -740,8 +727,10 @@ test.describe("build identity", () => {
   await boot(page);
   await page.locator("#about-top").click();
   const stamp = page.locator("#build-stamp");
-  await expect(stamp).toContainText("aaaa111");
   await expect(stamp).toContainText("You're running");
+  // it names its own commit
+  const mine = /· ([0-9a-f]{7,})/.exec((await stamp.textContent()) ?? "")?.[1];
+  expect(mine, "the page didn't name its build").toBeDefined();
   // the page is stale, and is told so rather than left to guess
   await expect(stamp.locator(".stale-build")).toBeVisible({ timeout: 10_000 });
   await expect(stamp).toContainText("bbbb222");
@@ -752,12 +741,12 @@ test.describe("build identity", () => {
   await page.route("**/build.json", (route) =>
     route.fulfill({
       contentType: "application/json",
-      body: '{"version":"web","built":"2026-08-12T02:00:00Z","commit":"aaaa111"}',
+      body: `{"version":"web","built":"2026-08-12T02:00:00Z","commit":"${mine}"}`,
     }),
   );
   await page.reload();
   await page.locator("#about-top").click();
-  await expect(page.locator("#build-stamp")).toContainText("aaaa111");
+  await expect(page.locator("#build-stamp")).toContainText(mine as string);
   await page.waitForTimeout(1500);
   expect(await page.locator(".stale-build").count()).toBe(0);
   });
