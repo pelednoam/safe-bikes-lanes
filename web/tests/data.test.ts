@@ -4,7 +4,14 @@
 // coverage.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { dataUrl, initDataSource, isNewerBuild, loadJson, usingRemoteData } from "../src/data.js";
+import {
+  dataUrl,
+  initDataSource,
+  isNewerBuild,
+  loadJson,
+  remoteDataId,
+  usingRemoteData,
+} from "../src/data.js";
 
 const SITE = "https://pelednoam.github.io/safe-bikes-lanes/data/";
 
@@ -54,6 +61,36 @@ describe("isNewerBuild", () => {
     expect(isNewerBuild("2026-08-01", "tomorrow")).toBe(false);
     expect(isNewerBuild("", "2026-08-05")).toBe(false);
     expect(isNewerBuild("2026-8-1", "2026-08-05")).toBe(false);
+  });
+});
+
+describe("remoteDataId: which snapshot a phone uses", () => {
+  const morning = { built: "2026-09-26", builtAt: "2026-09-26T08:00:00+00:00", version: "aaaaaaaaaaaaaaaa" };
+  const evening = { built: "2026-09-26", builtAt: "2026-09-26T22:00:00+00:00", version: "bbbbbbbbbbbbbbbb" };
+
+  it("takes a second rebuild on the same day", () => {
+    // the date alone called these the same build, so the evening's never
+    // reached a phone that had cached the morning's
+    expect(remoteDataId(morning, evening)).toBe("bbbbbbbbbbbbbbbb");
+  });
+
+  it("downloads nothing for a rebuild that produced the same data", () => {
+    expect(remoteDataId(morning, { ...evening, version: morning.version })).toBeNull();
+  });
+
+  it("never goes back to an older snapshot, whatever its version", () => {
+    expect(remoteDataId(evening, morning)).toBeNull();
+  });
+
+  it("falls back to the date for snapshots from before the stamp", () => {
+    // an APK bundling an unstamped snapshot (app-v54 and earlier) against a
+    // stamped site: the date decides, and the cache is named by the version
+    expect(remoteDataId({ built: "2026-09-21" }, evening)).toBe("bbbbbbbbbbbbbbbb");
+    expect(remoteDataId({ built: "2026-09-26" }, evening)).toBeNull();
+    expect(remoteDataId({ built: "2026-09-21" }, { built: "2026-09-26" })).toBe("2026-09-26");
+    // a stamp that isn't one is no stamp at all
+    const garbled = { ...evening, builtAt: "tonight", version: "../../etc" };
+    expect(remoteDataId(morning, garbled)).toBeNull();
   });
 });
 
@@ -135,6 +172,28 @@ describe("choosing a source", () => {
     await mod.initDataSource();
     expect(deleted).toContain("remote-data-2026-01-01");
     expect(deleted).not.toContain("unrelated-cache");
+  });
+
+  it("caches a stamped snapshot by its version and drops the date-named one", async () => {
+    const { stores, deleted } = installCaches();
+    stores.set("remote-data-2026-09-26", new Map());
+    vi.doMock("../src/native.js", () => ({ isNativeApp: () => true }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        jsonResponse(
+          url.startsWith("http")
+            ? { built: "2026-09-26", builtAt: "2026-09-26T22:00:00+00:00", version: "bbbbbbbbbbbbbbbb" }
+            : { built: "2026-09-26", builtAt: "2026-09-26T08:00:00+00:00", version: "aaaaaaaaaaaaaaaa" },
+        ),
+      ),
+    );
+    const mod = await import("../src/data.js");
+    await mod.initDataSource();
+    expect(mod.usingRemoteData()).toBe("bbbbbbbbbbbbbbbb");
+    expect(deleted).toContain("remote-data-2026-09-26");
+    await mod.loadJson("meta.json");
+    expect([...stores.keys()]).toContain("remote-data-bbbbbbbbbbbbbbbb");
   });
 });
 

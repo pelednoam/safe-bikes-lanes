@@ -8,12 +8,46 @@ import { isNativeApp } from "./native.js";
 const SITE_DATA = "https://pelednoam.github.io/safe-bikes-lanes/data/";
 const CACHE_PREFIX = "remote-data-";
 
-let remoteBuilt: string | null = null;
+/** The site's data in use, by the name its cache is kept under; null = the bundle. */
+let remoteId: string | null = null;
 
 /** True when `remote` is a strictly newer YYYY-MM-DD build date. */
 export function isNewerBuild(bundled: string, remote: string): boolean {
   const ok = (s: string): boolean => /^\d{4}-\d{2}-\d{2}$/.test(s);
   return ok(bundled) && ok(remote) && remote > bundled;
+}
+
+/** What a data snapshot says about itself (meta.json). `version` and `builtAt`
+ * come from pipeline/stamp_version.py; snapshots from before it have `built`,
+ * a calendar date, only. */
+export interface SnapshotMeta {
+  built?: string;
+  builtAt?: string;
+  version?: string;
+}
+
+const STAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+00:00$/;
+const VERSION = /^[0-9a-f]{16}$/;
+
+/** Whether the site's data should replace the bundled copy: the name to cache
+ * it under if so, null to stay on the bundle.
+ *
+ * Both stamped: when its content differs and it was made later. The date alone
+ * was the rule until a second rebuild on the same day, which had the same name
+ * as the first and so never reached a phone that already held it. A rebuild
+ * that produced the same data has the same version and costs no download.
+ * Anything unstamped keeps the date rule, strictly newer only. */
+export function remoteDataId(bundled: SnapshotMeta, remote: SnapshotMeta): string | null {
+  const stamped = (m: SnapshotMeta): boolean =>
+    STAMP.test(m.builtAt ?? "") && VERSION.test(m.version ?? "");
+  if (stamped(bundled) && stamped(remote)) {
+    return remote.version !== bundled.version && (remote.builtAt as string) > (bundled.builtAt as string)
+      ? (remote.version as string)
+      : null;
+  }
+  if (bundled.built === undefined || remote.built === undefined) return null;
+  if (!isNewerBuild(bundled.built, remote.built)) return null;
+  return stamped(remote) ? (remote.version as string) : remote.built;
 }
 
 /** Decide once per launch whether the site's data supersedes the bundle. */
@@ -28,28 +62,25 @@ export async function initDataSource(): Promise<void> {
     });
     clearTimeout(timer);
     if (!remoteResp.ok) return;
-    const remote = (await remoteResp.json()) as { built?: string };
-    const bundled = (await (await fetch("data/meta.json")).json()) as { built?: string };
-    if (
-      remote.built !== undefined &&
-      bundled.built !== undefined &&
-      isNewerBuild(bundled.built, remote.built)
-    ) {
-      remoteBuilt = remote.built;
+    const remote = (await remoteResp.json()) as SnapshotMeta;
+    const bundled = (await (await fetch("data/meta.json")).json()) as SnapshotMeta;
+    const id = remoteDataId(bundled, remote);
+    if (id !== null) {
+      remoteId = id;
       for (const key of await caches.keys()) {
-        if (key.startsWith(CACHE_PREFIX) && key !== CACHE_PREFIX + remoteBuilt) {
+        if (key.startsWith(CACHE_PREFIX) && key !== CACHE_PREFIX + id) {
           await caches.delete(key);
         }
       }
     }
   } catch {
-    remoteBuilt = null; // offline or slow network: ride on the bundle
+    remoteId = null; // offline or slow network: ride on the bundle
   }
 }
 
 /** Whether layers are currently served from the website. */
 export function usingRemoteData(): string | null {
-  return remoteBuilt;
+  return remoteId;
 }
 
 /** Where a data file lives right now, for a download link.
@@ -57,14 +88,14 @@ export function usingRemoteData(): string | null {
  * Not loadJson: the CSV is handed to the browser as a file rather than parsed,
  * so it needs the URL the resolver would have used, not its contents. */
 export function dataUrl(name: string): string {
-  return remoteBuilt !== null ? SITE_DATA + name : `data/${name}`;
+  return remoteId !== null ? SITE_DATA + name : `data/${name}`;
 }
 
-/** Load a data layer: site (cached per build) when newer, else the bundle. */
+/** Load a data layer: the site's (cached per version) when it wins, else the bundle's. */
 export async function loadJson<T>(name: string): Promise<T> {
-  if (remoteBuilt !== null) {
+  if (remoteId !== null) {
     try {
-      const cache = await caches.open(CACHE_PREFIX + remoteBuilt);
+      const cache = await caches.open(CACHE_PREFIX + remoteId);
       const url = SITE_DATA + name;
       const hit = await cache.match(url);
       if (hit) return (await hit.json()) as T;

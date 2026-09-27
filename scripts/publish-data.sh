@@ -77,6 +77,10 @@ if [ -z "${GITHUB_ACTIONS:-}" ]; then
   echo "      whatever it built will be replaced by what is in web/data now."
 fi
 
+# what this snapshot contains and when it was made (meta.json version, builtAt):
+# how phones tell two rebuilds apart, even on the same day (see the script)
+python3 -I -S pipeline/stamp_version.py web/data
+
 tar czf "$TARBALL" -C web --exclude=data/keys.json data
 SIZE=$(du -h "$TARBALL" | cut -f1)
 
