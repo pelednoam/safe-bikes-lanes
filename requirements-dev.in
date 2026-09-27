@@ -1,0 +1,15 @@
+# What the Python checks need beyond the pipeline itself: the test runner,
+# the type checker and linter they are gated on, and what the server's tests
+# import. The CI job (.github/workflows/python.yml) installs the hashed lock
+# compiled from this, requirements-dev.txt. Regenerate after editing:
+#   uv pip compile requirements-dev.in --generate-hashes \
+#     --python-version 3.12 --python-platform x86_64-manylinux_2_28 \
+#     -o requirements-dev.txt
+-r pipeline/requirements.in
+pytest==9.1.1
+pytest-cov==7.1.0
+mypy==2.3.0
+ruff==0.15.22
+fastapi==0.139.2
+httpx==0.28.1
+pyyaml==6.0.3

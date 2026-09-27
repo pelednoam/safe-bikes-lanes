@@ -249,6 +249,25 @@ jobs:
             --timeout 5m \
             --client-details matrixLabel="${{ github.ref_name }} ${{ github.sha }}" \
             2>&1 | tee testlab.log
+      - name: Fetch screenshots and logs
+        # Out of Test Lab's bucket, which only this account can read, and into
+        # an artifact anyone with the repository can open. A pass only says
+        # nothing crashed; the screenshots say whether the map drew. Videos stay
+        # behind (tens of MB each) and play on the Test Lab page linked below.
+        if: always()
+        run: |
+          src=$(grep -oE 'storage/browser/[^] ]+' testlab.log | head -1 | sed 's|storage/browser/|gs://|')
+          if [ -z "$src" ]; then echo "no results folder in the log"; exit 0; fi
+          mkdir -p testlab-results
+          gcloud storage rsync -r --exclude='.*\.mp4$' "$src" testlab-results/
+          find testlab-results -name '*.png' | wc -l | xargs echo "screenshots:"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: testlab-results
+          path: testlab-results/
+          retention-days: 14
+          if-no-files-found: ignore
       - name: Link the results
         if: always()
         run: |
