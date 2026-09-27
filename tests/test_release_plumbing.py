@@ -148,10 +148,10 @@ def test_the_build_stamp_is_baked_in_and_the_build_fails_if_it_is_not() -> None:
     for placeholder in placeholders:
         assert placeholder in source, f"the app no longer carries {placeholder}"
         assert f"{placeholder}:" in config, f"vite.config.ts does not define {placeholder}"
-    assert "__BUILD_(VERSION|TIME|COMMIT)__" in check, "check-dist no longer fails on a leftover stamp"
-    assert '"build": "npm run vendor && vite build && node scripts/check-dist.mjs"' in (
-        web / "package.json"
-    ).read_text(encoding="utf-8"), "npm run build no longer checks what it built"
+    assert "__BUILD_(VERSION|TIME|COMMIT)__" in check, "check-dist misses a leftover stamp"
+    build = '"build": "npm run vendor && vite build && node scripts/check-dist.mjs"'
+    package = (web / "package.json").read_text(encoding="utf-8")
+    assert build in package, "npm run build no longer checks what it built"
 
     for producer in (ASSEMBLE, PAGES_WORKFLOW):
         text = producer.read_text(encoding="utf-8")

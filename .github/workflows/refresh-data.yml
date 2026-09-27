@@ -92,3 +92,12 @@ jobs:
         run: scripts/publish-data.sh
         env:
           GH_TOKEN: ${{ github.token }}
+      - name: Archive this week's sources
+        # So a source that's down next week can stand in its last good copy
+        # (pipeline/source_archive.py, config.SOURCE_MAX_STALE_DAYS) instead of
+        # failing the whole refresh. After publishing, so a week the sanity gate
+        # refused is never archived, and an archive problem never holds the
+        # data back. Standard library only, like the checks around the token.
+        run: python3 -I -S pipeline/source_archive.py upload data/raw
+        env:
+          GH_TOKEN: ${{ github.token }}

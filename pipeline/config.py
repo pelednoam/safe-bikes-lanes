@@ -122,6 +122,42 @@ CENSUS_BLOCKGROUPS_URL: Final[str] = (
 SOMERVILLE_MOBILITY3: Final[str] = (
     "https://maps.somervillema.gov/arcgis/rest/services/Mobility3/MapServer"
 )
+# How old an archived copy of each source may be and still stand in when the
+# source itself is down (pipeline/source_archive.py). Past this, a failed fetch
+# fails the refresh. Set by how fast each one changes, and by what a stale copy
+# would get wrong: an old permit list shows closures that have reopened, but a
+# year-old copy of a city's crash corridors is still that city's analysis.
+# Sources not named here have no stand-in.
+SOURCE_MAX_STALE_DAYS: Final[dict[str, int]] = {
+    "cambridge_bike_facilities.geojson": 60,
+    "boston_bike_facilities.geojson": 60,
+    "newton_bike_facilities.geojson": 60,
+    "everett_bike_facilities.geojson": 60,
+    "natick_bike_facilities.geojson": 60,
+    "salem_bike_facilities.geojson": 60,
+    "mapc_bike_network.geojson": 60,
+    "massdot_bike_inventory.geojson": 60,
+    "massdot_lts.geojson": 60,
+    "somerville_high_crash_corridors.geojson": 365,
+    "pois.geojson": 30,
+    "towns.geojson": 365,
+    "population.geojson": 365,
+    # live closures: a week-old list is already partly wrong
+    "cambridge_permits.geojson": 7,
+    "workzones.geojson": 7,
+}
+# crash years (crashes_2021.geojson...): a past year barely moves, the current
+# one grows weekly
+CRASH_MAX_STALE_DAYS: Final[int] = 90
+
+
+def source_max_stale_days(name: str) -> int | None:
+    """How old a stand-in copy of `name` may be, or None if it may have none."""
+    if name.startswith("crashes_") and name.endswith(".geojson"):
+        return CRASH_MAX_STALE_DAYS
+    return SOURCE_MAX_STALE_DAYS.get(name)
+
+
 # Layer 7 (high-crash intersections) was fetched too, and nothing ever read it.
 SOMERVILLE_HIGH_CRASH_LAYERS: Final[dict[str, int]] = {"corridors": 13}
 

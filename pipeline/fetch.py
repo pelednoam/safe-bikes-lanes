@@ -14,10 +14,10 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any, Final
 
 import config
+import source_archive
 
 UA: Final[dict[str, str]] = {"User-Agent": "family-bike-router/1.0 (personal project)"}
 
@@ -351,35 +351,34 @@ def fetch_mapc() -> GeoJSON:
     return {"type": "FeatureCollection", "features": features}
 
 
-# Sources that change slowly enough that a known copy beats going without.
-# Somerville's high-crash corridors are the city's own analysis, revised
-# rarely, and they raise the crash penalty on the streets they name. On
-# 2026-09-26 the city's GIS server was unreachable all day. Failing the
-# refresh held back every other source's week of changes, and building
-# without the layer would have made those corridors look safer than the city
-# says they are. A copy is used only when the live fetch fails. The run says
-# so, with the copy's date, and the sidecar records it.
-FALLBACK_DIR: Final[Path] = Path(__file__).parent / "fallback"
-FALLBACKS: Final[frozenset[str]] = frozenset({"somerville_high_crash_corridors.geojson"})
-
-
 def _use_fallback(name: str, error: Exception) -> bool:
-    """Save the committed copy of `name` in place of a failed fetch, if it has one."""
-    path = FALLBACK_DIR / name
-    if name not in FALLBACKS or not path.exists():
+    """Save the newest archived copy of `name` in place of a failed fetch, if
+    one is young enough (config.source_max_stale_days, source_archive.py).
+
+    Somerville's GIS server was unreachable all day on 2026-09-26. Failing the
+    refresh held back every other source's week of changes, and building without
+    the layer would have made those corridors look safer than the city says
+    they are. So any source now falls back to its last good copy within its
+    limit, and the run says so, with the copy's date, which the sidecar keeps.
+    """
+    limit = config.source_max_stale_days(name)
+    if limit is None:
         return False
-    meta = json.loads((FALLBACK_DIR / f"{name}.meta.json").read_text())
-    copied = str(meta.get("retrieved", "?"))[:10]
-    # The copy's own date, not today's: it is published in the site's meta.json,
-    # and the first run to use this reported a July layer as fetched that day.
+    today = datetime.datetime.now(datetime.UTC).date()
+    found = source_archive.fallback(name, limit, today)
+    if found is None:
+        print(f"  {name}: no archived copy within {limit} days to stand in")
+        return False
+    data, copy = found
+    when = copy.retrieved.isoformat()
     _save(
         name,
-        json.loads(path.read_text()),
-        f"committed copy of {copied} (live fetch failed: {error})",
-        retrieved=str(meta["retrieved"]),
+        data,
+        f"{source_archive.ARCHIVED_MARK}{when} (live fetch failed: {error})",
+        retrieved=when,
     )
     # a GitHub Actions annotation, so it shows on the run's page, not only in its log
-    print(f"::warning::{name}: live fetch failed ({error}); using the committed copy of {copied}")
+    print(f"::warning::{name}: live fetch failed ({error}); using the archived copy of {when}")
     return True
 
 

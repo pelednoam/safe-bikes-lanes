@@ -429,18 +429,39 @@ def test_no_work_zone_key_is_not_a_failure(tmp_path: Path, monkeypatch: pytest.M
     assert not (tmp_path / "workzones.geojson").exists()
 
 
-def test_a_dead_corridor_server_uses_the_committed_copy(
+def test_a_dead_source_stands_in_its_archived_copy_within_its_limit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Somerville's GIS server was down all day. That held back every other
     source's week, and building without the layer would have made the city's
-    high-crash corridors look safer than it says. A dead server now means the
-    committed copy, said out loud. Only for that layer: anything else that
-    fails still fails the run."""
+    high-crash corridors look safer than it says. Any source now falls back to
+    its last good copy, said out loud, within how old that source may be. A
+    source with no copy young enough still fails the run."""
+    import datetime
+
+    import source_archive
+
     monkeypatch.setattr(config, "RAW_DIR", tmp_path)
+    corridors = {
+        "type": "FeatureCollection",
+        "features": [{"type": "Feature", "geometry": None, "properties": {"Street": "Broadway"}}],
+    }
+    july = source_archive.Copy(
+        name="somerville_high_crash_corridors.geojson",
+        retrieved=datetime.date(2026, 7, 24),
+        url="https://example.test/x.gz",
+        asset_id=1,
+    )
+    asked: list[tuple[str, int]] = []
+
+    def archived(name: str, limit: int, today: datetime.date) -> object:
+        asked.append((name, limit))
+        return (corridors, july) if name == july.name else None
+
+    monkeypatch.setattr(source_archive, "fallback", archived)
 
     def down(url: str, *_a: Any, **_k: Any) -> dict[str, Any]:
-        if "somervillema" in url or "pois" in url:
+        if "somervillema" in url:
             raise OSError("timed out")
         return {"type": "FeatureCollection", "features": []}
 
@@ -464,26 +485,34 @@ def test_a_dead_corridor_server_uses_the_committed_copy(
 
     failures = fetch.fetch_all(refresh=True)
 
-    # the corridors came from the copy, and the sidecar says so
-    corridors = tmp_path / "somerville_high_crash_corridors.geojson"
-    committed = fetch.FALLBACK_DIR / "somerville_high_crash_corridors.geojson"
-    assert json.loads(corridors.read_text()) == json.loads(committed.read_text())
+    # the corridors came from the archive, dated when they were fetched
+    saved = json.loads((tmp_path / "somerville_high_crash_corridors.geojson").read_text())
+    assert saved == corridors
     meta = json.loads((tmp_path / "somerville_high_crash_corridors.geojson.meta.json").read_text())
-    assert meta["source"].startswith("committed copy of 2026-07-24")
-    # dated when it was fetched, not when it was copied: the site publishes this
-    assert meta["retrieved"].startswith("2026-07-24")
+    assert meta["source"].startswith("archived copy of 2026-07-24")
+    assert meta["retrieved"] == "2026-07-24"
     assert "::warning::somerville_high_crash_corridors.geojson" in capsys.readouterr().out
-    # and a source with no copy still fails the run
+    # each asked with its own limit
+    assert ("somerville_high_crash_corridors.geojson", 365) in asked
+    assert ("pois.geojson", 30) in asked
+    # and a source with no copy young enough still fails the run
     assert [name for name, _ in failures] == ["pois.geojson"]
 
 
-def test_the_committed_corridors_are_a_real_layer() -> None:
-    """A fallback that is empty, or whose sidecar lost its date, would build a
-    graph without the corridors while every log said it had them."""
-    data = json.loads((fetch.FALLBACK_DIR / "somerville_high_crash_corridors.geojson").read_text())
-    meta = json.loads(
-        (fetch.FALLBACK_DIR / "somerville_high_crash_corridors.geojson.meta.json").read_text()
-    )
-    assert len(data["features"]) == meta["features"] > 0
-    assert all(f["geometry"] is not None for f in data["features"])
-    assert meta["retrieved"][:4] == "2026"
+def test_every_source_has_a_stated_limit_or_none_on_purpose() -> None:
+    """A new source should come with a decision about how stale it may get."""
+    import datetime
+
+    names = [
+        "cambridge_bike_facilities.geojson", "boston_bike_facilities.geojson",
+        "newton_bike_facilities.geojson", "everett_bike_facilities.geojson",
+        "natick_bike_facilities.geojson", "salem_bike_facilities.geojson",
+        "mapc_bike_network.geojson", "massdot_bike_inventory.geojson", "massdot_lts.geojson",
+        "somerville_high_crash_corridors.geojson", "pois.geojson", "towns.geojson",
+        "population.geojson", "cambridge_permits.geojson", "workzones.geojson",
+        f"crashes_{datetime.date.today().year}.geojson",
+    ]  # fmt: skip
+    for name in names:
+        assert config.source_max_stale_days(name) is not None, name
+    # live closures go stale in days, not months
+    assert (config.source_max_stale_days("cambridge_permits.geojson") or 99) <= 7

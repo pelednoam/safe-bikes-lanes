@@ -1,6 +1,0 @@
-{
-  "source": "https://maps.somervillema.gov/arcgis/rest/services/Mobility3/MapServer/13",
-  "retrieved": "2026-07-24T19:00:21.110851+00:00",
-  "features": 16,
-  "why": "Used only when the live fetch fails (see FALLBACKS in fetch.py). Committed 2026-09-26, when the city's GIS server had been unreachable all day."
-}
