@@ -129,7 +129,7 @@ test("dark mode, aerial view, and 3D toggles drive the map", async ({ page }) =>
   expect(await vis(page, "heatmap")).toBe("none");
 });
 
-test("construction layer is on by default with real permits", async ({ page }) => {
+test("construction layer is on by default with real permits", { tag: "@live" }, async ({ page }) => {
   await boot(page);
   await page.waitForFunction(
     () =>
@@ -279,7 +279,7 @@ for (const [name, hash] of [
   ["Brockton → Abington", "#s=-71.018,42.084&e=-70.945,42.105&m=young_kids"],
   ["Concord → Cohasset (corner to corner)", "#s=-71.349,42.460&e=-70.803,42.242&m=young_kids"],
 ] as [string, string][]) {
-  test(`new-ring towns route: ${name}`, async ({ page }) => {
+  test(`new-ring towns route: ${name}`, { tag: "@live" }, async ({ page }) => {
     // a cross-metro trip legitimately pulls ~120 graph tiles before it can
     // route; that is seconds locally but well past the default on CI
     test.slow();
@@ -298,7 +298,7 @@ for (const [name, hash] of [
   });
 }
 
-test("loop planner builds a round trip from a start point", async ({ page }) => {
+test("loop planner builds a round trip from a start point", { tag: "@live" }, async ({ page }) => {
   await boot(page, "#s=-71.122258,42.396748");
   await openSection(page, "Other trip types");
   await page.locator("#loop-btn").click();

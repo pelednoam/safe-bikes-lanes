@@ -9,12 +9,14 @@
     "test": "vitest run",
     "build:app": "bash scripts/assemble.sh",
     "app:sync": "npm run build:app && npx cap sync android",
-    "e2e": "npm run vendor && playwright test",
-    "e2e:native": "playwright test -c playwright.native.config.ts",
-    "e2e:ride": "playwright test -c playwright.ride.config.ts",
-    "coverage:app": "playwright test --config=playwright.coverage.config.ts --reporter=list",
+    "e2e": "npm run vendor && npm run test-data && playwright test",
+    "e2e:native": "npm run test-data && playwright test -c playwright.native.config.ts",
+    "e2e:ride": "npm run test-data && playwright test -c playwright.ride.config.ts",
+    "e2e:live": "npm run vendor && playwright test -c playwright.live.config.ts",
+    "coverage:app": "npm run test-data && playwright test --config=playwright.coverage.config.ts --reporter=list",
     "vendor": "cd node_modules/maplibre-gl/dist && cp maplibre-gl.mjs maplibre-gl-shared.mjs maplibre-gl-worker.mjs maplibre-gl.css ../../..",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "test-data": "bash scripts/test-data.sh"
   },
   "devDependencies": {
     "@capacitor/cli": "^8.5.2",

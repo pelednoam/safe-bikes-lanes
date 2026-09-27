@@ -71,7 +71,7 @@ async function components(page: import("@playwright/test").Page): Promise<Record
   });
 }
 
-test("the ranking is drawn from the pipeline's own output", async ({ page }) => {
+test("the ranking is drawn from the pipeline's own output", { tag: "@live" }, async ({ page }) => {
   test.slow();
   const { errors, loaded } = await open(page);
 

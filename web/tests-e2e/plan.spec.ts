@@ -105,7 +105,7 @@ async function routeMeters(page: Page): Promise<number> {
   return n;
 }
 
-test("plan a ride entirely with the mouse: pick a start, then a destination", async ({ page }) => {
+test("plan a ride entirely with the mouse: pick a start, then a destination", { tag: "@live" }, async ({ page }) => {
   await boot(page, HOME_VIEW);
 
   // the origin defaults to "your location"; a planner at a desk wants to pick it

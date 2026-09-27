@@ -31,7 +31,7 @@ async function openCity(page: Page, slug = "somerville"): Promise<void> {
   });
 }
 
-test("leads with how many people can't reach a school or park", async ({ page }) => {
+test("leads with how many people can't reach a school or park", { tag: "@live" }, async ({ page }) => {
   await openCity(page);
   const lede = page.locator("#lede");
   // the count and the share together: 9% sounds small until it's 7,000 people
@@ -67,7 +67,7 @@ test("the figures split the network into connected and stranded", async ({ page 
   expect(text).toMatch(/cut off from that network, in \d+ pockets/);
 });
 
-test("every number the page states in public is the one in its data", async ({ page }) => {
+test("every number the page states in public is the one in its data", { tag: "@live" }, async ({ page }) => {
   // The claims are about a real city and are meant to be quoted. Matching them
   // against /\d+/ proves only that something was rendered — these tests used to
   // pass while the headline count was being reconstructed from a rounded

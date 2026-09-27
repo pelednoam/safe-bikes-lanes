@@ -72,7 +72,7 @@ function cachedTiles(page: Page, cacheName: string): Promise<string[]> {
   }, cacheName);
 }
 
-test("a downloaded route draws its map with the network cut", async ({ page, context }) => {
+test("a downloaded route draws its map with the network cut", { tag: "@live" }, async ({ page, context }) => {
   test.slow();
   // Watch the first load, while the cache is still empty and tiles really do
   // come off the network. This is the only moment the spread is observable:

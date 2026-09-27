@@ -51,7 +51,7 @@ async function routeCoords(page: Page): Promise<[number, number][]> {
   });
 }
 
-test("navigation follows simulated GPS along the route", async ({ page, context }) => {
+test("navigation follows simulated GPS along the route", { tag: "@live" }, async ({ page, context }) => {
   await startNav(page);
   const coords = await routeCoords(page);
   expect(coords.length).toBeGreaterThan(10);

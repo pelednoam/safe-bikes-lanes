@@ -7,8 +7,14 @@
 # surfaced as an inscrutable Playwright failure eight minutes into the run.
 # Run this straight after extracting, so the answer costs seconds and names the
 # fix.
+#
+# Usage: scripts/check-data-format.sh [DATA_DIR]   (default web/data)
+# The deploy also runs it on the pinned test snapshot (web/test-data/data): a
+# commit that raises DATA_FORMAT has to move the test pin with it, or the whole
+# browser suite would run the new code against data it cannot read.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+DATA_DIR=${1:-web/data}
 
 NEED=$(python3 -c "import sys; sys.path.insert(0, 'pipeline'); import config; print(config.DATA_FORMAT)")
 # Coerced to an int here, not in the shell: a meta.json carrying a string or a
@@ -18,7 +24,7 @@ NEED=$(python3 -c "import sys; sys.path.insert(0, 'pipeline'); import config; pr
 # fractional stamp used to pass as a whole number it never was.
 HAVE=$(python3 -c "
 import json, pathlib
-p = pathlib.Path('web/data/meta.json')
+p = pathlib.Path('$DATA_DIR/meta.json')
 try:
     v = json.loads(p.read_text()).get('format', 0)
     print(v if type(v) is int else 0)
@@ -34,7 +40,7 @@ except Exception:
 # without them is broken however good its meta.json looks.
 CITY=$(python3 -c "
 import json, pathlib
-d = pathlib.Path('web/data/cities')
+d = pathlib.Path('$DATA_DIR/cities')
 stamps = []
 if d.is_dir():
     for p in sorted(d.glob('*.json')):
@@ -78,4 +84,4 @@ if [ "$HAVE" -lt "$NEED" ]; then
        "needed, then run scripts/publish-data.sh and re-run this workflow."
   exit 1
 fi
-echo "data snapshot format $HAVE, city pages $CITY (this commit needs $NEED)"
+echo "$DATA_DIR: format $HAVE, city pages $CITY (this commit needs $NEED)"

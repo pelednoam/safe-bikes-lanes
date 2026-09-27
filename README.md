@@ -129,7 +129,19 @@ tiles cache under `data/raw/aerial/`).
 cd web && npm run check      # strict TypeScript
 cd web && npm run e2e         # Playwright browser tests (real app + graph)
 cd web && npm run e2e:native  # emulated Capacitor WebView (native-only paths)
+cd web && npm run e2e:ride    # whole simulated rides (slow; not in the deploy gate)
+cd web && npm run e2e:live    # the @live smoke tests, on web/data instead of the pin
 ```
+
+The browser suites run on a **pinned data snapshot**, not on `web/data`:
+`web/test-data.json` names a frozen data build on the `test-data` release by
+sha256, and `npm run test-data` (run by each suite) fetches it into
+`web/test-data/`. A weekly refresh therefore can't fail the deploy gate by moving
+what a test aims at. Only the `@live` tests read the data being deployed; they
+check that it works, not what the exact routes are. To move the pin, upload a
+snapshot as a new asset on the `test-data` release (never replace one), update
+`asset`, `sha256` and `built` in `test-data.json`, and fix whatever tests the new
+data moves, all in the same commit.
 
 ## Where to build next (for cities)
 

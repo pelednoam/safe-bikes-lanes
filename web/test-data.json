@@ -1,0 +1,7 @@
+{
+  "why": "The browser suites run on this frozen data build, not on whatever the weekly refresh last published, so a rebuild cannot fail the deploy gate by moving what a test aims at. Moving the pin is deliberate: publish a snapshot as a new asset on the test-data release, update asset and sha256 here, and fix whatever tests the new data moves, in the same commit. The published data is still checked on every deploy by the @live tests (npm run e2e:live).",
+  "release": "test-data",
+  "asset": "web-data-2026-09-26.tar.gz",
+  "sha256": "23b7a82ec6ff7d927755b6e7bbfbddfd384df66afaa8a649c45986fec7e134da",
+  "built": "2026-09-26"
+}

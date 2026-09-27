@@ -6,3 +6,6 @@ test-results/
 # keys.json is hand-maintained config, so it stays tracked.
 data/*
 !data/keys.json
+
+# the pinned browser-test snapshot (scripts/test-data.sh), downloaded, not committed
+test-data/
