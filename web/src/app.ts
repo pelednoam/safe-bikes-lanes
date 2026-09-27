@@ -503,6 +503,40 @@ function dropHoverCard(): void {
   hoverPopup?.remove();
   hoverPopup = null;
 }
+
+/** What a tap on the map means, decided in one place (onMapTap).
+ *
+ * Every layer used to answer its own taps with map.on("click", layer, …), and
+ * the plain map click answered them all again: the listeners fired in the order
+ * they happened to be registered, and each guessed what the others did. So a
+ * tap on a construction site also planned a trip to it, two overlapping layers
+ * both opened a card, and the fix for the first broke dismissing the ride's
+ * stops menu. A layer now registers what a tap on it opens, and onMapTap picks
+ * one thing to do. */
+type TapOpen = (e: MapLayerMouseEvent) => void;
+interface TapTarget {
+  open: TapOpen;
+  /** Also set a trip point, as a tap on bare map would. Only for destinations:
+   * tapping a playground is a fair way to say "take us there". */
+  alsoSetsPoint: boolean;
+}
+/** Most specific first: when a tap lands on several, only the first opens. A
+ * rider's own hazard report outranks the permit beneath it, which outranks the
+ * planner's layers, which outrank a place. */
+const TAP_ORDER = [
+  "hazardpts",
+  "construction-pts",
+  "construction-lines",
+  "gateways",
+  "crossings",
+  "build",
+  "pois",
+] as const;
+type TapLayer = (typeof TAP_ORDER)[number];
+const tapTargets = new Map<TapLayer, TapTarget>();
+function onTap(layer: TapLayer, open: TapOpen, alsoSetsPoint = false): void {
+  tapTargets.set(layer, { open, alsoSetsPoint });
+}
 let options: RouteOption[] = [];
 let selectedId: RouteOption["id"] | null = null;
 let shedMode = false;
@@ -2845,8 +2879,8 @@ map.on("load", () => {
       "icon-size": ["interpolate", ["linear"], ["zoom"], 12, 0.6, 14, 0.85, 16, 1.2],
     },
   });
-  for (const layer of ["construction-lines", "construction-pts"]) {
-    map.on("click", layer, (e: MapLayerMouseEvent) => {
+  for (const layer of ["construction-lines", "construction-pts"] as const) {
+    onTap(layer, (e: MapLayerMouseEvent) => {
       dropHoverCard();
       const f = e.features?.[0];
       if (!f) return;
@@ -2896,7 +2930,7 @@ map.on("load", () => {
       "circle-stroke-width": 2,
     },
   });
-  map.on("click", "hazardpts", (e: MapLayerMouseEvent) => {
+  onTap("hazardpts", (e: MapLayerMouseEvent) => {
     dropHoverCard();
     const f = e.features?.[0];
     if (!f) return;
@@ -3173,7 +3207,7 @@ map.on("load", () => {
   }
 
   // gateways have no click popup of their own — give phones (no hover) one
-  map.on("click", "gateways", (e: MapLayerMouseEvent) => {
+  onTap("gateways", (e: MapLayerMouseEvent) => {
     dropHoverCard();
     new maplibregl.Popup({ offset: 10 })
       .setLngLat(e.lngLat)
@@ -3254,17 +3288,21 @@ map.on("load", () => {
     });
   }
 
-  map.on("click", "pois", (e: MapLayerMouseEvent) => {
-    dropHoverCard();
-    const f = e.features?.[0];
-    if (!f) return;
-    const props = f.properties as { kind?: string; name?: string };
-    const meta = props.kind !== undefined ? POI_META[props.kind] : undefined;
-    new maplibregl.Popup()
-      .setLngLat(e.lngLat)
-      .setHTML(`${meta?.emoji ?? ""} <b>${esc(String(props.name || meta?.label || "?"))}</b>`)
-      .addTo(map);
-  });
+  onTap(
+    "pois",
+    (e: MapLayerMouseEvent) => {
+      dropHoverCard();
+      const f = e.features?.[0];
+      if (!f) return;
+      const props = f.properties as { kind?: string; name?: string };
+      const meta = props.kind !== undefined ? POI_META[props.kind] : undefined;
+      new maplibregl.Popup()
+        .setLngLat(e.lngLat)
+        .setHTML(`${meta?.emoji ?? ""} <b>${esc(String(props.name || meta?.label || "?"))}</b>`)
+        .addTo(map);
+    },
+    true,
+  );
 
   map.on("mousemove", "lanemap", (e: MapLayerMouseEvent) => {
     const f = e.features?.[0];
@@ -3329,40 +3367,39 @@ map.on("load", () => {
 });
 
 map.on("click", (e: MapMouseEvent) => {
-  // A tap that dismisses the open stops menu is that and nothing else — it
-  // must not also offer to throw the ride away. MapLibre's preventDefault
-  // doesn't stop other listeners, so the guard lives here, where the acting
-  // handler is. First, before the inspectable check below: a tap that happened
-  // to land on a construction site would otherwise leave the menu open.
-  if (navActive && el<HTMLButtonElement>("nav-stops").getAttribute("aria-expanded") === "true") {
+  onMapTap(e);
+});
+
+/** The one answer to a tap on the map, in order:
+ *  1. the ride's stops menu is open: put it away. During a ride that is all the
+ *     tap does. It must not also offer to throw the ride away, whatever it
+ *     happened to land on.
+ *  2. it landed on something to read (TAP_ORDER): open the most specific one,
+ *     and stop there, unless that thing is also a destination.
+ *  3. the reach map is open: flood from here.
+ *  4. riding: ask before trading the ride for a trip to here.
+ *  5. otherwise it sets the start or the destination. */
+function onMapTap(e: MapMouseEvent): void {
+  if (el<HTMLButtonElement>("nav-stops").getAttribute("aria-expanded") === "true") {
     stopsOpen(false);
-    return;
+    if (navActive) return;
   }
-  // A project line is a thing to inspect, not a place to ride to. Without this
-  // the layer's own handler selected the project AND this one dropped a
-  // destination pin and re-routed underneath it. The same held for a
-  // construction site, a reported hazard and a gateway: tapping one to read it
-  // also planned a trip to it, and the plan's own messages ("Couldn't find
-  // where you are") landed on top of the card the rider had asked for.
-  // Destinations (pois) are left out on purpose: tapping a playground is a fair
-  // way to say "take us there".
-  const inspectable = [
-    "build",
-    "crossings",
-    "construction-lines",
-    "construction-pts",
-    "hazardpts",
-    "gateways",
-  ].filter(
-    // not "=== visible": a layer that never sets it is visible, and reads undefined
+  // not "=== visible": a layer that never sets it is visible, and reads undefined
+  const live = TAP_ORDER.filter(
     (id) =>
-      map.getLayer(id) !== undefined && map.getLayoutProperty(id, "visibility") !== "none",
+      tapTargets.has(id) &&
+      map.getLayer(id) !== undefined &&
+      map.getLayoutProperty(id, "visibility") !== "none",
   );
-  if (
-    inspectable.length > 0 &&
-    map.queryRenderedFeatures(e.point, { layers: inspectable }).length > 0
-  ) {
-    return;
+  if (live.length > 0) {
+    const hits = map.queryRenderedFeatures(e.point, { layers: [...live] });
+    const top = live.find((id) => hits.some((f) => f.layer.id === id));
+    if (top !== undefined) {
+      const target = tapTargets.get(top) as TapTarget;
+      const features = hits.filter((f) => f.layer.id === top);
+      target.open(Object.assign(e, { features }) as MapLayerMouseEvent);
+      if (!target.alsoSetsPoint) return;
+    }
   }
   if (shedMode) {
     shedCenter = [e.lngLat.lng, e.lngLat.lat];
@@ -3389,7 +3426,7 @@ map.on("click", (e: MapMouseEvent) => {
   } else {
     setPoint("end", e.lngLat);
   }
-});
+}
 
 /** The one open spot-menu, so a second right-click (or long-press) replaces it
  * instead of stacking a second card on the map. */
@@ -5914,13 +5951,7 @@ el<HTMLButtonElement>("nav-stops").addEventListener("click", (e: Event) => {
   e.stopPropagation();
   stopsOpen(el<HTMLButtonElement>("nav-stops").getAttribute("aria-expanded") !== "true");
 });
-// Tapping the map puts it away — and only that. The map's own mid-ride handler
-// asks whether to abandon the route, so without swallowing this tap, dismissing
-// a menu also offered to throw the ride away.
-// Outside a ride the map has no "are you sure", so a tap just closes the menu.
-map.on("click", () => {
-  if (!navActive) stopsOpen(false);
-});
+// Tapping the map puts it away (onMapTap, step 1).
 for (const id of ["nav-water", "nav-restroom", "nav-playground"]) {
   el<HTMLButtonElement>(id).addEventListener("click", () => stopsOpen(false));
 }
@@ -7111,7 +7142,7 @@ el<HTMLButtonElement>("build-csv").addEventListener("click", () => {
 });
 
 // clicking a project on the map selects it in the list, and the other way round
-map.on("click", "build", (e: MapLayerMouseEvent) => {
+onTap("build", (e: MapLayerMouseEvent) => {
   const pid = (e.features?.[0]?.properties as { pid?: string } | undefined)?.pid;
   if (pid !== undefined) {
     if (!el<HTMLDetailsElement>("build-box").open) {
@@ -7120,7 +7151,7 @@ map.on("click", "build", (e: MapLayerMouseEvent) => {
     focusProject(pid);
   }
 });
-map.on("click", "crossings", (e: MapLayerMouseEvent) => {
+onTap("crossings", (e: MapLayerMouseEvent) => {
   const pid = (e.features?.[0]?.properties as { pid?: string } | undefined)?.pid;
   if (pid !== undefined) {
     if (!el<HTMLDetailsElement>("build-box").open) {

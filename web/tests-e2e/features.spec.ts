@@ -219,6 +219,56 @@ test("a permit feed cannot script the map popups", async ({ page }) => {
   await expect(page.locator(".maplibregl-popup").first()).toBeVisible();
 });
 
+test("a tap on two things opens the most specific one, and only that", async ({ page }) => {
+  test.slow();
+  // Every layer used to answer its own taps, so a tap where a playground and a
+  // street permit overlap opened both cards, and the playground's listener also
+  // made the spot the destination. One tap now means one thing (onMapTap): the
+  // permit, which outranks a place, and no trip to it.
+  const at: [number, number] = [-71.1, 42.38];
+  const fc = (props: Record<string, string>): string =>
+    JSON.stringify({
+      type: "FeatureCollection",
+      features: [{ type: "Feature", geometry: { type: "Point", coordinates: at }, properties: props }],
+    });
+  await page.route(/construction\.geojson/, (r) =>
+    r.fulfill({
+      contentType: "application/json",
+      body: fc({ src: "cambridge", name: "Water main", start: "2026-01-01", end: "2027-01-01" }),
+    }),
+  );
+  await page.route(/pois\.geojson/, (r) =>
+    r.fulfill({ contentType: "application/json", body: fc({ kind: "playground", name: "Hodgkins Park" }) }),
+  );
+  await boot(page);
+  await page.locator("summary", { hasText: "Map layers" }).first().click();
+  await page.locator("#show-pois").check();
+  await page.evaluate((c) => window._map?.jumpTo({ center: c, zoom: 16 }), at);
+  // both drawn and clickable at the same pixel
+  const handle = await page.waitForFunction(
+    () => {
+      const map = window._map;
+      if (map === undefined || map.isMoving()) return null;
+      const f = map.queryRenderedFeatures(undefined, { layers: ["construction-pts"] })[0];
+      if (f === undefined) return null;
+      const p = map.project((f.geometry as GeoJSON.Point).coordinates as [number, number]);
+      const pt: [number, number] = [Math.round(p.x), Math.round(p.y)];
+      const layers = new Set(
+        map.queryRenderedFeatures(pt, { layers: ["construction-pts", "pois"] }).map((x) => x.layer.id),
+      );
+      return layers.size === 2 ? { x: pt[0], y: pt[1] } : null;
+    },
+    null,
+    { timeout: 25_000 },
+  );
+  const pt = (await handle.jsonValue()) as { x: number; y: number };
+  await page.mouse.click(pt.x, pt.y);
+  await expect(page.locator(".maplibregl-popup", { hasText: "Water main" })).toBeVisible();
+  await page.waitForTimeout(800);
+  await expect(page.locator(".maplibregl-popup", { hasText: "Hodgkins Park" })).toHaveCount(0);
+  expect(page.url(), "the tap planned a trip to the permit").not.toMatch(/[#&]e=/);
+});
+
 test("save a place via right-click and use it as start", async ({ page }) => {
   await boot(page);
   page.once("dialog", (d) => void d.accept("Test Home"));
