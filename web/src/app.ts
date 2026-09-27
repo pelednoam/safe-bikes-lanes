@@ -1391,12 +1391,14 @@ function paintPanelWithRoute(paint: () => void): void {
   let renders = 0;
   let parsed = false;
   const stop = (): void => {
+    if (done) return;
     done = true;
     map.off("render", onRender);
     map.off("sourcedata", onData);
     window.clearTimeout(soft);
     window.clearTimeout(hard);
     if (cancelPanelPaint === stop) cancelPanelPaint = null;
+    window.__panelPaintsWaiting = (window.__panelPaintsWaiting ?? 1) - 1;
   };
   const fire = (): void => {
     if (done) return;
@@ -1418,6 +1420,7 @@ function paintPanelWithRoute(paint: () => void): void {
   };
   map.on("sourcedata", onData);
   map.on("render", onRender);
+  window.__panelPaintsWaiting = (window.__panelPaintsWaiting ?? 0) + 1;
   // a map that isn't rendering at all (hidden tab, no WebGL) must not hold the
   // numbers hostage; a busy one gets until the hard stop to draw
   const soft = window.setTimeout(() => {
@@ -6312,6 +6315,11 @@ declare global {
      * loaded machine blocks the main thread for longer than a routing run does,
      * so that test failed on the runner rather than on the app. */
     __regradesStarted?: number;
+    /** Test hook: panel paints still watching the map for their route to draw.
+     * Each watches every frame until it fires or is superseded, so one that
+     * never stops is a leak; before this hook the test counted MapLibre's
+     * private _listeners, which the next upgrade could quietly empty. */
+    __panelPaintsWaiting?: number;
     _map?: MLMap;
   }
 }

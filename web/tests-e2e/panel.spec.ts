@@ -30,19 +30,17 @@ test("switching options quickly leaves no per-frame work behind", async ({ page 
   // rest of the session.
   await planned(page);
   await page.waitForTimeout(4000);
-  const listeners = (): Promise<number> =>
-    page.evaluate(() => {
-      const m = window._map as unknown as { _listeners?: Record<string, unknown[]> };
-      return (m._listeners?.["render"]?.length ?? 0) + (m._listeners?.["sourcedata"]?.length ?? 0);
-    });
-  const before = await listeners();
+  const waiting = (): Promise<number | undefined> =>
+    page.evaluate(() => window.__panelPaintsWaiting);
+  // the hook is live: a plan painted its panel through it
+  expect(await waiting(), "__panelPaintsWaiting was never set").toBeDefined();
   await page.evaluate(() => {
     const cards = [...document.querySelectorAll<HTMLElement>(".option-card")];
     for (let i = 0; i < 5; i++) for (const c of cards) c.click();
   });
   // past the three-second hard stop every paint has
   await page.waitForTimeout(4500);
-  expect(await listeners(), "render listeners leaked by superseded paints").toBe(before);
+  expect(await waiting(), "a superseded paint is still watching every frame").toBe(0);
 });
 
 test("on a phone held sideways, the route is framed above the sheet", async ({ page }) => {

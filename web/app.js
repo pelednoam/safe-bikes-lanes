@@ -1176,6 +1176,8 @@ function paintPanelWithRoute(paint) {
     let renders = 0;
     let parsed = false;
     const stop = () => {
+        if (done)
+            return;
         done = true;
         map.off("render", onRender);
         map.off("sourcedata", onData);
@@ -1183,6 +1185,7 @@ function paintPanelWithRoute(paint) {
         window.clearTimeout(hard);
         if (cancelPanelPaint === stop)
             cancelPanelPaint = null;
+        window.__panelPaintsWaiting = (window.__panelPaintsWaiting ?? 1) - 1;
     };
     const fire = () => {
         if (done)
@@ -1209,6 +1212,7 @@ function paintPanelWithRoute(paint) {
     };
     map.on("sourcedata", onData);
     map.on("render", onRender);
+    window.__panelPaintsWaiting = (window.__panelPaintsWaiting ?? 0) + 1;
     // a map that isn't rendering at all (hidden tab, no WebGL) must not hold the
     // numbers hostage; a busy one gets until the hard stop to draw
     const soft = window.setTimeout(() => {
