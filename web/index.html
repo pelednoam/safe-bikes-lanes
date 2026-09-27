@@ -771,6 +771,26 @@
   </div>
 </section>
 <div id="data-update" style="display:none">⬇ Updating map data…</div>
+<!-- Shown by compat.js when this browser can't run the app. Static HTML, so
+     it can appear even when none of the app's code has. -->
+<div id="compat" role="alert" style="display:none; position:fixed; inset:0; z-index:10000;
+     align-items:center; justify-content:center; padding:24px; background:#fff; color:#111;
+     font:16px/1.5 system-ui, sans-serif; text-align:left">
+  <div style="max-width:420px">
+    <h2 style="font-size:20px; margin:0 0 12px">This phone can't run the map yet</h2>
+    <div id="compat-android" style="display:none">
+      <p>The app draws its map with Android's built-in web engine, <b>Android System
+      WebView</b>, and the one on this phone is too old.</p>
+      <p>Update it from the Play Store, then open the app again:</p>
+      <p><a href="https://play.google.com/store/apps/details?id=com.google.android.webview"
+            style="color:#0b6b3a; font-weight:600">Android System WebView on Google Play</a></p>
+    </div>
+    <div id="compat-browser" style="display:none">
+      <p>This browser is too old to draw the map. Updating it, or opening the page in
+      a current Chrome, Firefox, Safari or Edge, will fix it.</p>
+    </div>
+  </div>
+</div>
 <div id="update-banner" style="display:none">
   <span id="update-text"></span>
   <a id="update-get" href="#" target="_blank" rel="noopener" style="margin:0;padding:5px 10px;border:1px solid var(--border);border-radius:6px;background:var(--btn-bg);color:var(--fg);text-decoration:none;cursor:pointer">⬇ install</a>
@@ -1242,6 +1262,9 @@
   pure risk. <b>This is a planning aid: always ride to conditions and use your
   own judgment, especially with kids.</b></p>
 </dialog>
+<!-- Before the app, and not a module: it has to run where app.js can't (see
+     compat.js). CSP script-src 'self' covers it, so there's no inline script. -->
+<script src="compat.js"></script>
 <script src="app.js" type="module"></script>
 </body>
 </html>

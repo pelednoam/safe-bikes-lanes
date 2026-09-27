@@ -351,9 +351,9 @@ test("tapping the map mid-ride asks before it throws the route away", async ({ p
 test("a tap that lands on a construction site still just closes the stops menu", async ({
   page,
 }) => {
-  // Taps on an info marker open its card and nothing else, and that check ran
-  // before the one that lets a tap put the stops menu away, so a tap that
-  // happened to land on a permit left the menu open over the ride.
+  // A tap that puts the stops menu away is that and nothing else (onMapTap,
+  // step 1), whatever it lands on. It once opened the permit's card and left
+  // the menu open over the ride.
   await page.route(/construction\.geojson/, async (route) => {
     await route.fulfill({
       contentType: "application/json",
@@ -391,11 +391,16 @@ test("a tap that lands on a construction site still just closes the stops menu",
     { timeout: budget(30_000) },
   );
   const at = (await handle.jsonValue()) as { x: number; y: number };
+  // the wait above found the permit under this very pixel
   await page.mouse.click(at.x, at.y);
-  // it did land on the site: its card is up
-  await expect(page.locator(".maplibregl-popup", { hasText: "Water main" })).toBeVisible();
   await expect(page.locator("#nav-stops-menu")).toBeHidden();
+  await page.waitForTimeout(500);
   await expect(page.locator("#nav-ask")).toBeHidden();
+  // No click card either. Only a click card has a close button. The hover
+  // card, which the pointer arriving over the permit may open, has none, and
+  // it used to stand in for the click card here, so this test passed or failed
+  // by the timing of mousemove.
+  await expect(page.locator(".maplibregl-popup .maplibregl-popup-close-button")).toHaveCount(0);
 });
 
 test("the camera takes itself back after the rider stops panning", async ({ page, context }) => {

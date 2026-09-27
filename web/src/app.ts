@@ -160,9 +160,26 @@ interface NominatimResult {
   name?: string;
 }
 
+// First, before anything that could throw: this module parsed and is running.
+// compat.js checks for it at DOMContentLoaded, and without it tells the rider
+// their browser can't run the app, rather than leaving a blank map.
+window.__appStarted = true;
+
 // ---------------------------------------------------------------------------
 // constants
 // ---------------------------------------------------------------------------
+
+/** How long a round trip can be, in the units the rider types in. The field's
+ * own min/max are advice a browser doesn't enforce on typing: Firebase Test
+ * Lab's explorer typed 44,303 and then 57,773 miles, and both were taken. A
+ * loop's corridor reaches half its length in every direction, so an absurd one
+ * would try to pull in every routing tile there is. Round numbers per unit
+ * system, not one limit converted: "31.1 mi" can't be both what the message
+ * says and what the check allows. */
+const LOOP_LIMITS: Record<"imperial" | "metric", [min: number, max: number]> = {
+  imperial: [0.5, 30],
+  metric: [1, 50],
+};
 
 // ---------------------------------------------------------------------------
 // Safety classes told apart by more than hue
@@ -1243,6 +1260,23 @@ async function requestLoop(): Promise<void> {
   if (ticket.stale()) return;
   const errBox = el<HTMLDivElement>("error");
   errBox.style.display = "none";
+  // the distance first: an impossible one shouldn't ask for the rider's
+  // location before saying so
+  const typed = Number(el<HTMLInputElement>("loop-dist").value);
+  if (!Number.isFinite(typed) || typed <= 0) {
+    errBox.textContent = `How far would you like to ride? Enter a distance in ${unitName()}.`;
+    errBox.style.display = "block";
+    return;
+  }
+  const [loopMin, loopMax] = LOOP_LIMITS[getUnits()];
+  if (typed < loopMin || typed > loopMax) {
+    errBox.textContent =
+      `A round trip can be ${loopMin} to ${loopMax} ${unitShort()} long. ` +
+      "How far would you like to ride?";
+    errBox.style.display = "block";
+    return;
+  }
+  const targetM = toMeters(typed);
   if (!start) {
     // A round trip starts where you are, so find that rather than refusing.
     // Telling someone to "click the map to set a start point first" is asking
@@ -1255,13 +1289,6 @@ async function requestLoop(): Promise<void> {
   }
   await poisReady;
   if (ticket.stale()) return;
-  const typed = Number(el<HTMLInputElement>("loop-dist").value);
-  if (!Number.isFinite(typed) || typed <= 0) {
-    errBox.textContent = `How far would you like to ride? Enter a distance in ${unitName()}.`;
-    errBox.style.display = "block";
-    return;
-  }
-  const targetM = toMeters(typed);
   const km = targetM / 1000;
   const kind = el<HTMLSelectElement>("loop-stop").value;
   // null is "no stop wanted" — the router picks a turnaround geometrically,
@@ -5850,6 +5877,11 @@ el<HTMLButtonElement>("nav-hazard").addEventListener("click", () => {
   pref.value = getUnits();
   const syncUnitLabels = (): void => {
     el<HTMLSpanElement>("loop-unit").textContent = unitShort();
+    // the field's own limits, in the unit it's typed in (a phone keyboard and
+    // the spinner arrows respect these; the check in the loop planner is the
+    // one that holds)
+    const loopDist = el<HTMLInputElement>("loop-dist");
+    [loopDist.min, loopDist.max] = LOOP_LIMITS[getUnits()].map(String) as [string, string];
     // The walking budget is stored in metres (the router's unit) and its
     // options keep those values; only what they read as follows the rider.
     // Feet round to tens: "330 ft" is a figure, "328 ft" is a conversion.
@@ -6320,6 +6352,8 @@ declare global {
      * never stops is a leak; before this hook the test counted MapLibre's
      * private _listeners, which the next upgrade could quietly empty. */
     __panelPaintsWaiting?: number;
+    /** Set as app.js starts running; compat.js reads it (see there). */
+    __appStarted?: boolean;
     _map?: MLMap;
   }
 }

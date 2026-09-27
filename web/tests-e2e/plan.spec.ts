@@ -105,6 +105,23 @@ async function routeMeters(page: Page): Promise<number> {
   return n;
 }
 
+test("a round trip of an impossible length is refused before anything else", async ({ page }) => {
+  // Firebase Test Lab's explorer typed 44,303 miles and the field took it. A
+  // loop's corridor is half its length in every direction, so that would have
+  // pulled in every routing tile there is. And no location prompt first: the
+  // distance is checked before the planner asks where the rider is.
+  await page.goto("/");
+  await page.waitForFunction(() => window._map !== undefined, null, { timeout: budget(60_000) });
+  await page.locator("#loop-dist").fill("44303");
+  await page.locator("#loop-btn").click();
+  await expect(page.locator("#error")).toContainText("A round trip can be 0.5 to 30 mi long");
+  await expect(page.locator("#loop-dist")).toHaveAttribute("max", "30");
+  // and the edge of what it allows is allowed
+  await page.locator("#loop-dist").fill("30");
+  await page.locator("#loop-btn").click();
+  await expect(page.locator("#error")).not.toContainText("A round trip can be");
+});
+
 test("plan a ride entirely with the mouse: pick a start, then a destination", { tag: "@live" }, async ({ page }) => {
   await boot(page, HOME_VIEW);
 

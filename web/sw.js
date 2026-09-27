@@ -19,6 +19,8 @@ const ASSETS = [
   // was) is exactly the one a first offline load would be missing. A test asserts
   // this list covers the import graph, so the next one cannot be forgotten.
   "app.js",
+  // the old-browser notice runs before app.js, and must be there when app.js can't
+  "compat.js",
   // MapLibre itself, vendored: maplibre.js imports maplibre-gl.mjs, which
   // imports the shared chunk and starts the worker from its own URL. Missing any
   // one, a first offline load has no map. A test reads the vendored module for
