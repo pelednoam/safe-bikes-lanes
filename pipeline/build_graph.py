@@ -28,6 +28,7 @@ import numpy as np
 import osmnx as ox
 import pandas as pd
 import shapely
+import weights
 from elevation import ElevationSampler
 from shapely.geometry import LineString, Point
 
@@ -384,38 +385,9 @@ def add_contraflow_edges(graph: nx.MultiDiGraph) -> int:
     return added
 
 
-def facility_multiplier(
-    cls: str,
-    road_cls: str,
-    busy: bool,
-    table: Mapping[str, float],
-    busy_lane: float,
-    busy_buffered: float,
-) -> float:
-    """What riding an edge of class `cls` costs per metre, for one profile.
-
-    Two rules on top of the class table:
-
-    On a busy road, paint buys little: a lane or buffered lane there has its own
-    (higher) price, and a sharrow — a marking, not a space — buys nothing, so it
-    costs what the busy road costs. It used to cost 6.0, a quarter of the bare
-    arterial it is painted on.
-
-    And paint can only help. A marked facility never costs more than the same
-    street without it: a residential street was 1.4 bare, 3.0 with a painted
-    lane and 6.0 with sharrows, so the router steered families off quiet streets
-    because someone had improved them. `road_cls` is the street's own class
-    (classify_road), and the class shown to riders stays the facility.
-    """
-    m = table[cls]
-    if busy:
-        if cls == "lane":
-            m = busy_lane
-        elif cls == "buffered":
-            m = busy_buffered
-        elif cls == "sharrow":
-            m = table["busy_street"]
-    return min(m, table[road_cls])
+# The one Python copy of the pricing rule, shared with the browser's twin
+# through the parity test (see weights.py).
+facility_multiplier = weights.facility_multiplier
 
 
 # ---------------------------------------------------------------------------

@@ -1,5 +1,6 @@
 import { CARTO_ATTRIBUTION, CARTO_MAXZOOM, CARTO_TILES, createBasemap, STYLE_URL, VENDORED_FONT_STACK, } from "./basemap.js";
 import { maplibregl } from "./maplibre.js";
+import { CLASS_COLORS } from "./weights.gen.js";
 import { downloadOffline } from "./tilecache.js";
 import { askForRideNotifications, isNativeApp, isNewerAppVersion, keepScreenOn, lastNativeSpeechError, locationAdvice, minimizeApp, nativeLocationAllowed, nativeSpeak, nativeStopSpeech, onAndroidBack, rideLocationState, setSystemBarsDark, startDownload, startBackgroundWatcher, stopBackgroundWatcher, webVoiceCount, } from "./native.js";
 import { GEOCODE_DEBOUNCE_MS, geocodeDelayMs, matchScore, metresBetween, rank as rankSearch, describe as describeRow, worthGeocoding, } from "./search.js";
@@ -24,18 +25,6 @@ import { drawRideCard, drawTotalsCard, rideShareText, totalsShareText } from "./
 // ---------------------------------------------------------------------------
 // constants
 // ---------------------------------------------------------------------------
-const CLASS_COLORS = {
-    path: "#1a9850",
-    separated: "#66bd63",
-    buffered: "#a6d96a",
-    quiet_street: "#d9ef8b",
-    service: "#d9ef8b",
-    lane: "#fee08b",
-    sharrow: "#fdae61",
-    moderate_street: "#f46d43",
-    busy_street: "#d73027",
-    unpaved: "#a6761d",
-};
 // ---------------------------------------------------------------------------
 // Safety classes told apart by more than hue
 //

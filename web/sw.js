@@ -51,6 +51,7 @@ const ASSETS = [
   "tiles.js",
   "types.js",
   "units.js",
+  "weights.gen.js",
   "manifest.json",
   "fonts/Barlow-400.woff2",
   "fonts/Barlow-500.woff2",

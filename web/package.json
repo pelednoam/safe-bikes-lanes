@@ -16,7 +16,8 @@
     "coverage:app": "npm run test-data && playwright test --config=playwright.coverage.config.ts --reporter=list",
     "vendor": "cd node_modules/maplibre-gl/dist && cp maplibre-gl.mjs maplibre-gl-shared.mjs maplibre-gl-worker.mjs maplibre-gl.css ../../..",
     "test:coverage": "vitest run --coverage",
-    "test-data": "bash scripts/test-data.sh"
+    "test-data": "bash scripts/test-data.sh",
+    "gen-weights": "node scripts/gen-weights.mjs"
   },
   "devDependencies": {
     "@capacitor/cli": "^8.5.2",

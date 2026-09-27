@@ -2,66 +2,17 @@
 // (web/data/graph.json v2, written by pipeline/export_web.py).
 // All weighting happens here, from raw per-edge components — so rider
 // profiles, flat preference, and personal "sketchy" marks apply instantly.
+import { CLASS_COLORS, PROFILES } from "./weights.gen.js";
 import { bearingDeg } from "./nav.js";
 import { fmtDist } from "./units.js";
-export const PROFILES = {
-    young_kids: {
-        id: "young_kids",
-        label: "young kids",
-        paceKmh: 8,
-        mult: {
-            path: 1.0, separated: 1.0, buffered: 2.0, lane: 3.0, quiet_street: 1.4,
-            service: 2.0, sharrow: 6.0, moderate_street: 8.0, busy_street: 25.0,
-            unpaved: 2.0,
-        },
-        busyLane: 10.0,
-        busyBuffered: 6.0,
-        penScale: 1.0,
-    },
-    older_kids: {
-        id: "older_kids",
-        label: "older kids",
-        paceKmh: 11,
-        mult: {
-            path: 1.0, separated: 1.0, buffered: 1.5, lane: 2.0, quiet_street: 1.2,
-            service: 1.6, sharrow: 3.5, moderate_street: 4.0, busy_street: 12.0,
-            unpaved: 1.5,
-        },
-        busyLane: 5.0,
-        busyBuffered: 3.0,
-        penScale: 0.6,
-    },
-    solo: {
-        id: "solo",
-        label: "solo",
-        paceKmh: 16,
-        mult: {
-            path: 1.0, separated: 1.0, buffered: 1.1, lane: 1.3, quiet_street: 1.1,
-            service: 1.3, sharrow: 2.0, moderate_street: 2.5, busy_street: 6.0,
-            unpaved: 1.2,
-        },
-        busyLane: 2.5,
-        busyBuffered: 1.8,
-        penScale: 0.3,
-    },
-};
+// The profiles and class colours come from pipeline/safety_model.json, shared
+// with the pipeline (weights.gen.ts is generated from it).
+export { PROFILES };
 /** Next-milder profile, used for the "Balanced" alternative. */
 const MILDER = {
     young_kids: "older_kids",
     older_kids: "solo",
     solo: null,
-};
-const CLASS_COLORS = {
-    path: "#1a9850",
-    separated: "#66bd63",
-    buffered: "#a6d96a",
-    quiet_street: "#d9ef8b",
-    service: "#d9ef8b",
-    lane: "#fee08b",
-    sharrow: "#fdae61",
-    moderate_street: "#f46d43",
-    busy_street: "#d73027",
-    unpaved: "#a6761d",
 };
 const CAUTION_CLASSES = new Set([
     "sharrow",
@@ -350,6 +301,26 @@ export class PointIndex {
 // ---------------------------------------------------------------------------
 // router
 // ---------------------------------------------------------------------------
+/** What riding an edge of class `cls` costs per metre for `profile`: the class
+ * price, except that on a busy road paint buys little (a lane or buffered lane
+ * has its own price, and a sharrow costs what the busy road costs), and paint
+ * can only help: never more than the street's own class, `road`, would cost.
+ *
+ * The pipeline's twin is facility_multiplier in pipeline/weights.py, which
+ * prices graph.pkl the same way. tests/weights.test.ts runs both over every
+ * combination and fails if they disagree on any. */
+export function facilityMultiplier(profile, cls, road, busy) {
+    let mult = profile.mult[cls];
+    if (busy && cls === "lane")
+        mult = profile.busyLane;
+    if (busy && cls === "buffered")
+        mult = profile.busyBuffered;
+    if (busy && cls === "sharrow")
+        mult = profile.mult.busy_street;
+    if (road !== undefined)
+        mult = Math.min(mult, profile.mult[road]);
+    return mult;
+}
 export class Router {
     constructor(data) {
         this.sketchy = new Set();
@@ -430,17 +401,8 @@ export class Router {
      * marking never costs more than its street without it (e[10], the street's
      * own class): a painted lane must not make a quiet street costlier. */
     classMult(profile, e, cls) {
-        let mult = profile.mult[cls];
-        if (e[9] === 1 && cls === "lane")
-            mult = profile.busyLane;
-        if (e[9] === 1 && cls === "buffered")
-            mult = profile.busyBuffered;
-        if (e[9] === 1 && cls === "sharrow")
-            mult = profile.mult.busy_street;
         const road = e[10] === undefined ? undefined : this.g.classes[e[10]];
-        if (road !== undefined)
-            mult = Math.min(mult, profile.mult[road]);
-        return mult;
+        return facilityMultiplier(profile, cls, road, e[9] === 1);
     }
     /** Ride-equivalent cost of walking each edge (class-independent: pushing a
      * bike on the sidewalk is low-stress even beside a busy street). */

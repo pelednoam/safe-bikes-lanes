@@ -21,6 +21,7 @@ import {
   VENDORED_FONT_STACK,
 } from "./basemap.js";
 import { maplibregl } from "./maplibre.js";
+import { CLASS_COLORS } from "./weights.gen.js";
 import { downloadOffline } from "./tilecache.js";
 import type { NativeFix } from "./native.js";
 import {
@@ -162,19 +163,6 @@ interface NominatimResult {
 // ---------------------------------------------------------------------------
 // constants
 // ---------------------------------------------------------------------------
-
-const CLASS_COLORS: Record<ProtectionClass, string> = {
-  path: "#1a9850",
-  separated: "#66bd63",
-  buffered: "#a6d96a",
-  quiet_street: "#d9ef8b",
-  service: "#d9ef8b",
-  lane: "#fee08b",
-  sharrow: "#fdae61",
-  moderate_street: "#f46d43",
-  busy_street: "#d73027",
-  unpaved: "#a6761d",
-};
 
 // ---------------------------------------------------------------------------
 // Safety classes told apart by more than hue

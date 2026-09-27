@@ -8,6 +8,8 @@ protected path" — the router will detour up to that ratio to avoid it.
 from pathlib import Path
 from typing import Final
 
+import weights
+
 # The shape of what the pipeline writes into web/data. web/data isn't in git —
 # it's a release tarball a deploy downloads — so code and data travel separately
 # and can arrive mismatched. Bump this whenever the app or a city page starts
@@ -136,45 +138,33 @@ WZDX_KEY_ENV: Final[str] = "MASSDOT_WZDX_API_KEY"
 # weight = length_m * class_multiplier * crash_factor + node_penalties
 # ---------------------------------------------------------------------------
 
-# Protection classes, best → worst. Every edge gets exactly one.
-CLASS_MULTIPLIER: Final[dict[str, float]] = {
-    "path": 1.0,            # off-street multi-use path / cycleway
-    "separated": 1.0,       # physically separated on-street lane
-    "buffered": 2.0,        # painted buffer, no physical protection
-    "lane": 3.0,            # plain painted lane
-    "quiet_street": 1.4,    # residential / living street / shared street, no facility
-    "service": 2.0,         # alleys, parking aisles (fine but awkward)
-    "sharrow": 6.0,         # shared-lane marking on a real road
-    "moderate_street": 8.0, # tertiary etc., no facility
-    "busy_street": 25.0,    # primary/secondary/trunk, no protection: near-ban
-    # Off-street but dirt, grass, sand or loose gravel: no cars, but slow and
-    # hard work on small wheels, and some of it is a horse trail. Between a
-    # quiet street and a painted lane, and still inside SAFE_MULT_MAX — it is
-    # safe from traffic, which is what "kid-safe" measures.
-    "unpaved": 2.0,
-}
-
-# On busy/moderate streets a painted lane only helps so much with kids —
-# these override the base class when the underlying road is busy.
-BUSY_ROAD_LANE_MULTIPLIER: Final[float] = 10.0      # painted lane on primary/secondary
-BUSY_ROAD_BUFFERED_MULTIPLIER: Final[float] = 6.0   # buffered lane on primary/secondary
-
-# Solo mode (riding without the kids): still safety-leaning, much milder.
-SOLO_CLASS_MULTIPLIER: Final[dict[str, float]] = {
-    "path": 1.0,
-    "separated": 1.0,
-    "buffered": 1.1,
-    "lane": 1.3,
-    "quiet_street": 1.1,
-    "service": 1.3,
-    "sharrow": 2.0,
-    "moderate_street": 2.5,
-    "busy_street": 6.0,
-    "unpaved": 1.2,  # an adult rides a dirt path fine, if a little slower
-}
-SOLO_BUSY_ROAD_LANE_MULTIPLIER: Final[float] = 2.5
-SOLO_BUSY_ROAD_BUFFERED_MULTIPLIER: Final[float] = 1.8
-SOLO_PENALTY_SCALE: Final[float] = 0.3  # crossing penalties scaled down when solo
+# Protection classes, best → worst, and what each rider profile pays per metre
+# to ride them: pipeline/safety_model.json, the one place these numbers live.
+# The browser router reads the same file (web/src/weights.gen.ts), and a web
+# unit test fails if the two sides price any edge differently. What the young
+# kids numbers say:
+#   path / separated 1.0   off-street, or physically separated on-street
+#   buffered 2.0           painted buffer, no physical protection
+#   lane 3.0               plain painted lane
+#   quiet_street 1.4       residential / living / shared street, no facility
+#   service 2.0            alleys, parking aisles: fine but awkward
+#   sharrow 6.0            a marking on a real road
+#   moderate_street 8.0    tertiary etc., no facility
+#   busy_street 25.0       primary/secondary/trunk, unprotected: near-ban
+#   unpaved 2.0            dirt, grass, sand, loose gravel. No cars, but slow and
+#                          hard on small wheels, and some is horse trail: between
+#                          a quiet street and a painted lane, inside SAFE_MULT_MAX,
+#                          because "kid-safe" measures safety from traffic.
+# On a busy road a painted lane only helps so much (busyLane / busyBuffered), and
+# solo, riding without the kids, is still safety-leaning but much milder, with
+# crossing penalties scaled down (penScale).
+CLASS_MULTIPLIER: Final[dict[str, float]] = dict(weights.PROFILES["young_kids"]["mult"])
+BUSY_ROAD_LANE_MULTIPLIER: Final[float] = weights.PROFILES["young_kids"]["busyLane"]
+BUSY_ROAD_BUFFERED_MULTIPLIER: Final[float] = weights.PROFILES["young_kids"]["busyBuffered"]
+SOLO_CLASS_MULTIPLIER: Final[dict[str, float]] = dict(weights.PROFILES["solo"]["mult"])
+SOLO_BUSY_ROAD_LANE_MULTIPLIER: Final[float] = weights.PROFILES["solo"]["busyLane"]
+SOLO_BUSY_ROAD_BUFFERED_MULTIPLIER: Final[float] = weights.PROFILES["solo"]["busyBuffered"]
+SOLO_PENALTY_SCALE: Final[float] = weights.PROFILES["solo"]["penScale"]
 
 # Crash overlay: factor = 1 + CRASH_WEIGHT * bike_crashes_per_100m (capped).
 CRASH_WEIGHT: Final[float] = 0.6
@@ -369,18 +359,7 @@ CROSSING_MIN_M: Final[float] = 5.0
 SPOT_FIX_MAX_M: Final[float] = 60.0
 
 # Display colors (also used by the frontend legend).
-CLASS_COLOR: Final[dict[str, str]] = {
-    "path": "#1a9850",
-    "separated": "#66bd63",
-    "buffered": "#a6d96a",
-    "quiet_street": "#d9ef8b",
-    "service": "#d9ef8b",
-    "lane": "#fee08b",
-    "sharrow": "#fdae61",
-    "moderate_street": "#f46d43",
-    "busy_street": "#d73027",
-    "unpaved": "#a6761d",  # brown: off the road, but not a paved path
-}
+CLASS_COLOR: Final[dict[str, str]] = dict(weights.CLASS_COLOR)  # safety_model.json
 
 # The class table the routing tiles index into, in index order. Append-only:
 # a tile edge carries a class *index*, and a client built before a class existed
