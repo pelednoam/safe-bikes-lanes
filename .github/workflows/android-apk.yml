@@ -202,6 +202,10 @@ jobs:
       contents: read
     env:
       PROJECT: safe-bikes-lanes
+      # Results go to a bucket in our own project: Test Lab's default bucket
+      # needs write access this service account deliberately doesn't have
+      # (only Editor on the whole project would grant it).
+      RESULTS_BUCKET: safe-bikes-lanes-testlab
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -241,6 +245,7 @@ jobs:
             --project "$PROJECT" \
             --type robo \
             --app family-bike-router.apk \
+            --results-bucket "$RESULTS_BUCKET" \
             ${{ steps.devices.outputs.flags }} \
             --timeout 5m \
             --client-details matrixLabel="${{ github.ref_name }} ${{ github.sha }}" \
