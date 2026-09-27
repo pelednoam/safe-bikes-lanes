@@ -170,6 +170,32 @@ test("Reset while the map is loading means reset", async ({ page }) => {
   expect(await drawnRoute(page)).toHaveLength(0);
 });
 
+test("Reset just as a plan lands leaves nothing of it behind", async ({ page }) => {
+  // A finished plan paints its panel once its line is drawn, up to 3 s later
+  // (paintPanelWithRoute). Reset withdrew plans still computing but not that
+  // pending paint, so a Reset in the gap cleared the trip and then the paint put
+  // its summary back: no route, no cards, and a summary of the trip just
+  // cleared. It needs a slow machine to happen by accident (it failed the deploy
+  // gate once, and a loaded dev box once), so here it happens on purpose: Reset
+  // the moment the route's line has data, before its panel has been painted.
+  await boot(page, DAVIS_KENDALL);
+  await page.evaluate(async () => {
+    const src = window._map?.getSource("route") as
+      | { getData(): Promise<{ features?: unknown[] }> }
+      | undefined;
+    for (;;) {
+      if (((await src?.getData())?.features ?? []).length > 0) break;
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    document.getElementById("reset")?.click();
+  });
+  await settled(page);
+  // past the paint's own 3 s deadline
+  await page.waitForTimeout(3500);
+  await expect(page.locator(".option-card")).toHaveCount(0);
+  await expect(page.locator("#summary"), "a cleared trip's summary came back").toBeHidden();
+});
+
 test("Reset while waiting for a location is not an error", async ({ page }) => {
   await holdLocation(page, false);
   // a destination only: the start is "Your location", which is still coming

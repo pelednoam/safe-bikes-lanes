@@ -3852,6 +3852,10 @@ function resetPlan(clearLink = true): void {
   // withdraw anything still planning: it would otherwise finish and draw the
   // trip just cleared back onto an empty map
   routeLane.cancel();
+  // and a plan that has finished but not yet painted its panel: the paint waits
+  // for the line to draw (up to 3 s), and a Reset in that gap got its summary
+  // put back over the empty map
+  cancelPanelPaint?.();
   el<HTMLDivElement>("loading").style.display = "none";
   start?.remove();
   end?.remove();
