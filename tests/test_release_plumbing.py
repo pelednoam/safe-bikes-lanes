@@ -237,8 +237,12 @@ def test_the_refresh_does_not_leave_its_token_on_disk() -> None:
     for step in checkouts:
         assert (step.get("with") or {}).get("persist-credentials") is False
     with_token = [s for s in steps(REFRESH_WORKFLOW) if "GH_TOKEN" in (s.get("env") or {})]
-    assert [s.get("run") for s in with_token] == ["scripts/publish-data.sh"], (
-        "only the publish step should hold a token"
+    # Only the two steps that write releases hold a token: the publish, and the
+    # source archive after it. The archive's is one standard-library-only
+    # Python call, isolated from the installed packages like the publish's own.
+    archive = "python3 -I -S pipeline/source_archive.py upload data/raw"
+    assert [s.get("run") for s in with_token] == ["scripts/publish-data.sh", archive], (
+        "only the publish and archive steps should hold a token"
     )
     # and that step's own Python does not load the installed packages' .pth hooks
     publish = PUBLISH.read_text(encoding="utf-8")
