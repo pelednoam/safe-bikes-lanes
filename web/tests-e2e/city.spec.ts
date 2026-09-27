@@ -507,9 +507,9 @@ test("the aerial view keeps the colours, and the street names, on top of it", as
       id,
     );
 
-  // The street names are a group of vector label layers now (labels-*), not one
-  // raster: Carto stamps "API KEY REQUIRED" on its raster label tiles. They are
-  // installed the first time the photo is shown, so "none shown" is the check.
+  // The street names are a group of vector label layers (labels-*), from the
+  // same basemap file as the rest. They are installed the first time the photo
+  // is shown, so "none shown" is the check.
   const photoLabels = (): Promise<{ n: number; shown: number; onTop: boolean }> =>
     page.evaluate(() => {
       const m = window._map!;
@@ -536,7 +536,7 @@ test("the aerial view keeps the colours, and the street names, on top of it", as
   expect(await layer("aerial")).toBe("visible");
   // street names, because orthophotos carry none and this page's basemap is
   // deliberately label-free — without them you can see a red line but can't say
-  // which street it is. Polled: the style is fetched on first use.
+  // which street it is. Polled: the layers are added on first use.
   await expect
     .poll(async () => {
       const l = await photoLabels();

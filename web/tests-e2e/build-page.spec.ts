@@ -509,28 +509,24 @@ test("an empty result says so instead of showing nothing", async ({ page }) => {
 test("the page loads no third-party code and reports no CSP refusals", async ({ page }) => {
   test.slow();
   const hosts = new Set<string>();
+  let basemapReads = 0;
   page.on("request", (r) => {
     // data: and blob: have no host; they are this page's own bytes
     const u = new URL(r.url());
     if (u.protocol === "http:" || u.protocol === "https:") hosts.add(u.host);
+    if (u.pathname.endsWith("/basemap.pmtiles")) basemapReads++;
   });
   const { errors } = await open(page);
   await page.locator(".row").first().click();
   await page.waitForTimeout(2500);
 
-  // Only this origin and Carto's basemap. Any other host would mean a
-  // planner's session is being seen by someone we didn't name.
-  //
-  // Matched against a set rather than a fixed list: the vector basemap fetches
-  // its style from basemaps.cartocdn.com and its TileJSON, glyphs and tiles
-  // from tiles(-a…d).basemaps.cartocdn.com, and MapLibre picks the sibling per
-  // tile — so which of them show up depends on where the viewport lands.
-  const allowed = (h: string): boolean =>
-    h === "127.0.0.1:8321" || /^(tiles(-[a-d])?\.)?basemaps\.cartocdn\.com$/.test(h);
-  expect([...hosts].filter((h) => !allowed(h)).sort()).toEqual([]);
+  // Only this origin: the basemap is our own file, served beside the page.
+  // Any other host would mean a planner's session is being seen by someone
+  // we didn't name.
+  expect([...hosts].sort()).toEqual(["127.0.0.1:8321"]);
   // ...and the basemap did load, rather than the page quietly requesting no
   // tiles at all and passing the check above by doing nothing.
-  expect([...hosts].some((h) => h.endsWith("basemaps.cartocdn.com"))).toBe(true);
+  expect(basemapReads, "the page never read basemap.pmtiles").toBeGreaterThan(0);
 
   // No script from anywhere but here.
   const srcs = await page.locator("script[src]").evaluateAll((ss) =>
@@ -974,13 +970,21 @@ test("an empty ranking leaves nothing drawn on the map", async ({ page }) => {
   // — hit-testing ignores opacity, so it returns all 900-odd features either way
   // and an assertion on it passes without meaning anything. Compare the canvas
   // against the same canvas with the layer switched off instead: same camera,
-  // same tiles, so identical bytes mean the layer contributed no pixels.
-  await page.waitForTimeout(1200);
+  // same tiles, so identical bytes mean the layer contributed no pixels. Only
+  // once the map has settled, though: a basemap tile landing between the two
+  // shots is a difference the layer didn't make.
+  const settled = async (): Promise<void> => {
+    await expect
+      .poll(() => page.evaluate(() => window._map?.loaded() === true), { timeout: budget(30_000) })
+      .toBe(true);
+    await page.waitForTimeout(1200);
+  };
+  await settled();
   const withLayer = await page.locator("#map").screenshot();
   await page.evaluate(() => {
     window._map?.setLayoutProperty("projects", "visibility", "none");
   });
-  await page.waitForTimeout(1200);
+  await settled();
   const without = await page.locator("#map").screenshot();
   expect(Buffer.compare(withLayer, without), "the layer still drew something").toBe(0);
 });

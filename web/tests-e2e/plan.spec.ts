@@ -476,8 +476,8 @@ test("the planner asks nothing of OpenStreetMap's donated tile servers", async (
   // tile.openstreetmap.org and Nominatim are donated infrastructure whose usage
   // policies rule out a public product building on them — they block by
   // referrer, and when that happens the map breaks for everybody at once. The
-  // basemap moved to Carto; geocoding still uses Nominatim, deliberately, but
-  // only on an explicit search and it is debounced and cached.
+  // basemap is our own file now; geocoding still uses Nominatim, deliberately,
+  // but only on an explicit search and it is debounced and cached.
   const tiles: string[] = [];
   page.on("request", (r) => {
     if (r.url().includes("tile.openstreetmap.org")) tiles.push(r.url());

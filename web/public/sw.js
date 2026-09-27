@@ -92,13 +92,11 @@ const BROWSE_CACHE = "bike-tiles-browse-v1";
 const BROWSE_MAX = 1500;
 const TRIM_EVERY = 25;
 
-// Carto's vector tiles and styles are deliberately absent: the page loads them
-// through its own cache (tilecache.ts), and handling them here as well would
-// store every tile twice. What is left is what the city and build pages draw
-// from elsewhere — Carto's glyph server and aerial imagery — and
-// tile.openstreetmap.org, only so raster tiles an older build cached still
-// serve offline; nothing requests it any more.
-const TILE_HOSTS = ["tile.openstreetmap.org", "tiles.basemaps.cartocdn.com", "tiles.arcgis.com"];
+// The basemap is absent: the page reads basemap.pmtiles tile by tile through
+// its own cache (tilecache.ts), and handling it here as well would store every
+// tile twice. What is left is aerial imagery, and tile.openstreetmap.org only so
+// raster tiles an older build cached still serve offline; nothing requests it.
+const TILE_HOSTS = ["tile.openstreetmap.org", "tiles.arcgis.com"];
 
 /** A downloaded copy first, then a browsed one. */
 async function lookup(key) {
@@ -199,6 +197,10 @@ function networkFirst(event, req) {
 
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
+  // The basemap file is read by byte range, a tile at a time (basemap.ts). A
+  // cache can't keep a partial response, and a detour through the network-first
+  // path below would only slow every tile. The page caches the tiles themselves.
+  if (url.pathname.endsWith(".pmtiles")) return;
   if (url.origin === self.location.origin) {
     const shell = event.request.mode === "navigate" || isShell(url);
     if (shell && event.clientId && staleClients.has(event.clientId)) {

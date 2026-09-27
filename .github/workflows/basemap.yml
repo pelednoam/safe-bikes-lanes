@@ -1,0 +1,31 @@
+name: Publish the basemap
+
+# Cuts this region's basemap out of Protomaps' daily OpenStreetMap build and
+# publishes it as basemap.pmtiles on the `basemap` release, which the site
+# deploy serves. Monthly: streets don't move faster than that, and a
+# workflow_dispatch refreshes it by hand. The site picks the new file up at its
+# next deploy (any push to main, including the weekly data refresh's), which is
+# soon enough for streets. See scripts/publish-basemap.sh.
+on:
+  schedule:
+    - cron: "17 6 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      # the release it publishes to, and nothing else
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Cut and publish the basemap
+        run: scripts/publish-basemap.sh
+        env:
+          GH_TOKEN: ${{ github.token }}

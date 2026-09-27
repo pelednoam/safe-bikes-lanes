@@ -2,6 +2,8 @@
 import { expect, test } from "@playwright/test";
 import type { Map as MLMap } from "maplibre-gl";
 
+import { serveBasemap } from "./basemap.js";
+
 declare global {
   interface Window {
     _map?: MLMap;
@@ -13,6 +15,7 @@ type Page = import("@playwright/test").Page;
 
 /** Make the page believe it runs inside the native app, and spy on SW register. */
 async function nativeShim(page: Page): Promise<void> {
+  await serveBasemap(page.context());
   await page.addInitScript(() => {
     const noop = async (): Promise<void> => undefined;
     window.Capacitor = {

@@ -10,13 +10,7 @@
 // evidence would be the most misleading thing on the page.
 import type { Map as MLMap, Marker } from "maplibre-gl";
 
-import {
-  CARTO_ATTRIBUTION,
-  CARTO_GLYPHS,
-  CARTO_MAXZOOM,
-  CARTO_TILES,
-  createBasemap,
-} from "./basemap.js";
+import { BASEMAP_SOURCE, basemapSource, createBasemap, glyphsUrl } from "./basemap.js";
 import { maplibregl } from "./maplibre.js";
 import { fmtDist } from "./units.js";
 
@@ -697,26 +691,15 @@ async function start(): Promise<void> {
 
   const map = new maplibregl.Map({
     container: "map",
-    // Carto's vector positron rather than their raster light_all, which now
-    // comes back with "API KEY REQUIRED" stamped across the image.
     // A local style, so this page's own layers exist the moment the map loads.
-    // Pointing `style` straight at Carto's URL made map.on("load") wait on a
-    // ~100 KB fetch, and everything below runs in that handler — so on a slow
-    // network the page sat empty, and anything that touched a layer before the
-    // fetch landed threw. The basemap is fetched separately and slotted in
-    // underneath (see basemap.ts).
+    // The basemap's layers are built in the page and slotted in underneath
+    // them (see basemap.ts); its tiles come from the site's own file.
     style: {
       version: 8,
       sources: {
-      carto: {
-        type: "vector",
-        tiles: CARTO_TILES,
-        minzoom: 0,
-        maxzoom: CARTO_MAXZOOM,
-        attribution: CARTO_ATTRIBUTION,
+      [BASEMAP_SOURCE]: basemapSource(),
       },
-      },
-      glyphs: CARTO_GLYPHS,
+      glyphs: glyphsUrl(),
       layers: [{ id: "ground", type: "background", paint: { "background-color": "#e9e6e1" } }],
     },
     center: [-71.1, 42.38],

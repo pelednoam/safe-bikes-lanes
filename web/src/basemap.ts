@@ -1,262 +1,177 @@
 // ---------------------------------------------------------------------------
-// Carto's vector basemaps — and why this app stopped using their raster ones.
+// The basemap: this region's streets, water, parks and names, from our own file.
 //
-// As of September 2026 the raster tiles at basemaps.cartocdn.com/light_all
-// (and dark_all, light_nolabels, dark_nolabels) come back with "API KEY
-// REQUIRED / carto.com/basemaps/apikey" stamped diagonally across the image.
-// Nothing 404s and nothing throws: the watermark is baked into the PNG, so a
-// health check that reads the status code and the content type sees a perfectly
-// good tile. The only way to catch this class of breakage is to look at the
-// pixels.
+// It came from Carto until September 2026. First their raster tiles came back
+// with "API KEY REQUIRED" stamped across every one, found by users, not by
+// monitoring, because nothing 404s and nothing throws. Then the map ran on
+// Carto's vector tiles, still a third party's servers and terms. Now the tiles
+// are one file, basemap.pmtiles, cut from Protomaps' OpenStreetMap build for
+// this region (scripts/publish-basemap.sh) and served by the site itself. Its
+// look is Protomaps' light and dark styles, built here in the page rather
+// than fetched, so there's no style to download or cache either.
 //
-// Carto's *vector* basemaps are still key-free and unstamped, and positron and
-// dark-matter are the very styles those raster tiles were rendered from — so
-// the map keeps the look it had rather than being approximated by another
-// vendor.
-//
-// Each theme's layers are injected once and then toggled by visibility, rather
+// Each theme's layers are added once and then toggled by visibility, rather
 // than swapped with map.setStyle, which would tear down and re-add every layer
-// this app puts on top — the route, the network, the overlays — on each flip.
+// this app puts on top (the route, the network, the overlays) on each flip.
 // Label-free mode is the same layers with the symbol ones hidden.
 // ---------------------------------------------------------------------------
 
-import type { LayerSpecification, Map as MLMap, StyleSpecification } from "maplibre-gl";
+import { layers as protomapsLayers, namedFlavor } from "@protomaps/basemaps";
+import type { LayerSpecification, Map as MLMap, VectorSourceSpecification } from "maplibre-gl";
+import { PMTiles } from "pmtiles";
 
-import { cachedStyle, installTileCache } from "./tilecache.js";
+import { isNativeApp } from "./native.js";
+import { type CacheDeps, installTileCache, TILE_TEMPLATE } from "./tilecache.js";
 
 export type BasemapTheme = "light" | "dark";
 
-/**
- * The vector tiles behind every Carto GL style (OpenMapTiles schema), named
- * directly rather than through their TileJSON.
- *
- * Declaring the source with `url` costs a round trip, and worse, makes the
- * whole style — and so map.on("load"), and so every layer a page adds in that
- * handler — wait on Carto answering. A page's own map is not Carto's to hold
- * up: named inline, those layers exist immediately and still exist if Carto
- * never answers at all.
- *
- * Carto serves these from four hosts and MapLibre picks one per tile; the
- * tile cache folds them back into a single key (see tileKey in tilecache.ts),
- * so an offline route cached against one host is found whichever host is asked
- * for next.
- */
-export const CARTO_TILES = [
-  "https://tiles-a.basemaps.cartocdn.com/vectortiles/carto.streets/v1/{z}/{x}/{y}.mvt",
-  "https://tiles-b.basemaps.cartocdn.com/vectortiles/carto.streets/v1/{z}/{x}/{y}.mvt",
-  "https://tiles-c.basemaps.cartocdn.com/vectortiles/carto.streets/v1/{z}/{x}/{y}.mvt",
-  "https://tiles-d.basemaps.cartocdn.com/vectortiles/carto.streets/v1/{z}/{x}/{y}.mvt",
-];
-export const CARTO_ATTRIBUTION = "© OpenStreetMap contributors © CARTO";
+/** The source every basemap layer draws from. */
+export const BASEMAP_SOURCE = "basemap";
 
-/** Vector tiles stop here; MapLibre overzooms them for closer views. Caching
- * for offline use only needs to go this deep — see routeTileUrls. */
-export const CARTO_MAXZOOM = 14;
+/** The file stops at zoom 14, as Carto's tiles did; MapLibre overzooms them for
+ * closer views, and the offline download only needs to go this deep. */
+export const BASEMAP_MAXZOOM = 14;
 
-/** Carto's own glyph server, for pages that do not vendor their glyphs. See
- * VENDORED_FONT_STACK for why the planner cannot use it. */
-export const CARTO_GLYPHS = "https://tiles.basemaps.cartocdn.com/fonts/{fontstack}/{range}.pbf";
+export const BASEMAP_ATTRIBUTION =
+  '<a href="https://protomaps.com">Protomaps</a> © <a href="https://openstreetmap.org/copyright">OpenStreetMap</a>';
 
-/** The planner's two basemaps. Exported for the offline download, which has to
- * store both: a rider can switch to night mode halfway through a ride. */
-export const STYLE_URL: Record<BasemapTheme, string> = {
-  light: "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
-  dark: "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
-};
+/** Where the site serves the basemap file: the Android app, which doesn't carry
+ * it, reads the site's copy. */
+const SITE_BASEMAP = "https://pelednoam.github.io/safe-bikes-lanes/basemap.pmtiles";
 
-/** Dark-matter's names are drawn light with a dark halo, for a dark basemap —
- * which is also what reads over aerial photography. */
-export const PHOTO_LABEL_STYLE_URL = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
+/** The basemap file for this page. Every page's bundle sits at the site root,
+ * beside the file, so it's found from the bundle's own address, from any page
+ * (/, /build/, /somerville/). */
+export function basemapUrl(): string {
+  return isNativeApp() ? SITE_BASEMAP : new URL(/* @vite-ignore */ "./basemap.pmtiles", import.meta.url).href;
+}
 
-/** The same basemaps with no symbol layers at all, for a page whose subject is
- * its own streets and whose basemap should stay quiet under them. */
-export const NOLABEL_STYLE_URL: Record<BasemapTheme, string> = {
-  light: "https://basemaps.cartocdn.com/gl/positron-nolabels-gl-style/style.json",
-  dark: "https://basemaps.cartocdn.com/gl/dark-matter-nolabels-gl-style/style.json",
-};
+/** The label glyphs this app ships (see VENDORED_FONT_STACK), for any page. */
+export function glyphsUrl(): string {
+  return `${new URL(/* @vite-ignore */ "./fonts/glyphs/", import.meta.url).href}{fontstack}/{range}.pbf`;
+}
+
+/** The basemap's source, for a page's style. */
+export function basemapSource(): VectorSourceSpecification {
+  return {
+    type: "vector",
+    tiles: [TILE_TEMPLATE],
+    maxzoom: BASEMAP_MAXZOOM,
+    attribution: BASEMAP_ATTRIBUTION,
+  };
+}
 
 /**
  * The one glyph stack this app ships (web/public/fonts/glyphs, Noto Sans: Latin,
  * Latin-1 and Extended-A, general punctuation, and the box/symbol ranges that
- * hold trail-difficulty marks — see ASSETS in sw.js).
+ * hold trail-difficulty marks; see ASSETS in sw.js).
  *
- * A style gets exactly one `glyphs` URL, and this app's has to stay the
- * vendored one: ride-mode street names are drawn from a symbol layer and have
- * to keep working with no network. Carto's own stacks name five fonts each
- * ("Montserrat Medium,Open Sans Bold,Noto Sans Regular,...") and MapLibre asks
- * its glyph server for that entire joined string as a single fontstack, which
- * the vendored directory does not have. Left alone, every basemap label would
- * request a range that 404s and simply not draw — no error, no missing tile,
- * just a map with no names on it.
- *
- * Every one of Carto's stacks already falls back to Noto Sans Regular, so
- * pointing them straight at it is the same typeface they intended, served
- * locally.
+ * A style gets exactly one `glyphs` URL, and it has to stay the vendored one:
+ * ride-mode street names are drawn from a symbol layer and have to keep working
+ * with no network. Protomaps' layers ask for Noto Sans Regular, Medium and
+ * Italic, some through an expression choosing between them. A stack the
+ * directory doesn't have would request ranges that 404, and those labels would
+ * simply not draw: no error, just a map with no names. So every label is drawn
+ * in the Regular the others are cut from.
  */
 export const VENDORED_FONT_STACK = ["Noto Sans Regular"];
 
-/** Layers drawing an icon out of Carto's sprite. They are the low-zoom city
- * dots (z<8), invisible at any zoom this app opens at, and dropping them means
- * the style needs no sprite — one fewer external URL to allow and to cache. */
-const SPRITE_LAYERS = /_dot_/;
+const layerId = (prefix: string, theme: BasemapTheme, id: string): string => `${prefix}-${theme}-${id}`;
 
-const layerId = (prefix: string, theme: BasemapTheme, id: string): string =>
-  `${prefix}-${theme}-${id}`;
-
-/** Re-identify, re-font and hide one theme's layers. */
-function themeLayers(
+/**
+ * One theme's layers, re-identified, re-fonted, and hidden until shown.
+ *
+ * No sprite: layers drawing only an icon (one-way arrows, route shields, POI
+ * pins) are left out, and those drawing an icon beside their text (town dots)
+ * keep the text. One fewer file to serve and cache, and the POIs this app
+ * shows are its own.
+ */
+export function basemapLayers(
   theme: BasemapTheme,
-  style: StyleSpecification,
-  textFont: string[] | undefined,
-  labelsOnly: boolean,
-  prefix: string,
+  opts: { labelsOnly?: boolean; flavor?: BasemapTheme; prefix?: string } = {},
 ): LayerSpecification[] {
+  const prefix = opts.prefix ?? "bm";
   const out: LayerSpecification[] = [];
-  for (const src of style.layers) {
-    if (SPRITE_LAYERS.test(src.id)) continue;
-    if (labelsOnly && src.type !== "symbol") continue;
+  const source = protomapsLayers(BASEMAP_SOURCE, namedFlavor(opts.flavor ?? theme), {
+    lang: "en",
+    labelsOnly: opts.labelsOnly ?? false,
+  });
+  for (const src of source) {
+    const layout: Record<string, unknown> = { ...(src.layout as object | undefined) };
+    if (layout["icon-image"] !== undefined) {
+      if (layout["text-field"] === undefined) continue;
+      delete layout["icon-image"];
+    }
+    if (layout["text-font"] !== undefined) layout["text-font"] = VENDORED_FONT_STACK;
+    layout["visibility"] = "none";
     // A LayerSpecification is a union discriminated on `type`; spreading and
     // re-typing keeps that narrowing rather than widening every branch.
-    const layer = { ...src, id: layerId(prefix, theme, src.id) } as LayerSpecification;
-    const layout: Record<string, unknown> = { ...(layer.layout as object | undefined) };
-    layout["visibility"] = "none";
-    if (textFont !== undefined && layout["text-font"] !== undefined) {
-      layout["text-font"] = textFont;
-    }
-    out.push({ ...layer, layout } as LayerSpecification);
+    out.push({ ...src, id: layerId(prefix, theme, src.id), layout } as LayerSpecification);
   }
   return out;
 }
 
-/** The style from Carto, or the copy kept from the last time it was fetched —
- * otherwise a cold start with no signal has tiles downloaded and nothing to
- * paint them with. See cachedStyle. */
-function fetchStyle(url: string): Promise<StyleSpecification> {
-  return cachedStyle<StyleSpecification>(url);
-}
+type AddProtocol = Parameters<typeof installTileCache>[0];
 
-type AddProtocol = Parameters<typeof installTileCache>[1];
-
-/** MapLibre's addProtocol, from the global build every page loads. */
+/** MapLibre's addProtocol, from the global maplibre.ts sets. Read rather than
+ * imported, so this module stays importable in unit tests, which have no map. */
 function globalAddProtocol(): AddProtocol | undefined {
   const lib = (globalThis as { maplibregl?: { addProtocol?: AddProtocol } }).maplibregl;
   return lib?.addProtocol;
 }
 
+/** The tile cache's link to the basemap file: tiles read out of it by byte
+ * range, one PMTiles reader per page. Null where there's no CacheStorage
+ * (only secure contexts have it), which the protocol can't do without. */
+let deps: CacheDeps | null | undefined;
+export function tileDeps(): CacheDeps | null {
+  if (deps !== undefined) return deps;
+  if (typeof caches === "undefined") return (deps = null);
+  const file = new PMTiles(basemapUrl());
+  return (deps = {
+    caches,
+    readTile: async (z, x, y, signal) => (await file.getZxy(z, x, y, signal))?.data,
+  });
+}
+
 export interface Basemap {
-  /**
-   * Fetch and inject one theme's layers, resolving once they are on the map.
-   *
-   * A vector basemap costs client CPU the raster one did not: its casings and
-   * labels are laid out here rather than arriving as finished pixels. What that
-   * buys and costs, measured rather than assumed: time to a *usable* map is
-   * unchanged — slightly better, with the deferral at the call site — because
-   * nothing here blocks the safety network. Time to a *fully painted* map is
-   * several seconds longer, consistently 8-9s against a raster baseline that
-   * varied from 2s to 8s run to run, so the gap is real but not worth quoting
-   * a single figure for.
-   *
-   * Two choices follow from that, both measured rather than assumed:
-   *
-   * Per theme, not both: each style is ~100 KB of JSON and ninety layers, and a
-   * rider who never opens night mode should not pay for dark-matter.
-   *
-   * One pass, not two: MapLibre re-lays-out every loaded tile against the whole
-   * layer list each time that list changes, so adding the lines and then the
-   * labels separately costs two passes over every tile and measured no better
-   * than doing it once.
-   */
+  /** Add one theme's layers, if not already on the map. Per theme, not both:
+   * a rider who never opens night mode doesn't pay for its seventy layers. */
   ensure(theme: BasemapTheme): Promise<void>;
   /** Show one theme, with or without labels; `on: false` shows no basemap.
    * The last request is remembered and re-applied when late layers land. */
   show(opts: { theme: BasemapTheme; labels: boolean; on: boolean }): void;
 }
 
-/**
- * Manage Carto's basemap layers on `map`, inserting them beneath the layer that
- * `anchor` names.
- *
- * `anchor` is a callback rather than an id because it is only answerable after
- * the style fetch: the caller adds its own layers synchronously while the map
- * loads, so at construction there is nothing yet to sit beneath. Resolving it
- * late is what keeps the basemap under the route instead of painted over it.
- */
 export interface BasemapOptions {
-  /** Style per theme. Defaults to positron / dark-matter. */
-  styles?: Record<BasemapTheme, string>;
-  /** Rewrite every label's font to this stack. Omit to keep the style's own,
-   * which is right for any page serving glyphs from Carto rather than
-   * vendoring them — see VENDORED_FONT_STACK. */
-  textFont?: string[];
-  /** Install only the style's label layers — for drawing its street and place
-   * names over something else, such as aerial photography. */
+  /** Install only the label layers, for drawing street and place names over
+   * something else, such as aerial photography. */
   labelsOnly?: boolean;
+  /** Draw every theme in this look. The photo labels use the dark one, drawn
+   * light on dark, which is what reads over aerial imagery. */
+  flavor?: BasemapTheme;
   /** Layer id prefix. Two instances on one map need different ones, or their
    * layers collide. Defaults to "bm", which the planner and its tests expect. */
   prefix?: string;
-  fetchJson?: (url: string) => Promise<StyleSpecification>;
-  /** Load the vector tiles through the offline tile cache (tilecache.ts).
-   * Defaults to on: it is what makes a downloaded route draw with no signal,
-   * in the web app and the Android app alike. */
-  tileCache?: boolean;
 }
 
-export function createBasemap(
-  map: MLMap,
-  anchor: () => string | undefined,
-  options: BasemapOptions = {},
-): Basemap {
-  const styleUrl = options.styles ?? STYLE_URL;
-  const textFont = options.textFont;
-  const labelsOnly = options.labelsOnly ?? false;
-  const prefix = options.prefix ?? "bm";
-  const fetchJson = options.fetchJson ?? fetchStyle;
-  // Here rather than at each call site because every page that draws Carto's
-  // tiles builds its basemap through this, right after constructing its map —
-  // before the first tile is asked for, which is when it has to be in place.
+/**
+ * Manage the basemap's layers on `map`, inserting them beneath the layer that
+ * `anchor` names. `anchor` is a callback rather than an id because the caller
+ * adds its own layers as the map loads, after this is created.
+ */
+export function createBasemap(map: MLMap, anchor: () => string | undefined, options: BasemapOptions = {}): Basemap {
+  // Here rather than at each call site: every page builds its basemap through
+  // this, right after constructing its map, before the first tile is asked for.
   const addProtocol = globalAddProtocol();
-  if ((options.tileCache ?? true) && addProtocol !== undefined && "setTransformRequest" in map) {
-    installTileCache(map, addProtocol);
-  }
+  const cacheDeps = tileDeps();
+  if (addProtocol !== undefined && cacheDeps !== null) installTileCache(addProtocol, cacheDeps);
+  // The source itself is in each page's initial style (basemapSource()): the
+  // style is still loading here, when adding one would throw.
+
   const installed = new Map<BasemapTheme, { all: string[]; labels: Set<string> }>();
-  const inflight = new Map<BasemapTheme, Promise<void>>();
-  /** The most recent show() request, re-applied when the label layers land. */
+  /** The most recent show() request, re-applied when a theme's layers land. */
   let wanted: { theme: BasemapTheme; labels: boolean; on: boolean } | null = null;
-
-  const ensure = (theme: BasemapTheme): Promise<void> => {
-    const pending = inflight.get(theme);
-    if (pending) return pending;
-    const job = (async (): Promise<void> => {
-      const style = await fetchJson(styleUrl[theme]);
-      const group = { all: [] as string[], labels: new Set<string>() };
-      installed.set(theme, group);
-      const beforeId = anchor();
-      const add = (layer: LayerSpecification): void => {
-        // Adding before a layer that has gone (a style reload mid-flight) would
-        // throw and take the caller's chain with it; appending is the safe miss.
-        map.addLayer(layer, beforeId !== undefined && map.getLayer(beforeId) ? beforeId : undefined);
-        group.all.push(layer.id);
-        if (layer.type === "symbol") group.labels.add(layer.id);
-      };
-
-      // Every layer in one synchronous pass. MapLibre re-lays-out each loaded
-      // tile against the whole layer list whenever that list changes, so
-      // splitting this in two — lines first, labels once the map settled —
-      // bought nothing and paid for a second full pass over every tile.
-      for (const layer of themeLayers(theme, style, textFont, labelsOnly, prefix)) add(layer);
-
-      // Visibility has to match whatever was asked for while the style was
-      // still on its way, or the basemap arrives stuck hidden — or, worse,
-      // shows its labels in the middle of a ride, which is what plain mode
-      // exists to prevent.
-      if (wanted) show(wanted);
-    })();
-    inflight.set(theme, job);
-    // A failed fetch must not be remembered as done, or the basemap never
-    // recovers when the network comes back.
-    job.catch(() => inflight.delete(theme));
-    return job;
-  };
 
   const show = (opts: { theme: BasemapTheme; labels: boolean; on: boolean }): void => {
     wanted = opts;
@@ -268,6 +183,30 @@ export function createBasemap(
         map.setLayoutProperty(id, "visibility", visible ? "visible" : "none");
       }
     }
+  };
+
+  const ensure = (theme: BasemapTheme): Promise<void> => {
+    if (installed.has(theme)) return Promise.resolve();
+    const group = { all: [] as string[], labels: new Set<string>() };
+    installed.set(theme, group);
+    const beforeId = anchor();
+    // a page that didn't declare it in its style; by now the style has loaded
+    if (map.getSource(BASEMAP_SOURCE) === undefined) map.addSource(BASEMAP_SOURCE, basemapSource());
+    // Every layer in one synchronous pass. MapLibre re-lays-out each loaded
+    // tile against the whole layer list whenever that list changes, so adding
+    // them in batches pays for a full pass over every tile each time.
+    for (const layer of basemapLayers(theme, options)) {
+      // Adding before a layer that has gone (a style reload) would throw and
+      // take the caller's chain with it; appending is the safe miss.
+      map.addLayer(layer, beforeId !== undefined && map.getLayer(beforeId) ? beforeId : undefined);
+      group.all.push(layer.id);
+      if (layer.type === "symbol") group.labels.add(layer.id);
+    }
+    // Visibility has to match whatever was asked for before these layers
+    // existed, or the basemap arrives stuck hidden, or shows its labels in the
+    // middle of a ride, which is what plain mode exists to prevent.
+    if (wanted) show(wanted);
+    return Promise.resolve();
   };
 
   return { ensure, show };

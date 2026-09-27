@@ -3,5 +3,10 @@
   "release": "test-data",
   "asset": "web-data-2026-09-26.tar.gz",
   "sha256": "23b7a82ec6ff7d927755b6e7bbfbddfd384df66afaa8a649c45986fec7e134da",
-  "built": "2026-09-26"
+  "built": "2026-09-26",
+  "basemap": {
+    "asset": "basemap-2026-09-27.pmtiles",
+    "sha256": "4296dfe413b78debd88a59362588c421afe15e910c59589089dca7d462beffaf",
+    "built": "2026-09-27"
+  }
 }

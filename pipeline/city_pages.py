@@ -402,14 +402,9 @@ CSP = (
     "default-src 'self'; "
     "script-src 'self'; "
     "style-src 'self' 'unsafe-inline'; "
-    "img-src 'self' data: blob: https://basemaps.cartocdn.com "
-    "https://tiles.arcgis.com https://*.fbcdn.net; "
-    # The vector basemap's TileJSON and .mvt tiles come from
-    # tiles(-a...d).basemaps.cartocdn.com; only the style.json is served by the
-    # bare host, and a CSP wildcard does not match it.
-    "connect-src 'self' https://basemaps.cartocdn.com "
-    "https://*.basemaps.cartocdn.com https://tiles.arcgis.com "
-    "https://graph.mapillary.com; "
+    "img-src 'self' data: blob: https://tiles.arcgis.com https://*.fbcdn.net; "
+    # The basemap is the site's own basemap.pmtiles, so 'self' covers it.
+    "connect-src 'self' https://tiles.arcgis.com https://graph.mapillary.com; "
     "worker-src 'self' blob:; frame-src 'none'; font-src 'self'; "
     "object-src 'none'; base-uri 'self'; form-action 'none'"
 )

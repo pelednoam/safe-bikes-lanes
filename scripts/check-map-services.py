@@ -1,27 +1,23 @@
 #!/usr/bin/env python3
-"""Are the third-party services the map is drawn from still answering, and
-still answering with what the app expects?
+"""Are the services the map is drawn from still answering, and still answering
+with what the app expects?
 
 check-live-data.py watches this project's own data. Nothing watched the services
 the map is built out of, and one of them broke in the way hardest to notice: in
-September 2026 Carto began stamping "API KEY REQUIRED" across its raster basemap
-tiles. Every request still returned 200 OK, a valid PNG of the right size, in the
-right content type. The map looked broken to every visitor and every check was
-green; users found it. Then the same stamp reached the labels-only raster the
-city pages drew over aerial photography, three weeks after that layer had been
-checked and called clean.
+September 2026 Carto, the basemap then, began stamping "API KEY REQUIRED" across
+its raster tiles. Every request still returned 200 OK, a valid PNG of the right
+size, in the right content type. The map looked broken to every visitor and
+every check was green; users found it.
 
-So this asserts content, not status:
+The basemap is now our own file (basemap.pmtiles, scripts/publish-basemap.sh),
+but it can still fail quietly: a deploy that leaves it out, a host that stops
+serving byte ranges and sends all 50 MB for every tile, a monthly refresh that
+stopped running. So this asserts content, not status:
 
-  - Carto's vector styles must parse, carry a real layer list, and mention no
-    API key anywhere — a stamp on vector data would have to arrive as a layer or
-    a feature, since there are no pixels to draw it into;
-  - the tile URLs and glyph URL those styles point at must be the ones the app
-    hard-codes in web/src/basemap.ts. The app names its tiles inline so its pages
-    do not wait on Carto to draw their own layers; if Carto moves them, the map
-    goes blank while Carto's own styles keep working;
-  - every vector tile host must return a tile that decompresses to the map
-    layers the styles draw (roads, water);
+  - the site's basemap.pmtiles must answer a byte range with just that range,
+    be a PMTiles file of vector tiles to zoom 14, and hold a real tile over
+    Somerville with roads and water in it, read the way the app reads it;
+  - the published copy must be recent: the monthly refresh has not stopped;
   - aerial imagery and terrain must be real images, not error bodies or
     placeholders;
   - the geocoder must find a known address inside the app's area, and the
@@ -42,6 +38,7 @@ Exits non-zero with one line per problem.
 from __future__ import annotations
 
 import argparse
+import datetime
 import gzip
 import json
 import re
@@ -64,6 +61,14 @@ TIMEOUT_S = 30
 USER_AGENT = "safe-bikes-lanes-health/1.0 (+https://github.com/pelednoam/safe-bikes-lanes)"
 NOMINATIM_GAP_S = 1.2
 
+# The published basemap's description, written beside it by publish-basemap.sh.
+BASEMAP_RELEASE_JSON = (
+    "https://github.com/pelednoam/safe-bikes-lanes/releases/download/basemap/basemap.json"
+)
+# Refreshed monthly; two missed runs is a refresh that has stopped.
+BASEMAP_MAX_AGE_DAYS = 70
+BASEMAP_MAXZOOM = 14
+
 # A tile over Somerville/Cambridge, inside the area the app covers: a z14 vector
 # tile there always carries roads and water (the Mystic and Charles).
 VECTOR_TILE = (14, 4956, 6057)
@@ -75,9 +80,6 @@ DAVIS_SQ = (42.3967, -71.1223)
 # "no data" placeholder is a few hundred bytes.
 MIN_VECTOR_TILE_BYTES = 5_000
 MIN_IMAGE_BYTES = 2_000
-MIN_STYLE_LAYERS = 20
-
-STAMP = re.compile(rb"api[\s_-]?key", re.IGNORECASE)
 
 
 # ---------------------------------------------------------------------------
@@ -87,9 +89,7 @@ STAMP = re.compile(rb"api[\s_-]?key", re.IGNORECASE)
 
 @dataclass(frozen=True)
 class AppUrls:
-    carto_tiles: list[str]
-    carto_glyphs: str
-    carto_styles: list[str]
+    basemap: str
     aerial: str
     terrain: str
     nominatim_search: str
@@ -103,33 +103,14 @@ def _one(pattern: str, text: str, what: str) -> str:
     return found.group(1) if found.groups() else found.group(0)
 
 
-def parse_carto_tiles(basemap_ts: str) -> list[str]:
-    block = re.search(r"export const CARTO_TILES = \[(.*?)\];", basemap_ts, re.DOTALL)
-    if block is None:
-        raise LookupError("could not find CARTO_TILES in basemap.ts")
-    tiles = re.findall(r'"(https://[^"]+)"', block.group(1))
-    if not tiles:
-        raise LookupError("CARTO_TILES in basemap.ts lists no URLs")
-    return tiles
-
-
 def read_app_urls(src: Path = WEB_SRC) -> AppUrls:
     basemap = (src / "basemap.ts").read_text()
     app = (src / "app.ts").read_text()
     segment = (src / "segment.ts").read_text()
-    styles = sorted(
-        set(
-            re.findall(
-                r"https://basemaps\.cartocdn\.com/gl/[a-z-]+-gl-style/style\.json", basemap
-            )
-        )
-    )
-    if not styles:
-        raise LookupError("could not find any Carto style URL in basemap.ts")
     return AppUrls(
-        carto_tiles=parse_carto_tiles(basemap),
-        carto_glyphs=_one(r'export const CARTO_GLYPHS = "([^"]+)"', basemap, "CARTO_GLYPHS"),
-        carto_styles=styles,
+        basemap=_one(
+            r'const SITE_BASEMAP = "(https://[^"]+/basemap\.pmtiles)"', basemap, "SITE_BASEMAP"
+        ),
         aerial=_one(
             r'"(https://tiles\.arcgis\.com/[^"]+\{z\}/\{y\}/\{x\})"', app, "the aerial URL"
         ),
@@ -186,40 +167,155 @@ def fill(template: str, z: int, x: int, y: int) -> str:
 # ---------------------------------------------------------------------------
 
 
-def style_problems(name: str, style: Any) -> list[str]:
-    problems: list[str] = []
-    if not isinstance(style, dict):
-        return [f"{name}: not a style object"]
-    layers = style.get("layers")
-    if not isinstance(layers, list) or len(layers) < MIN_STYLE_LAYERS:
-        count = len(layers) if isinstance(layers, list) else 0
-        problems.append(f"{name}: only {count} layers — not the basemap it used to be")
-    source = (style.get("sources") or {}).get("carto")
-    if not isinstance(source, dict) or not source.get("url"):
-        problems.append(f"{name}: no 'carto' vector source — the app's layers name that source")
-    if STAMP.search(json.dumps(style).encode()):
-        problems.append(f"{name}: mentions an API key — Carto may be stamping its vector styles")
-    return problems
-
-
-def vector_tile_problems(host: str, body: bytes) -> list[str]:
+def vector_tile_problems(name: str, body: bytes) -> list[str]:
     try:
         raw = gzip.decompress(body) if body[:2] == b"\x1f\x8b" else body
     except OSError:
-        return [f"{host}: tile does not decompress"]
+        return [f"{name}: tile does not decompress"]
     problems: list[str] = []
     # Measured decompressed: how much map the tile holds, not how well it
     # happened to compress.
     if len(raw) < MIN_VECTOR_TILE_BYTES:
-        problems.append(f"{host}: tile is {len(raw)} bytes — empty or an error, not a map tile")
-    for layer in (b"transportation", b"water"):
+        problems.append(f"{name}: tile is {len(raw)} bytes — empty or an error, not a map tile")
+    # Protomaps' layer names, which the app's styles (@protomaps/basemaps) draw
+    for layer in (b"roads", b"water"):
         if layer not in raw:
             problems.append(
-                f"{host}: tile has no '{layer.decode()}' layer — nothing to draw roads with"
+                f"{name}: tile has no '{layer.decode()}' layer — nothing to draw it with"
             )
-    if STAMP.search(raw):
-        problems.append(f"{host}: tile mentions an API key — Carto may be stamping vector tiles")
     return problems
+
+
+# ---------------------------------------------------------------------------
+# PMTiles, read the way the app reads it: a header, a directory, a tile, each
+# by byte range (https://github.com/protomaps/PMTiles/blob/main/spec/v3/spec.md)
+# ---------------------------------------------------------------------------
+
+PMTILES_HEADER_BYTES = 127
+TILE_TYPE_MVT = 1
+COMPRESSION_GZIP = 2
+
+
+@dataclass(frozen=True)
+class PMTilesHeader:
+    root_offset: int
+    root_length: int
+    leaf_offset: int
+    tile_data_offset: int
+    internal_compression: int
+    tile_compression: int
+    tile_type: int
+    max_zoom: int
+
+
+def parse_header(raw: bytes) -> PMTilesHeader:
+    if len(raw) < PMTILES_HEADER_BYTES or raw[:7] != b"PMTiles" or raw[7] != 3:
+        raise ValueError("not a PMTiles v3 file")
+    u64 = [int.from_bytes(raw[8 + 8 * i : 16 + 8 * i], "little") for i in range(11)]
+    return PMTilesHeader(
+        root_offset=u64[0],
+        root_length=u64[1],
+        leaf_offset=u64[4],
+        tile_data_offset=u64[6],
+        internal_compression=raw[97],
+        tile_compression=raw[98],
+        tile_type=raw[99],
+        max_zoom=raw[101],
+    )
+
+
+def tile_id(z: int, x: int, y: int) -> int:
+    """The tile's position on the Hilbert curve PMTiles orders tiles by."""
+    acc = sum(1 << (2 * i) for i in range(z))
+    n = 1 << z
+    d = 0
+    s = n // 2
+    while s > 0:
+        rx = 1 if x & s else 0
+        ry = 1 if y & s else 0
+        d += s * s * ((3 * rx) ^ ry)
+        if ry == 0:
+            if rx == 1:
+                x, y = n - 1 - x, n - 1 - y
+            x, y = y, x
+        s //= 2
+    return acc + d
+
+
+@dataclass(frozen=True)
+class DirEntry:
+    tile_id: int
+    offset: int
+    length: int
+    run_length: int  # 0: a leaf directory, not a tile
+
+
+def _varints(raw: bytes) -> list[int]:
+    out: list[int] = []
+    value = shift = 0
+    for b in raw:
+        value |= (b & 0x7F) << shift
+        shift += 7
+        if not b & 0x80:
+            out.append(value)
+            value = shift = 0
+    return out
+
+
+def parse_directory(raw: bytes) -> list[DirEntry]:
+    v = _varints(raw)
+    n = v[0]
+    ids, runs, lengths, offsets = (
+        v[1 : 1 + n],
+        v[1 + n : 1 + 2 * n],
+        v[1 + 2 * n : 1 + 3 * n],
+        v[1 + 3 * n : 1 + 4 * n],
+    )
+    entries: list[DirEntry] = []
+    tid = 0
+    for i in range(n):
+        tid += ids[i]
+        if offsets[i] == 0 and i > 0:
+            offset = entries[i - 1].offset + entries[i - 1].length
+        else:
+            offset = offsets[i] - 1
+        entries.append(DirEntry(tid, offset, lengths[i], runs[i]))
+    return entries
+
+
+def find_entry(entries: list[DirEntry], tid: int) -> DirEntry | None:
+    found = None
+    for e in entries:  # sorted by tile_id; a directory is at most a few thousand
+        if e.tile_id > tid:
+            break
+        found = e
+    if found is None:
+        return None
+    if found.run_length == 0 or tid < found.tile_id + found.run_length:
+        return found
+    return None
+
+
+def read_tile(read: Callable[[int, int], bytes], z: int, x: int, y: int) -> bytes | None:
+    """One tile's bytes, via `read(offset, length)`; None where the file has none."""
+    header = parse_header(read(0, PMTILES_HEADER_BYTES))
+
+    def directory(offset: int, length: int) -> list[DirEntry]:
+        raw = read(offset, length)
+        if header.internal_compression == COMPRESSION_GZIP:
+            raw = gzip.decompress(raw)
+        return parse_directory(raw)
+
+    tid = tile_id(z, x, y)
+    entries = directory(header.root_offset, header.root_length)
+    for _ in range(4):  # the spec allows at most three levels of leaves
+        entry = find_entry(entries, tid)
+        if entry is None:
+            return None
+        if entry.run_length > 0:
+            return read(header.tile_data_offset + entry.offset, entry.length)
+        entries = directory(header.leaf_offset + entry.offset, entry.length)
+    raise ValueError("directory nests deeper than the spec allows")
 
 
 def png_size(body: bytes) -> tuple[int, int] | None:
@@ -251,69 +347,63 @@ def image_problems(name: str, body: bytes, content_type: str, kind: str) -> list
 # ---------------------------------------------------------------------------
 
 
-def check_carto(urls: AppUrls) -> list[str]:
-    problems: list[str] = []
-    tilejson_urls: set[str] = set()
-    glyph_urls: set[str] = set()
-    for style_url in urls.carto_styles:
-        name = style_url.split("/gl/")[1].split("/")[0]
-        try:
-            style = fetch_json(style_url)
-        except Exception as err:  # any failure is the finding
-            problems.append(f"carto style {name}: {err}")
-            continue
-        problems += [f"carto style {p}" for p in style_problems(name, style)]
-        source = (style.get("sources") or {}).get("carto") or {}
-        if isinstance(source.get("url"), str):
-            tilejson_urls.add(source["url"])
-        if isinstance(style.get("glyphs"), str):
-            glyph_urls.add(style["glyphs"])
+def ranged_reader(url: str) -> Callable[[int, int], bytes]:
+    def read(offset: int, length: int) -> bytes:
+        end = offset + length - 1
+        status, body, _ = fetch(url, {"Range": f"bytes={offset}-{end}"})
+        if status != 206:
+            # A 200 here is the whole file: the map would download 50 MB per tile
+            raise ValueError(f"HTTP {status} to a byte range, not 206 — ranges aren't served")
+        if len(body) != length:
+            raise ValueError(f"asked for {length} bytes at {offset}, got {len(body)}")
+        return body
 
-    # The app names its tiles inline (see CARTO_TILES). If the tileset the styles
-    # use has moved, the styles keep working and the app's map goes blank.
-    for tj in sorted(tilejson_urls):
-        try:
-            served = fetch_json(tj).get("tiles", [])
-        except Exception as err:
-            problems.append(f"carto tilejson: {err}")
-            continue
-        if sorted(served) != sorted(urls.carto_tiles):
-            problems.append(
-                "carto tiles have moved: the styles now use "
-                f"{served} but web/src/basemap.ts CARTO_TILES has {urls.carto_tiles}"
-            )
-    for glyphs in sorted(glyph_urls):
-        if glyphs != urls.carto_glyphs:
-            problems.append(
-                f"carto glyphs have moved: the styles use {glyphs} but basemap.ts "
-                f"CARTO_GLYPHS is {urls.carto_glyphs} — city and build page labels would vanish"
-            )
+    return read
 
-    z, x, y = VECTOR_TILE
-    for template in urls.carto_tiles:
-        host = urllib.parse.urlparse(template).hostname or template
-        try:
-            status, body, _ = fetch(fill(template, z, x, y))
-        except ConnectionError as err:
-            problems.append(f"carto tiles {err}")
-            continue
-        if status != 200:
-            problems.append(f"carto tiles {host}: HTTP {status}")
-            continue
-        problems += [f"carto tiles {p}" for p in vector_tile_problems(host, body)]
 
-    # One glyph range in a font the styles actually ask for.
-    glyph_url = urls.carto_glyphs.replace("{fontstack}", "Open Sans Regular").replace(
-        "{range}", "0-255"
-    )
+def basemap_age_problems(published: Any, today: datetime.date) -> list[str]:
+    build = str(published.get("build", "")) if isinstance(published, dict) else ""
     try:
-        status, body, _ = fetch(urllib.parse.quote(glyph_url, safe=":/"))
-        if status != 200 or len(body) < 1_000:
+        built = datetime.datetime.strptime(build[:8], "%Y%m%d").date()
+    except ValueError:
+        return [f"basemap release: basemap.json names no build date ({build!r})"]
+    age = (today - built).days
+    if age > BASEMAP_MAX_AGE_DAYS:
+        return [
+            f"basemap release: built {built}, {age} days ago — the monthly refresh "
+            "(.github/workflows/basemap.yml) has stopped"
+        ]
+    return []
+
+
+def check_basemap(urls: AppUrls, site: str) -> list[str]:
+    problems: list[str] = []
+    url = f"{site}/basemap.pmtiles" if site != DEFAULT_SITE else urls.basemap
+    read = ranged_reader(url)
+    try:
+        header = parse_header(read(0, PMTILES_HEADER_BYTES))
+        if header.tile_type != TILE_TYPE_MVT:
+            problems.append(f"basemap: tile type {header.tile_type}, not vector tiles")
+        if header.max_zoom != BASEMAP_MAXZOOM:
             problems.append(
-                f"carto glyphs: HTTP {status}, {len(body)} bytes — labels would not draw"
+                f"basemap: goes to zoom {header.max_zoom}, the app expects {BASEMAP_MAXZOOM}"
             )
-    except ConnectionError as err:
-        problems.append(f"carto glyphs: {err}")
+        tile = read_tile(read, *VECTOR_TILE)
+        if tile is None:
+            problems.append(f"basemap: no tile at {VECTOR_TILE}, over Somerville")
+        else:
+            if header.tile_compression == COMPRESSION_GZIP:
+                tile = gzip.decompress(tile)
+            problems += [f"basemap {p}" for p in vector_tile_problems("tile", tile)]
+    except (ValueError, OSError, ConnectionError) as err:
+        problems.append(f"basemap {url}: {err}")
+
+    try:
+        problems += basemap_age_problems(
+            fetch_json(BASEMAP_RELEASE_JSON), datetime.datetime.now(datetime.UTC).date()
+        )
+    except Exception as err:
+        problems.append(f"basemap release: {err}")
     return problems
 
 
@@ -412,7 +502,7 @@ def main() -> int:
         return 1
 
     checks: list[tuple[str, Callable[[], list[str]]]] = [
-        ("carto basemap", lambda: check_carto(urls)),
+        ("basemap", lambda: check_basemap(urls, args.site)),
         ("aerial imagery", lambda: check_aerial(urls)),
         ("terrain", lambda: check_terrain(urls)),
         ("geocoder", lambda: check_geocoder(urls)),

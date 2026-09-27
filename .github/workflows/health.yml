@@ -6,12 +6,12 @@ name: Live data health
 # quietly ages, or arrives with a whole criterion empty — which is what happened
 # on 2026-08-10 and went unreported for a week.
 #
-# It also watches the third-party services the map is drawn from — Carto's
-# basemap, the MassGIS aerial imagery, terrain, the geocoder, Mapillary — because
-# in September 2026 Carto began serving its raster tiles with "API KEY REQUIRED"
-# drawn into the image and 200 OK on the response, and visitors noticed before any
-# check did. See scripts/check-map-services.py for why it reads content, not
-# status codes.
+# It also watches the services the map is drawn from — our own basemap file,
+# the MassGIS aerial imagery, terrain, the geocoder, Mapillary — because in
+# September 2026 Carto, the basemap then, began serving its raster tiles with
+# "API KEY REQUIRED" drawn into the image and 200 OK on the response, and
+# visitors noticed before any check did. See scripts/check-map-services.py for
+# why it reads content, not status codes.
 #
 # Daily, and on every push, so it keeps working even if GitHub disables the
 # schedule (it does that after 60 days of repository inactivity — a silent stop
@@ -77,14 +77,14 @@ jobs:
           OUTCOME: ${{ steps.services.outcome }}
           TITLE: Map services health check is failing
           REPORT: /tmp/services.txt
-          INTRO: "A third-party service the map is drawn from is down, or answering with something other than what the app expects:"
+          INTRO: "A service the map is drawn from is down, or answering with something other than what the app expects:"
           REPRO: python3 scripts/check-map-services.py
           HEALTHY: The map services check out again.
           HINT: >-
             A 200 OK proves nothing here: Carto once served every raster tile with
-            "API KEY REQUIRED" drawn into the image. If Carto's tiles or glyphs have
-            moved, update CARTO_TILES / CARTO_GLYPHS in web/src/basemap.ts — the app
-            names them inline, so it breaks while Carto's own styles keep working.
+            "API KEY REQUIRED" drawn into the image. A basemap problem is ours:
+            re-run the Basemap workflow (scripts/publish-basemap.sh) if the
+            release is stale, and redeploy the site if its copy is missing.
         run: bash scripts/report-live-health.sh
 
       - name: Fail the run if anything is wrong

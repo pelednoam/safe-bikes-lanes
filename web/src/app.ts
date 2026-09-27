@@ -12,17 +12,16 @@ import type {
 } from "maplibre-gl";
 
 import {
+  BASEMAP_MAXZOOM,
+  BASEMAP_SOURCE,
   type BasemapTheme,
-  CARTO_ATTRIBUTION,
-  CARTO_MAXZOOM,
-  CARTO_TILES,
+  basemapSource,
   createBasemap,
-  STYLE_URL,
-  VENDORED_FONT_STACK,
+  tileDeps,
 } from "./basemap.js";
 import { maplibregl } from "./maplibre.js";
 import { CLASS_COLORS } from "./weights.gen.js";
-import { downloadOffline } from "./tilecache.js";
+import { downloadOffline, type TileXYZ } from "./tilecache.js";
 import type { NativeFix } from "./native.js";
 import {
   askForRideNotifications,
@@ -421,28 +420,17 @@ const map: MLMap = new maplibregl.Map({
   style: {
     version: 8,
     sources: {
-      // Carto, not tile.openstreetmap.org. OSM's tile servers are donated
-      // infrastructure and their usage policy rules out building a public
-      // product on them — they block by referrer, and when that happens the
-      // map breaks for every user at once. Carto renders the same OSM data.
-      //
-      // Vector rather than raster, because Carto now stamps "API KEY REQUIRED"
-      // across their raster tiles — see basemap.ts. This one source feeds all
-      // four basemap modes; the layers that paint it are injected below, once
-      // a GL style has been fetched. The id has to be "carto": it is what
-      // those styles' own layers name as their source.
-      carto: {
-        type: "vector",
-        tiles: CARTO_TILES,
-        minzoom: 0,
-        maxzoom: CARTO_MAXZOOM,
-        attribution: CARTO_ATTRIBUTION,
-      },
+      // Our own basemap file (basemap.pmtiles, see basemap.ts), not
+      // tile.openstreetmap.org or a map company's servers. OSM's tile servers
+      // are donated infrastructure whose usage policy rules out a public
+      // product leaning on them, and Carto, which the map used before, began
+      // stamping "API KEY REQUIRED" across its tiles. Declared here so the
+      // basemap's layers, added below as the map loads, have it to draw from.
+      [BASEMAP_SOURCE]: basemapSource(),
     },
     // vendored SDF glyph ranges (Noto Sans, Latin + Latin-1): the label layer
     // below needs them, and hosting them ourselves keeps labels working
-    // offline. Carto's basemap labels are re-pointed at this same stack rather
-    // than at their glyph server — see basemap.ts.
+    // offline. The basemap's labels are pointed at this same stack (basemap.ts).
     glyphs: "fonts/glyphs/{fontstack}/{range}.pbf",
     // Ground to look at while the basemap styles are in flight. Stays at the
     // bottom of the stack; the fetched layers land on top of it.
@@ -469,13 +457,9 @@ map.addControl(scaleBar, "bottom-left");
 // ---------------------------------------------------------------------------
 
 let router: Router | null = null;
-/** Carto's basemap layers, injected under everything this app draws. A theme's
- * style is fetched the first time that theme is shown — see applyBasemap. */
-const basemap = createBasemap(map, () => map.getStyle().layers.find((l) => l.id !== "ground")?.id, {
-  // this app serves its own glyphs, so Carto's label layers have to be pointed
-  // at the one stack it vendors
-  textFont: VENDORED_FONT_STACK,
-});
+/** The basemap's layers, injected under everything this app draws. A theme's
+ * layers are added the first time that theme is shown — see applyBasemap. */
+const basemap = createBasemap(map, () => map.getStyle().layers.find((l) => l.id !== "ground")?.id);
 let start: Marker | null = null;
 let end: Marker | null = null;
 // Google-Maps-style flow: origin defaults to the current location; the next
@@ -2580,23 +2564,21 @@ function whenIdle(fn: () => void, timeout = 3000): void {
 }
 
 map.on("load", () => {
-  // The basemap: Carto's positron and dark-matter, as vector layers, injected
-  // once per theme and thereafter toggled by visibility (see basemap.ts and
-  // applyBasemap). This replaces four raster layers — light_all, dark_all and
-  // the two _nolabels — which Carto now serves with "API KEY REQUIRED" stamped
-  // across the image.
+  // The basemap: Protomaps' light and dark looks over our own basemap.pmtiles,
+  // as vector layers, injected once per theme and thereafter toggled by
+  // visibility (see basemap.ts and applyBasemap).
   //
-  // Label-free is no longer a separate tile set but the same layers with the
-  // label ones hidden, which is what ride mode wants: raster tiles rotate as
+  // Label-free is not a separate tile set but the same layers with the label
+  // ones hidden, which is what ride mode wants: raster tiles rotate as
   // pictures, so with the map turned to the heading the baked-in labels ride
   // upside-down and slide off their own streets. The names come back as a real
   // symbol layer (see "street-labels"), which MapLibre keeps upright at any
   // bearing.
   //
-  // Only the theme in use is fetched; applyBasemap asks for the other the
-  // first time someone switches. The insert point is resolved after that fetch,
-  // by which time everything added below is on the map — so the basemap lands
-  // under it rather than over the route.
+  // Only the theme in use is added; applyBasemap adds the other the first time
+  // someone switches. The insert point is resolved then, by which time
+  // everything added below is on the map — so the basemap lands under it
+  // rather than over the route.
   //
   // Deferred to the browser's first idle moment rather than run inline. The
   // basemap is decoration and the safety network is the product, so the ninety
@@ -6147,62 +6129,52 @@ function tileXY(lon: number, lat: number, z: number): [number, number] {
   return [x, y];
 }
 
-function routeTileUrls(track: Track): string[] {
-  // One vector tile set serves every basemap mode, so unlike the old raster
-  // pair there is no light/dark choice to make here — and nothing to get wrong
-  // when a rider flips theme halfway through an offline ride.
+function routeTiles(track: Track): TileXYZ[] {
+  // One tile set serves every basemap mode, so there is no light/dark choice to
+  // make here, and nothing to get wrong when a rider flips theme halfway
+  // through an offline ride.
   //
-  // Carto serves these from tiles-a…d and MapLibre picks a subdomain per tile,
-  // so these are written against tiles-a and the tile cache canonicalises
-  // every sibling host onto it. Caching whichever host we happened to name
-  // would leave three quarters of a ride uncached.
-  //
-  // Vector tiles stop at z14 (CARTO_MAXZOOM) and MapLibre overzooms them for
-  // closer views, so z13-14 covers the z13-16 a ride actually displays — far
-  // fewer requests than the four raster zooms this used to pull.
-  const template =
-    "https://tiles-a.basemaps.cartocdn.com/vectortiles/carto.streets/v1/{z}/{x}/{y}.mvt";
-  const urls = new Set<string>();
-  for (const z of [13, CARTO_MAXZOOM]) {
+  // The basemap stops at z14 (BASEMAP_MAXZOOM) and MapLibre overzooms it for
+  // closer views, so z13-14 covers the z13-16 a ride actually displays.
+  const tiles = new Map<string, TileXYZ>();
+  for (const z of [13, BASEMAP_MAXZOOM]) {
     // sample the track densely enough that no tile is skipped at this zoom
-    const stepM = z >= CARTO_MAXZOOM ? 250 : 400;
+    const stepM = z >= BASEMAP_MAXZOOM ? 250 : 400;
     let nextAt = 0;
     track.coords.forEach((c, i) => {
       if ((track.cumM[i] ?? 0) < nextAt && i !== track.coords.length - 1) return;
       nextAt = (track.cumM[i] ?? 0) + stepM;
       const [x, y] = tileXY(c[0], c[1], z);
-      const spread = z >= CARTO_MAXZOOM ? 1 : 0; // 3x3 corridor at the deepest zoom
+      const spread = z >= BASEMAP_MAXZOOM ? 1 : 0; // 3x3 corridor at the deepest zoom
       for (let dx = -spread; dx <= spread; dx++) {
         for (let dy = -spread; dy <= spread; dy++) {
-          urls.add(
-            template
-              .replace("{z}", String(z))
-              .replace("{x}", String(x + dx))
-              .replace("{y}", String(y + dy)),
-          );
+          tiles.set(`${z}/${x + dx}/${y + dy}`, [z, x + dx, y + dy]);
         }
       }
     });
   }
-  return [...urls];
+  return [...tiles.values()];
 }
 
 el<HTMLButtonElement>("offline-btn").addEventListener("click", () => {
   const sel = options.find((o) => o.id === selectedId);
   if (!sel) return;
   const btn = el<HTMLButtonElement>("offline-btn");
-  const urls = routeTileUrls(buildTrack(sel.payload));
+  const tiles = routeTiles(buildTrack(sel.payload));
   btn.disabled = true;
-  // Both themes' styles, not just the one showing: without a style a cold
-  // start offline has the tiles and nothing to paint them with, and a rider
-  // may well switch to night mode on the way home.
-  void downloadOffline(urls, [STYLE_URL.light, STYLE_URL.dark], (done, total) => {
-    btn.textContent = `⬇ ${done}/${total}…`;
-  })
+  // Tiles only: the style is built in the page (basemap.ts), so a cold start
+  // offline has what it needs to paint them, in either theme.
+  void downloadOffline(
+    tiles,
+    (done, total) => {
+      btn.textContent = `⬇ ${done}/${total}…`;
+    },
+    tileDeps(),
+  )
     .then(({ failed }) => {
       // Say so when part of the route did not arrive, rather than "ready" over
       // a map that will have holes in it.
-      btn.textContent = failed === 0 ? "✓ offline ready" : `⚠ ${failed} of ${urls.length} tiles missing`;
+      btn.textContent = failed === 0 ? "✓ offline ready" : `⚠ ${failed} of ${tiles.length} tiles missing`;
     })
     .catch(() => {
       btn.textContent = "offline download failed";

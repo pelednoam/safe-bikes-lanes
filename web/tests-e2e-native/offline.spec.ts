@@ -14,6 +14,8 @@
 import { expect, test } from "@playwright/test";
 import type { Map as MLMap } from "maplibre-gl";
 
+import { serveBasemap } from "./basemap.js";
+
 declare global {
   interface Window {
     _map?: MLMap;
@@ -27,6 +29,7 @@ type BrowserContext = import("@playwright/test").BrowserContext;
 const ROUTE = "/#s=-71.122258,42.396748&e=-71.086705,42.362552&m=young_kids";
 
 async function asTheApp(context: BrowserContext): Promise<void> {
+  await serveBasemap(context);
   await context.addInitScript(() => {
     const noop = async (): Promise<void> => undefined;
     window.Capacitor = {
@@ -116,7 +119,7 @@ test("a downloaded route draws its map in the app with no internet", async ({ co
     .poll(() => basemapDrawn(cold, "light"), { timeout: 60_000 })
     .toBeGreaterThan(0);
 
-  // Night mode on the way home: the other theme's style was downloaded too.
+  // Night mode on the way home: the same tiles, drawn in the other theme.
   await cold.evaluate(() => {
     const box = document.getElementById("dark-mode") as HTMLInputElement;
     box.checked = true;

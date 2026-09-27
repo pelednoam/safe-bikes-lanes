@@ -186,8 +186,12 @@ Run it after `priorities.py`: `cd pipeline && python city_pages.py Somerville`.
 
 OpenStreetMap © OpenStreetMap contributors (ODbL). Cambridge GIS, MassDOT/
 MassGIS, and Somerville layers are public open data. Crash data: MassDOT
-IMPACT. Basemap tiles: OpenStreetMap and CARTO (the label-free styles are what
-a ride displays, so street names can be drawn upright at any bearing). Map
+IMPACT. Basemap: OpenStreetMap data from Protomaps' daily build, cut to this
+region monthly (`scripts/publish-basemap.sh`, the `basemap` release) and served
+by the site itself as one `basemap.pmtiles` file, read a tile at a time by byte
+range; drawn with Protomaps' light and dark styles (`@protomaps/basemaps`). A
+ride hides the basemap's own labels, so street names can be drawn upright at
+any bearing. Map
 label glyphs: Noto Sans (SIL Open Font License 1.1), prebuilt SDF ranges from
 openmaptiles/fonts, vendored in `web/public/fonts/glyphs/`. UI type: Barlow (SIL OFL
 1.1). This is a personal planning tool; always use your own judgment on the

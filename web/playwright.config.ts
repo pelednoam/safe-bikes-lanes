@@ -23,7 +23,7 @@ export default defineConfig({
   },
   webServer: {
     // the built site (npm run build) with the pinned test snapshot as its data
-    command: "python3 scripts/testserver.py 8321 dist --data test-data/data",
+    command: "python3 scripts/testserver.py 8321 dist --data test-data/data --basemap test-data/basemap.pmtiles",
     url: "http://127.0.0.1:8321",
     reuseExistingServer: true,
   },

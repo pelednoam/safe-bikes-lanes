@@ -28,7 +28,7 @@ function vis(page: Page, layer: string): Promise<string> {
 
 /** Which basemap themes are actually showing, as "light"/"dark".
  *
- * The basemap is Carto's vector styles now — one layer set per theme
+ * The basemap is a vector one, one layer set per theme
  * (bm-light-*, bm-dark-*) toggled by visibility — so there is no single "osm"
  * or "osm-dark" layer left to ask about. Asking for one by name was worse than
  * useless: vis() reports a layer that does not exist as "visible", so the
@@ -113,9 +113,8 @@ test("dark mode, aerial view, and 3D toggles drive the map", async ({ page }) =>
   await openSection(page, "Map layers");
   await page.locator("#dark-mode").check();
   await expect(page.locator("body")).toHaveClass(/dark/);
-  // dark-matter, and only dark-matter: two themes shown at once would stack
-  // two basemaps. Polled, because a theme's style is fetched the first time it
-  // is asked for.
+  // dark, and only dark: two themes shown at once would stack two basemaps.
+  // Polled, because a theme's layers are added the first time it is asked for.
   await expect.poll(() => shownThemes(page), { timeout: budget(30_000) }).toEqual(["dark"]);
   await page.locator("#show-aerial").check();
   expect(await vis(page, "aerial")).toBe("visible");

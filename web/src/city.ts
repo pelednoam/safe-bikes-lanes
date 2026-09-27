@@ -10,14 +10,11 @@
 // A page a councillor opens should load a map and a paragraph, not a trip
 // planner.
 import {
+  BASEMAP_SOURCE,
   type Basemap,
-  CARTO_ATTRIBUTION,
-  CARTO_GLYPHS,
-  CARTO_MAXZOOM,
-  CARTO_TILES,
+  basemapSource,
   createBasemap,
-  NOLABEL_STYLE_URL,
-  PHOTO_LABEL_STYLE_URL,
+  glyphsUrl,
 } from "./basemap.js";
 import { fillSegmentPhoto, segmentHtml } from "./segment.js";
 import type { SegmentProps } from "./segment.js";
@@ -505,24 +502,22 @@ function addLayers(map: MLMap, city: CityData): void {
 /** Street and place names for the aerial view, installed the first time it is
  * switched on and appended last so they sit above everything.
  *
- * Carto draws names along street centrelines — precisely where this page draws
+ * The basemap draws names along street centrelines, precisely where this page draws
  * its network — so anything drawn after them would bury every one under a 4 px
  * green line. Orthophotos carry no names, and this page's basemap is
  * deliberately label-free, so without these you can see a red line over the
  * imagery but not say which street it is.
  *
- * These were a labels-only raster (dark_only_labels) until September 2026, when
- * Carto began stamping "API KEY REQUIRED" across that tile set too. They are
- * now the label layers of Carto's dark-matter vector style: light text with a
- * dark halo, which reads over photography without the brightness trick the
- * raster needed. The glyphs come from Carto's own server, like the rest of this
- * page's basemap, and the map-services health check watches it.
+ * They are the basemap's own label layers in its dark look (basemap.ts): light
+ * text with a dark halo, which reads over photography, drawn in the glyphs
+ * this site vendors.
  */
 let photoLabels: Basemap | null = null;
 
 function showPhotoLabels(map: MLMap, on: boolean): void {
   photoLabels ??= createBasemap(map, () => undefined, {
-    styles: { light: PHOTO_LABEL_STYLE_URL, dark: PHOTO_LABEL_STYLE_URL },
+    // drawn light on dark, which is what reads over photography
+    flavor: "dark",
     labelsOnly: true,
     prefix: "labels",
   });
@@ -641,28 +636,16 @@ async function start(): Promise<void> {
   const map = new maplibregl.Map({
     container: "map",
     // Label-free: the city's own streets are the subject, and the basemap's
-    // labels compete with them. Carto's vector positron-nolabels rather than
-    // their raster light_nolabels, which now comes back with "API KEY REQUIRED"
-    // stamped across the image; the nolabels style has no symbol layers at all,
-    // so it is more thoroughly label-free than the raster tiles ever were.
+    // labels compete with them: they stay hidden (show() below).
     // A local style, so this page's own layers exist the moment the map loads.
-    // Pointing `style` straight at Carto's URL made map.on("load") wait on a
-    // ~100 KB fetch, and everything below runs in that handler — so on a slow
-    // network the page sat empty, and anything that touched a layer before the
-    // fetch landed threw. The basemap is fetched separately and slotted in
-    // underneath (see basemap.ts).
+    // The basemap's layers are built in the page and slotted in underneath
+    // them (see basemap.ts); its tiles come from the site's own file.
     style: {
       version: 8,
       sources: {
-      carto: {
-        type: "vector",
-        tiles: CARTO_TILES,
-        minzoom: 0,
-        maxzoom: CARTO_MAXZOOM,
-        attribution: CARTO_ATTRIBUTION,
+      [BASEMAP_SOURCE]: basemapSource(),
       },
-      },
-      glyphs: CARTO_GLYPHS,
+      glyphs: glyphsUrl(),
       layers: [{ id: "ground", type: "background", paint: { "background-color": "#e9e6e1" } }],
     },
     bounds: [
@@ -681,9 +664,8 @@ async function start(): Promise<void> {
     addLayers(map, city);
     // Underneath everything this page draws, and after it: the basemap is
     // context, the city's own network is the subject.
-    const basemap = createBasemap(map, () => map.getStyle().layers.find((l) => l.id !== "ground")?.id, {
-      styles: NOLABEL_STYLE_URL,
-    });
+    // no labels (show() below): the page's subject is its own streets
+    const basemap = createBasemap(map, () => map.getStyle().layers.find((l) => l.id !== "ground")?.id);
     void basemap
       .ensure("light")
       .then(() => basemap.show({ theme: "light", labels: false, on: true }))

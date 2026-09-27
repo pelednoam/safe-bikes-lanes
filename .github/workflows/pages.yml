@@ -49,6 +49,22 @@ jobs:
           echo "extracted $(ls web/data/tiles/*.json | grep -vc manifest) routing tiles, $(ls web/data/nettiles/*.json | grep -vc manifest) network tiles"
       - name: Check the data snapshot matches this commit
         run: bash scripts/check-data-format.sh
+      - name: Fetch the basemap (published monthly as a release asset)
+        # The map's streets, water and names: one file the site serves, read a
+        # tile at a time by byte range (web/src/basemap.ts). Checked against the
+        # sha256 published beside it, so a truncated download fails here rather
+        # than as a map with holes in it.
+        run: |
+          BASE=https://github.com/${{ github.repository }}/releases/download/basemap
+          for i in 1 2 3; do
+            curl -sL --fail -o basemap.json "$BASE/basemap.json" &&
+              curl -sL --fail -o web/basemap.pmtiles "$BASE/basemap.pmtiles" && break
+            echo "basemap download failed (attempt $i), retrying in 15s"; sleep 15
+          done
+          SHA=$(python3 -c "import json; print(json.load(open('basemap.json'))['sha256'])")
+          echo "$SHA  web/basemap.pmtiles" | sha256sum -c --status || {
+            echo "::error::basemap.pmtiles doesn't match basemap.json — run scripts/publish-basemap.sh"; exit 1; }
+          echo "basemap: $(cat basemap.json)"
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -84,6 +100,9 @@ jobs:
         # run on web/data, the snapshot this deploy publishes.
         run: npm run e2e:live
         working-directory: web
+        env:
+          # and on the basemap being deployed, not the pinned test copy
+          LIVE_BASEMAP: basemap.pmtiles
       - name: Assemble site
         # dist/ is the Vite build (npm run build, last run by the e2e step):
         # every page, bundled and content-hashed, the vendored MapLibre and the
@@ -93,6 +112,7 @@ jobs:
         run: |
           cp -r web/dist _site
           cp -r web/data _site/data
+          cp web/basemap.pmtiles _site/basemap.pmtiles
           # Which build this is, also served as a file. The About box reads the
           # baked copy, which describes the page actually running, and compares
           # it with this, which describes what the site serves now. A hard

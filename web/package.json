@@ -12,7 +12,7 @@
     "e2e": "npm run build && npm run test-data && playwright test",
     "e2e:native": "npm run test-data && playwright test -c playwright.native.config.ts",
     "e2e:ride": "npm run build && npm run test-data && playwright test -c playwright.ride.config.ts",
-    "e2e:live": "npm run build && playwright test -c playwright.live.config.ts",
+    "e2e:live": "npm run build && npm run test-data && playwright test -c playwright.live.config.ts",
     "coverage:app": "npm run build && npm run test-data && playwright test --config=playwright.coverage.config.ts --reporter=list",
     "vendor": "cd node_modules/maplibre-gl/dist && cp maplibre-gl.mjs maplibre-gl-shared.mjs maplibre-gl-worker.mjs maplibre-gl.css ../../../public",
     "test:coverage": "vitest run --coverage",
@@ -36,6 +36,8 @@
     "@capacitor-community/text-to-speech": "^8.0.2",
     "@capacitor/android": "^8.5.2",
     "@capacitor/app": "^8.1.1",
-    "@capacitor/core": "^8.4.3"
+    "@capacitor/core": "^8.4.3",
+    "@protomaps/basemaps": "^5.7.2",
+    "pmtiles": "^4.5.0"
   }
 }

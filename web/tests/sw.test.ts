@@ -240,18 +240,19 @@ describe("a connection that is barely there", () => {
   });
 });
 
-describe("third-party map resources", () => {
-  const TILE = "https://tiles-b.basemaps.cartocdn.com/vectortiles/carto.streets/v1/14/4956/6057.mvt";
-  const STYLE = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
+describe("map resources", () => {
+  const BASEMAP = `${ORIGIN}/basemap.pmtiles`;
   const AERIAL = "https://tiles.arcgis.com/tiles/x/arcgis/rest/services/o/MapServer/tile/14/6057/";
+  // a downloaded route's tile, keyed as the page keys it (tilecache.ts)
+  const ROUTE_TILE = "https://basemap.tile/14/4956/6057.mvt";
 
-  it("leaves Carto's vector tiles and styles to the page, which caches them itself", () => {
-    // The page reads and fills the tile cache on its own (tilecache.ts), in the
-    // web app and in the Android app where there is no worker at all. A
-    // second, worker-side cache of the same tiles would store each one twice.
+  it("leaves the basemap file to the page, which caches its tiles itself", () => {
+    // The page reads basemap.pmtiles by byte range and caches the tiles it
+    // gets (tilecache.ts), in the web app and in the Android app where there is
+    // no worker at all. A cache can't keep a partial response, and a detour
+    // through the worker would only slow every tile.
     const w = loadWorker(hangs);
-    expect(w.request(TILE).answered).toBe(false);
-    expect(w.request(STYLE).answered).toBe(false);
+    expect(w.request(BASEMAP).answered).toBe(false);
   });
 
   it("does not store an opaque response it cannot read back", async () => {
@@ -279,7 +280,7 @@ describe("third-party map resources", () => {
     const max = Number(w.consts["BROWSE_MAX"]);
     expect(max, "no browse cache bound").toBeGreaterThan(0);
     const pinned = await w.caches.open(String(w.consts["TILE_CACHE"]));
-    await pinned.put("https://tiles-a.basemaps.cartocdn.com/downloaded.mvt", body("route"));
+    await pinned.put(ROUTE_TILE, body("route"));
     for (let i = 0; i < max + 60; i++) {
       const { response, lifetime } = w.request(`${AERIAL}${i}`);
       await response;
@@ -292,7 +293,7 @@ describe("third-party map resources", () => {
     // oldest out first
     expect(browse.urls()).not.toContain(`${AERIAL}0`);
     expect(browse.urls()).toContain(`${AERIAL}${max + 59}`);
-    expect(pinned.urls()).toEqual(["https://tiles-a.basemaps.cartocdn.com/downloaded.mvt"]);
+    expect(pinned.urls()).toEqual([ROUTE_TILE]);
   });
 
   it("answers from a downloaded route before going to the network", async () => {
