@@ -169,6 +169,12 @@ def test_a_host_that_ignores_byte_ranges_is_caught(monkeypatch: pytest.MonkeyPat
         raise AssertionError("a 200 to a range request passed")
 
 
+def test_a_missing_file_is_called_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(check, "fetch", lambda url, headers=None: (404, b"Not Found", ""))
+    with pytest.raises(ValueError, match="doesn't serve it"):
+        check.ranged_reader("https://example.test/basemap.pmtiles")(0, 127)
+
+
 def test_a_basemap_whose_refresh_stopped_is_caught() -> None:
     today = datetime.date(2026, 12, 20)
     assert check.basemap_age_problems({"build": "20261115.pmtiles"}, today) == []

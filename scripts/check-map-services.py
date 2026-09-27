@@ -351,6 +351,8 @@ def ranged_reader(url: str) -> Callable[[int, int], bytes]:
     def read(offset: int, length: int) -> bytes:
         end = offset + length - 1
         status, body, _ = fetch(url, {"Range": f"bytes={offset}-{end}"})
+        if status == 404:
+            raise ValueError("HTTP 404 — the site doesn't serve it; did the deploy leave it out?")
         if status != 206:
             # A 200 here is the whole file: the map would download 50 MB per tile
             raise ValueError(f"HTTP {status} to a byte range, not 206 — ranges aren't served")
