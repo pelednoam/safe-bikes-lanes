@@ -32,8 +32,13 @@ export interface RideOptions {
   timeScale?: number;
   /** Stop feeding fixes after this far along (default: the whole path). */
   untilM?: number;
-  /** Ride off the route from here, on `divertBearing`, for `divertM`. */
+  /** Ride off the route from here, on `divertBearingDeg`, for `divertM`. */
   divertAtM?: number;
+  /** Compass bearing of the wrong turn. Default: square to the route where it
+   * leaves. A fixed default (90°) was a wrong turn only while the route
+   * happened not to run east: once a data rebuild moved it to 109° there, 90 m
+   * "off" ended 30 m from the line, inside the off-route threshold, and
+   * nothing rerouted. */
   divertBearingDeg?: number;
   divertM?: number;
   /** Sit still at this distance for this many simulated seconds (a red light). */
@@ -211,7 +216,7 @@ export async function ride(
     accuracyM = 8,
     timeScale = 8,
     divertAtM,
-    divertBearingDeg = 90,
+    divertBearingDeg,
     divertM = 120,
     pauseAtM,
     pauseSeconds = 0,
@@ -229,6 +234,13 @@ export async function ride(
   const stepM = speed * dt;
   const waitMs = Math.max(1, Math.round((dt * 1000) / timeScale));
   const noise = makeNoise(1337);
+
+  const turnDeg =
+    divertBearingDeg ??
+    (divertAtM === undefined
+      ? 0
+      : (bearing(at(path, cum, divertAtM), at(path, cum, Math.min(total, divertAtM + 12))) + 90) %
+        360);
 
   let alongM = 0;
   let i = 0;
@@ -259,11 +271,11 @@ export async function ride(
     // a wrong turn: leave the route on a bearing
     if (divertAtM !== undefined && alongM >= divertAtM && divertedM < divertM) {
       divertedM += stepM;
-      const rad = (divertBearingDeg * Math.PI) / 180;
+      const rad = (turnDeg * Math.PI) / 180;
       const base = at(path, cum, divertAtM);
       lon = base[0] + (Math.sin(rad) * divertedM) / mPerDegLon(base[1]);
       lat = base[1] + (Math.cos(rad) * divertedM) / M_PER_DEG_LAT;
-      heading = divertBearingDeg;
+      heading = turnDeg;
     } else {
       alongM += stepM;
     }

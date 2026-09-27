@@ -380,13 +380,33 @@ test("the hazard dialog fits the phone and can be dismissed by tapping outside",
       { timeout: 60_000 },
     )
     .toBeGreaterThan(0);
+  // A phone's first visit opens the first-run card over the lower map. The
+  // popup opens above the point it was asked for, so its buttons could land
+  // under the card even when the point was clear of it. This test is about the
+  // form, so it is put away first, as a rider who has used the app once would
+  // have done.
+  const firstRun = page.locator("#first-run-ok");
+  if (await firstRun.isVisible()) await firstRun.click();
+  await expect(page.locator("#first-run")).toBeHidden();
+  // A point of a street where a tap reaches the map. The first vertex of the
+  // first rendered street used to do: a street partly in view has its first
+  // vertex anywhere, and after a data rebuild it was at y = -1, above the
+  // screen, so the right-click opened nothing.
   const pt = await page.evaluate(() => {
     const map = window._map;
     if (!map) return null;
-    const hit = map.queryRenderedFeatures(undefined, { layers: ["network-hit"] })[0];
-    if (!hit || hit.geometry.type !== "LineString") return null;
-    const p = map.project(hit.geometry.coordinates[0] as [number, number]);
-    return { x: Math.round(p.x), y: Math.round(p.y) };
+    const canvas = map.getCanvas();
+    for (const f of map.queryRenderedFeatures(undefined, { layers: ["network-hit"] })) {
+      if (f.geometry.type !== "LineString") continue;
+      for (const c of f.geometry.coordinates) {
+        const p = map.project(c as [number, number]);
+        const x = Math.round(p.x);
+        const y = Math.round(p.y);
+        if (x < 20 || y < 20 || x > innerWidth - 20 || y > innerHeight - 20) continue;
+        if (document.elementFromPoint(x, y) === canvas) return { x, y };
+      }
+    }
+    return null;
   });
   expect(pt).not.toBeNull();
   if (!pt) return;
