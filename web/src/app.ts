@@ -102,8 +102,8 @@ import {
   stashInProgress,
   takeInProgress,
 } from "./rides.js";
-import { dataUrl, initDataSource, loadJson, usingRemoteData } from "./data.js";
-import { buildCues, PROFILES, Router, routeCacheKey, toGPX } from "./router.js";
+import { dataSource, dataUrl, initDataSource, loadJson, usingRemoteData } from "./data.js";
+import { buildCues, PROFILES, routeCacheKey, toGPX } from "./router.js";
 import {
   distVoice,
   fmtDist,
@@ -119,9 +119,11 @@ import {
   unitName,
   unitShort,
 } from "./units.js";
-import { NetworkTiles, TileStore } from "./tiles.js";
+import { NetworkTiles } from "./tiles.js";
 import { withRetry } from "./retry.js";
-import { Lane, planOptions, type RoutePrefs, type Ticket, withUpgraded } from "./planner.js";
+import { Lane, type Ticket } from "./planner.js";
+import type { RoutingApi, WirePrefs } from "./routing.js";
+import { wrap } from "./rpc.js";
 import { type SpeakPriority, SpeechQueue } from "./speech.js";
 import { loopRejoinPoint, payloadLength, rejoinOption } from "./rejoin.js";
 import { decodePlan, encodePlan } from "./permalink.js";
@@ -430,7 +432,12 @@ map.addControl(scaleBar, "bottom-left");
 // state
 // ---------------------------------------------------------------------------
 
-let router: Router | null = null;
+/** Routing runs in a worker (routing.ts): the tiles, the graph and every
+ * search, off this thread, so the map and the buttons keep working while a
+ * route is found. The page asks and awaits. */
+const routing = wrap<RoutingApi>(new Worker(new URL("./routing.worker.ts", import.meta.url)));
+/** True once some tiles are loaded and the graph is built over them. */
+let routerReady = false;
 /** The basemap's layers, injected under everything this app draws. A theme's
  * layers are added the first time that theme is shown — see applyBasemap. */
 const basemap = createBasemap(map, () => map.getStyle().layers.find((l) => l.id !== "ground")?.id);
@@ -461,9 +468,11 @@ let avoidTypes = new Set<ProtectionClass>(
 );
 
 /** Every routing choice the rider has made, as the router takes them — the one
- * place a reroute, a detour or a search grade reads them from (see planOptions). */
-function routePrefs(): RoutePrefs {
-  return { profileId, preferFlat, avoid: avoidTypes, walkMaxM };
+ * place a trip, a reroute, a detour or a search grade reads them from. The
+ * reroute, the detour and the resume each spelled the call out for themselves
+ * once, and all three left the walking limit off. */
+function routePrefs(): WirePrefs {
+  return { profileId, preferFlat, avoid: [...avoidTypes], walkMaxM };
 }
 
 function syncAvoidSummary(): void {
@@ -554,7 +563,7 @@ let hazardPhoto: Blob | null = null;
 
 /** Routes avoid both quick sketchy marks and full hazard reports. */
 function applyAvoidPoints(): void {
-  router?.setSketchyMarks([
+  void routing.setSketchyMarks([
     ...sketchyMarks,
     ...hazards.map((h): [number, number] => [h.lon, h.lat]),
   ]);
@@ -594,14 +603,8 @@ void dataReady.then(() => {
 
 // Routing graph is tiled (pipeline/export_web.py): the browser loads only the
 // tiles covering a route's corridor, so coverage can scale toward all of MA
-// without a giant download. The Router is (re)built over whatever tiles are
-// loaded; ensureRouter fetches the ones a given area needs first.
-const tiles = new TileStore(loadJson);
-let builtTileCount = -1;
-
-/** Fetch the tiles covering `points` (± padM metres, plus a margin), then
- * return a Router built over the current tile set — rebuilt only when the
- * loaded set actually grew. Null if the area has no mapped tiles. */
+// without a giant download. The worker (re)builds the graph over whatever
+// tiles are loaded; ensureRouter has it fetch the ones an area needs first.
 /** What the loading line is doing right now.
  *
  * Routing was showing a motionless "routing…" for the whole wait, which is
@@ -640,12 +643,14 @@ function showStage(text: string, sub = ""): void {
   box.style.display = "flex";
 }
 
+/** Have the worker load the tiles covering `points` (± padM metres, plus a
+ * margin) and build the graph over them. False if the area has no mapped tiles. */
 async function ensureRouter(
   points: [number, number][],
   padM: number,
   margin = 1,
   onProgress?: (done: number, total: number) => void,
-): Promise<Router | null> {
+): Promise<boolean> {
   await manifestReady;
   // Corridor, not bounding box: for a cross-metro trip the endpoints' bbox
   // covers most of the map, so we'd download hundreds of tiles to route along
@@ -658,16 +663,11 @@ async function ensureRouter(
   // measurably cheaper but produced a less safe route (50% -> 34% protected
   // on Wellesley->Revere), which is the wrong trade for this app.
   const marginCells = margin + Math.round(padM / 2200);
-  await tiles.ensureCorridor(points, marginCells, onProgress);
-  if (tiles.loadedCount === 0) return null;
-  if (router === null || builtTileCount !== tiles.loadedCount) {
-    router = new Router(tiles.assemble());
-    builtTileCount = tiles.loadedCount;
-    applyAvoidPoints();
-    if (constructionFC) router.setConstructionPoints(constructionAvoidPoints(constructionFC));
-    renderSketchy();
-  }
-  return router;
+  const { ready, rebuilt } = await routing.ensure(points, marginCells, onProgress);
+  if (!ready) return false;
+  routerReady = true;
+  if (rebuilt) renderSketchy();
+  return true;
 }
 
 /** Say, in words, that something the app needs did not load and when it will
@@ -693,8 +693,9 @@ function dataLoadRecovered(): void {
 }
 
 const manifestReady: Promise<void> = dataReady
+  .then(() => routing.configure(dataSource(), getUnits()))
   .then(() =>
-    withRetry(() => tiles.loadManifest(), {
+    withRetry(() => routing.loadManifest(), {
       onRetry: (_err, _attempt, delayMs) => dataLoadTrouble("the map data", delayMs),
     }),
   )
@@ -773,11 +774,10 @@ const constructionReady: Promise<void> = dataReady
   })
   .catch(() => undefined);
 
-// apply construction avoidance to the live Router as soon as the zones load
+// construction avoidance for the router as soon as the zones load (the worker
+// keeps it, and applies it to every graph it builds)
 void constructionReady.then(() => {
-  if (router && constructionFC) {
-    router.setConstructionPoints(constructionAvoidPoints(constructionFC));
-  }
+  if (constructionFC) void routing.setConstructionPoints(constructionAvoidPoints(constructionFC));
 });
 
 /** pois.geojson, fetched and parsed once. The loop planner reads its features
@@ -919,13 +919,13 @@ function rememberName(cache: Record<string, string>, key: string, name: string):
   writeItem(REVGEO_KEY, JSON.stringify(trimRecord(cache, REVGEO_MAX)));
 }
 
-/** The router once it exists, or null if it hasn't within `ms`. */
-async function withRouter(ms: number): Promise<Router | null> {
+/** Whether the router has a graph, waiting up to `ms` for one. */
+async function withRouter(ms: number): Promise<boolean> {
   const deadline = Date.now() + ms;
-  while (router === null && Date.now() < deadline) {
+  while (!routerReady && Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 120));
   }
-  return router;
+  return routerReady;
 }
 
 async function reverseGeocode(lon: number, lat: number): Promise<string | null> {
@@ -949,7 +949,7 @@ async function reverseGeocode(lon: number, lat: number): Promise<string | null> 
   // building or in a park, where the geocoder's answer is better than the name
   // of the nearest road — a pin on Kendall Square should say "Google", not the
   // street it happens to sit beside.
-  const local = (await withRouter(10_000))?.streetNameAt(lon, lat, 20) ?? null;
+  const local = (await withRouter(10_000)) ? await routing.streetNameAt(lon, lat, 20) : null;
   if (local !== null) {
     rememberName(cache, key, local);
     return local;
@@ -1122,7 +1122,7 @@ async function requestRoute(): Promise<void> {
   // whole trip from the start pin — which navigation then switched to, telling
   // a rider a mile down the road to go back to the beginning.
   if (navActive) {
-    replanRide();
+    void replanRide();
     return;
   }
   const ticket = beginPlan();
@@ -1159,9 +1159,9 @@ async function requestRoute(): Promise<void> {
     // load the tiles along the corridor, then route; a safe route can detour
     // well outside the straight A–B box, so widen the loaded area once if the
     // first attempt finds nothing.
-    const route = (r: Router): RouteOption[] => {
+    const route = (): Promise<RouteOption[]> => {
       showStage("Finding the safest way…");
-      return planOptions(r, a, b, routePrefs());
+      return routing.plan(a, b, routePrefs());
     };
     // Computed into a local and only published once this plan is known to be
     // the current one: `options` is what the cards, the chips and navigation
@@ -1169,18 +1169,20 @@ async function requestRoute(): Promise<void> {
     let found: RouteOption[] = [];
     // a narrow corridor first — it covers ordinary detours and keeps a long
     // trip from pulling a big slice of the map; the retry below widens it
-    let r = await ensureRouter([a, b], 1200, 1, progress);
+    let mapped = await ensureRouter([a, b], 1200, 1, progress);
     if (ticket.stale()) return;
     try {
-      if (!r) throw new Error("unmapped");
-      found = route(r);
+      if (!mapped) throw new Error("unmapped");
+      found = await route();
       if (!found.length) throw new Error("no route");
     } catch {
-      r = await ensureRouter([a, b], 5000, 2, progress);
       if (ticket.stale()) return;
-      if (!r) throw new Error("this area isn't mapped for routing yet");
-      found = route(r);
+      mapped = await ensureRouter([a, b], 5000, 2, progress);
+      if (ticket.stale()) return;
+      if (!mapped) throw new Error("this area isn't mapped for routing yet");
+      found = await route();
     }
+    if (ticket.stale()) return;
     const fallback = found[0];
     if (!fallback) throw new Error("no route found");
     options = found;
@@ -1266,17 +1268,18 @@ async function requestLoop(): Promise<void> {
   try {
     const s = start.getLngLat();
     // a loop can range out to roughly half its length from the start
-    const r = await ensureRouter([[s.lng, s.lat]], targetM / 2, 2, progress);
+    const mapped = await ensureRouter([[s.lng, s.lat]], targetM / 2, 2, progress);
     if (ticket.stale()) return;
-    if (!r) throw new Error("this area isn't mapped for routing yet");
+    if (!mapped) throw new Error("this area isn't mapped for routing yet");
     showStage(`Finding a ${fmtDistTight(targetM)} loop…`);
-    const { option, poi, more } = r.loopRoute(
+    const { option, poi, more } = await routing.loopRoute(
       [s.lng, s.lat],
       targetM,
       candidates,
       profileId,
       preferFlat,
     );
+    if (ticket.stale()) return;
     end?.remove();
     end = null;
     // a choice of loops, not a verdict: the runner-ups go in the same option
@@ -2229,9 +2232,6 @@ async function gradeSearchResults(
   for (const row of rows.slice(MAX_GRADED)) clearGrading(row);
   for (const row of rows.slice(0, MAX_GRADED)) {
     showGrading(row); // it may have been cleared by an earlier pass
-    // hand the page back between routes: five Dijkstras in a row on the main
-    // thread is a visible stall on a phone
-    await new Promise((r) => setTimeout(r, 0));
     if (ticket.stale()) return; // a newer search owns the list now
     const key = routeCacheKey({
       from: a,
@@ -2245,22 +2245,22 @@ async function gradeSearchResults(
     let hit = gradeCache.get(key);
     if (hit === undefined) {
       try {
-        const r = await ensureRouter([a, row.lngLat], 1200, 1);
+        const mapped = await ensureRouter([a, row.lngLat], 1200, 1);
         if (ticket.stale()) return;
         // routed with the snapshot, so the answer matches the key it is filed
         // under even if the rider changes a preference while this is running
         // by id, not by index: the badge says "safest", and relying on the
         // order routeOptions happens to build its candidates in makes that a
         // safety claim held together by an array position
-        const opts =
-          r === null
-            ? undefined
-            : planOptions(r, a, row.lngLat, {
-                profileId: snap.profileId,
-                preferFlat: snap.preferFlat,
-                avoid: new Set(snap.avoid),
-                walkMaxM: snap.walkMaxM,
-              });
+        const opts = !mapped
+          ? undefined
+          : await routing.plan(a, row.lngLat, {
+              profileId: snap.profileId,
+              preferFlat: snap.preferFlat,
+              avoid: [...snap.avoid],
+              walkMaxM: snap.walkMaxM,
+            });
+        if (ticket.stale()) return;
         const best = opts?.find((o) => o.id === "safest") ?? opts?.[0];
         if (!best) throw new Error("no route");
         hit = {
@@ -2440,9 +2440,10 @@ async function computeShed(): Promise<void> {
   const budgetKm = Number(el<HTMLInputElement>("shed-budget").value);
   el<HTMLSpanElement>("shed-budget-label").textContent = fmtDistTight(budgetKm * 1000);
   // the flood can reach out to the full budget radius from the center
-  const r = await ensureRouter([center], budgetKm * 1000, 2);
-  if (ticket.stale() || !shedMode || !r) return;
-  const res = r.safeShed(center, budgetKm * 1000, profileId, preferFlat);
+  const mapped = await ensureRouter([center], budgetKm * 1000, 2);
+  if (ticket.stale() || !shedMode || !mapped) return;
+  const res = await routing.safeShed(center, budgetKm * 1000, profileId, preferFlat);
+  if (ticket.stale() || !shedMode) return;
   getSource("shed").setData(res.geojson as GeoJSON.GeoJSON);
   el<HTMLDivElement>("shed-info").textContent =
     `${fmtDist(res.reachableKm * 1000)} of streets reachable ` +
@@ -4268,8 +4269,16 @@ function openHazardDialog(lon: number, lat: number): void {
   const preview = el<HTMLImageElement>("hazard-preview");
   preview.style.display = "none";
   preview.src = "";
-  el<HTMLDivElement>("hazard-loc").textContent =
-    `${hereLabel(lon, lat)} — saved reports appear on the map and routes avoid them`;
+  const where = el<HTMLDivElement>("hazard-loc");
+  const note = " — saved reports appear on the map and routes avoid them";
+  where.textContent = `here${note}`;
+  // named as soon as the router says what kind of way this is, if the dialog
+  // is still about this spot by then
+  void hereLabel(lon, lat).then((label) => {
+    if (hazardPendingLoc?.[0] === lon && hazardPendingLoc[1] === lat) {
+      where.textContent = `${label}${note}`;
+    }
+  });
   el<HTMLDialogElement>("hazard").showModal();
 }
 
@@ -4896,37 +4905,52 @@ const rideEngine = new RideEngine({
 /** Route options from where the rider is to where the ride is going: back onto
  * what is left of a loop, or to the destination. Null when there is nowhere
  * to go (no destination yet). */
-function rideOptionsFrom(
-  r: Router,
+async function rideOptionsFrom(
   from: [number, number],
-  bias?: Map<number, number>,
-): RouteOption[] | null {
-  if (navLoop !== null && navOriginalDest === null) {
-    const target = loopRejoinPoint(navLoop.payload, rideEngine.loopDoneM);
+  heading?: number,
+  toward: { dest: [number, number] | null; onDetour: boolean } = {
+    dest: navDest,
+    onDetour: navOriginalDest !== null,
+  },
+): Promise<RouteOption[] | null> {
+  const loop = navLoop;
+  if (loop !== null && !toward.onDetour) {
+    const target = loopRejoinPoint(loop.payload, rideEngine.loopDoneM);
     if (target !== null) {
-      const lead = planOptions(r, from, target.at, routePrefs(), bias)[0];
+      const lead = (await routing.plan(from, target.at, routePrefs(), heading))[0];
       if (!lead) return [];
-      const back = rejoinOption(lead, navLoop, target.index);
+      const back = rejoinOption(lead, loop, target.index);
       loopLegs.set(back, { legM: payloadLength(lead.payload), resumeM: target.atM });
       return [back];
     }
     // what is left of the loop is shorter than the way onto it: finish
   }
-  return navDest === null ? null : planOptions(r, from, navDest, routePrefs(), bias);
+  return toward.dest === null ? null : routing.plan(from, toward.dest, routePrefs(), heading);
 }
+
+/** Every way on the ride plans mid-ride — a re-plan, a reroute, a detour, the
+ * way back from one — owns what the ride follows next, and the newest wins. An
+ * answer that arrives after the ride ended, or after a newer one was asked
+ * for, is dropped: guidance switching to a route for a wrong turn already put
+ * right is worse than none. */
+const rideLane = new Lane();
+const rideStale = (ticket: Ticket): boolean => ticket.stale() || !navActive;
 
 /** Re-plan the ride from where the rider is, keeping where it is going: after
  * something changed what the router must avoid. */
-function replanRide(): void {
-  if (!router || !navLastPos) return;
+async function replanRide(): Promise<void> {
+  if (!routerReady || !navLastPos) return;
+  const ticket = rideLane.begin();
   try {
-    const found = rideOptionsFrom(router, navLastPos);
+    const found = await rideOptionsFrom(navLastPos);
+    if (rideStale(ticket)) return;
     const first = found?.[0];
     if (!found || !first) return;
     options = found;
     selectOption(first.id);
     rebuildNavFromSelected();
   } catch {
+    if (rideStale(ticket)) return;
     showRideAlert("⚠ couldn't re-plan from here — keep to the route", "gps");
     window.setTimeout(hideRideAlert, 4000);
   }
@@ -5148,12 +5172,12 @@ function frameRoute(option: RouteOption): void {
 
 /** Where the rider is, in words. The hazard dialog used to print raw decimal
  * degrees at them while the app already knew the street name. */
-function hereLabel(lon: number, lat: number): string {
+async function hereLabel(lon: number, lat: number): Promise<string> {
   const street = el<HTMLElement>("nav-street").textContent?.trim();
   if (navActive && street && !/^[-–]$/.test(street) && !/^⚠/.test(street)) {
     return `on ${street}`;
   }
-  const cls = router?.edgeClassAt(lon, lat);
+  const cls = await routing.edgeClassAt(lon, lat);
   return cls ? `on a ${cls.replace(/_/g, " ")}` : "at this spot";
 }
 
@@ -5226,7 +5250,7 @@ function navStopAnimation(): void {
 }
 
 function navOnFix(fix: NativeFix): void {
-  if (!navActive || !router) return;
+  if (!navActive) return;
   const step = rideEngine.onFix(fix, Date.now());
   if (step === null) return;
   navLastPos = [fix.lon, fix.lat];
@@ -5235,7 +5259,7 @@ function navOnFix(fix: NativeFix): void {
     navFixesSinceStash = 0;
     stashInProgress(recorder.finish(profileId));
   }
-  recorder?.addPoint(Date.now(), fix.lon, fix.lat, router.edgeClassAt(fix.lon, fix.lat), step.alongM);
+  recorder?.addPoint(Date.now(), fix.lon, fix.lat, step.cls, step.alongM);
   navPosTarget = step.dot;
   if (!navDot) {
     const dot = document.createElement("div");
@@ -5284,7 +5308,7 @@ function applyRideEffect(e: RideEffect): void {
       showTrip(e);
       return;
     case "reroute":
-      rerouteFrom(e.from, e.heading);
+      void rerouteFrom(e.from, e.heading);
       return;
     case "arrived":
       showArrival(e.atStop, e.totalM);
@@ -5293,11 +5317,11 @@ function applyRideEffect(e: RideEffect): void {
 }
 
 /** A wrong turn: plan the way on from here, and say which way it goes. */
-function rerouteFrom(from: [number, number], heading: number | null): void {
-  if (!router) return;
+async function rerouteFrom(from: [number, number], heading: number | null): Promise<void> {
+  const ticket = rideLane.begin();
   try {
-    const bias = heading !== null ? router.headingBias(from, heading) : undefined;
-    const found = rideOptionsFrom(router, from, bias);
+    const found = await rideOptionsFrom(from, heading ?? undefined);
+    if (rideStale(ticket)) return;
     if (found !== null) options = found;
     const first = found?.[0];
     if (first) {
@@ -5307,11 +5331,14 @@ function rerouteFrom(from: [number, number], heading: number | null): void {
       // leaving "adjusting…" up while a fresh route sits undrawn-to
       const back = rideEngine.rejoinBearing();
       showRideAlert(
-        back === null ? "⚠ off route — new route ready" : `⚠ off route — head ${compassPoint(back)} to rejoin`,
+        back === null
+          ? "⚠ off route — new route ready"
+          : `⚠ off route — head ${compassPoint(back)} to rejoin`,
         "gps",
       );
     }
   } catch {
+    if (rideStale(ticket)) return;
     showRideAlert("⚠ off route — no way back from here", "gps");
   }
 }
@@ -5383,6 +5410,7 @@ async function startNav(): Promise<void> {
 
 function exitNav(): void {
   navActive = false;
+  rideLane.cancel();
   // the stops menu belongs to the ride; left open it floated over the planner
   stopsOpen(false);
   navOriginalDest = null;
@@ -5429,22 +5457,27 @@ function exitNav(): void {
 
 /** Mid-ride detour: reroute to the nearest kid stop of a kind, remembering
  * the original destination for the resume button. */
-function detourToNearest(kind: "water" | "restroom" | "playground"): void {
-  if (!navActive || !router || !navLastPos) return;
+async function detourToNearest(kind: "water" | "restroom" | "playground"): Promise<void> {
+  if (!navActive || !routerReady || !navLastPos) return;
+  const from = navLastPos;
   const candidates = pois.filter((p) => p.properties.kind === kind);
-  const idx = router.nearestReachable(
-    navLastPos,
-    candidates.map((p) => p.geometry.coordinates),
-    profileId,
-    preferFlat,
-  );
-  const poi = idx !== null ? candidates[idx] : undefined;
-  if (!poi) {
-    speak(`no ${kind === "water" ? "water fountain" : kind} found nearby`);
-    return;
-  }
+  const ticket = rideLane.begin();
   try {
-    options = planOptions(router, navLastPos, poi.geometry.coordinates, routePrefs());
+    const idx = await routing.nearestReachable(
+      from,
+      candidates.map((p) => p.geometry.coordinates),
+      profileId,
+      preferFlat,
+    );
+    if (rideStale(ticket)) return;
+    const poi = idx !== null ? candidates[idx] : undefined;
+    if (!poi) {
+      speak(`no ${kind === "water" ? "water fountain" : kind} found nearby`);
+      return;
+    }
+    const found = await routing.plan(from, poi.geometry.coordinates, routePrefs());
+    if (rideStale(ticket)) return;
+    options = found;
     const first = options[0];
     if (!first) return;
     selectOption(first.id);
@@ -5459,32 +5492,39 @@ function detourToNearest(kind: "water" | "restroom" | "playground"): void {
     speak(
       `detour: ${label} is ${fmtDist(first.payload.summary.meters)} away. follow the route.`,
     );
-  } catch (err) {
+  } catch {
+    if (rideStale(ticket)) return;
     speak("could not plan a detour from here");
-    void err;
   }
 }
 
 el<HTMLButtonElement>("nav-water").addEventListener("click", () => {
-  detourToNearest("water");
+  void detourToNearest("water");
 });
 el<HTMLButtonElement>("nav-restroom").addEventListener("click", () => {
-  detourToNearest("restroom");
+  void detourToNearest("restroom");
 });
 el<HTMLButtonElement>("nav-playground").addEventListener("click", () => {
-  detourToNearest("playground");
+  void detourToNearest("playground");
 });
 
 el<HTMLButtonElement>("nav-resume").addEventListener("click", () => {
-  if (!router || !navLastPos || !navOriginalDest) return;
-  // back to the ride: the destination, or what is left of the loop
-  const detourDest = navDest;
-  navDest = navOriginalDest;
-  navOriginalDest = null;
+  void resumeRide();
+});
+
+/** Back to the ride from a detour: the destination, or what is left of the
+ * loop. The detour stays what is being followed until the way back exists. */
+async function resumeRide(): Promise<void> {
+  if (!routerReady || !navLastPos || !navOriginalDest) return;
+  const original = navOriginalDest;
+  const ticket = rideLane.begin();
   try {
-    const found = rideOptionsFrom(router, navLastPos);
+    const found = await rideOptionsFrom(navLastPos, undefined, { dest: original, onDetour: false });
+    if (rideStale(ticket)) return;
     const first = found?.[0];
     if (!found || !first) throw new Error("no way back");
+    navDest = original;
+    navOriginalDest = null;
     options = found;
     selectOption(first.id);
     rebuildNavFromSelected();
@@ -5492,12 +5532,11 @@ el<HTMLButtonElement>("nav-resume").addEventListener("click", () => {
     hideRideAlert();
     speak("back on the way. let's go!");
   } catch {
+    if (rideStale(ticket)) return;
     // still on the detour
-    navOriginalDest = navDest;
-    navDest = detourDest;
     speak("could not plan the way back from here");
   }
-});
+}
 
 el<HTMLButtonElement>("nav-myway").classList.toggle("active", navMyWay);
 el<HTMLButtonElement>("nav-myway").addEventListener("click", () => {
@@ -5563,6 +5602,7 @@ el<HTMLButtonElement>("nav-hazard").addEventListener("click", () => {
   pref.addEventListener("change", () => {
     const wasM = toMeters(Number(el<HTMLInputElement>("loop-dist").value) || 0);
     setUnits(pref.value === "metric" ? "metric" : "imperial");
+    void routing.configure(dataSource(), getUnits());
     syncUnitLabels();
     scaleBar.setUnit(getUnits());
     // the number in the box meant a distance, not a digit: keep the distance
@@ -6327,6 +6367,8 @@ function repaintProjects(scored: Map<string, number>): void {
 // and an argument.
 
 let whatIfPid: string | null = null;
+/** A what-if answered with reach (no trip planned): the newest question wins. */
+const whatIfLane = new Lane();
 /** The trip as really planned, kept while the what-if's version of it is on
  * screen. The hypothetical is computed against a street that does not exist, so
  * it lives only in the what-if view: undo, a new plan and starting a ride all
@@ -6380,17 +6422,17 @@ async function runWhatIf(pid: string): Promise<void> {
   if (!start || !end) {
     // no trip planned: answer with reach instead, which needs only one point
     const from = start ?? end;
-    if (!router || !from) {
+    if (!routerReady || !from) {
       out.textContent = "plan a trip, or set a start, and ask again";
       return;
     }
     const at = from.getLngLat();
     const budget = 2500;
-    const r = router;
-    const before = r.safeShed([at.lng, at.lat], budget, profileId, preferFlat);
-    const { result: after } = withUpgraded(r, points, () =>
-      r.safeShed([at.lng, at.lat], budget, profileId, preferFlat),
-    );
+    const ticket = whatIfLane.begin();
+    const center: [number, number] = [at.lng, at.lat];
+    const before = await routing.safeShed(center, budget, profileId, preferFlat);
+    const { result: after } = await routing.safeShedWith(points, center, budget, profileId, preferFlat);
+    if (ticket.stale()) return;
     whatIfPid = pid;
     el<HTMLButtonElement>("whatif-clear").style.display = "";
     const gain = Math.round((after.reachableKm - before.reachableKm) * 10) / 10;
@@ -6418,21 +6460,22 @@ async function runWhatIf(pid: string): Promise<void> {
   const a: [number, number] = [s.lng, s.lat];
   const b: [number, number] = [d.lng, d.lat];
   const ticket = beginPlan();
-  const r = await ensureRouter([a, b], 1200, 1);
+  whatIfLane.cancel();
+  const mapped = await ensureRouter([a, b], 1200, 1);
   if (ticket.stale()) return;
   let hypothetical: RouteOption[] = [];
   let covered = 0;
   try {
-    if (r === null) throw new Error("unmapped");
+    if (!mapped) throw new Error("unmapped");
     // applied for this one computation and taken off again before anything
     // else can route: the next trip, a search grade or a ride must never be
-    // planned along a lane that has only been proposed
-    ({ covered, result: hypothetical } = withUpgraded(r, points, () =>
-      planOptions(r, a, b, routePrefs()),
-    ));
+    // planned along a lane that has only been proposed (the worker runs it
+    // start to finish before it answers anything else)
+    ({ covered, result: hypothetical } = await routing.planWith(points, a, b, routePrefs()));
   } catch {
     hypothetical = [];
   }
+  if (ticket.stale()) return;
   const shown = hypothetical.find((o) => o.id === chosen.id) ?? hypothetical[0];
   if (!shown) {
     out.textContent = "couldn't re-plan with that built";

@@ -1,0 +1,175 @@
+// Routing as the page gets it: through the worker's message channel (rpc.ts),
+// on the pinned test data (npm run test-data). The worker itself is a
+// three-line shell around createRoutingApi, so a MessageChannel stands in for it.
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { beforeAll, describe, expect, it } from "vitest";
+
+import type { DataSource } from "../src/data.js";
+import { createRoutingApi, type RoutingApi, type WirePrefs } from "../src/routing.js";
+import { type Endpoint, expose, type Remote, wrap } from "../src/rpc.js";
+import { getUnits, setUnits } from "../src/units.js";
+
+const DATA = join(dirname(fileURLToPath(import.meta.url)), "..", "test-data", "data");
+const haveData = existsSync(join(DATA, "tiles", "manifest.json"));
+
+/** A worker, minus the thread: both ends of a channel in this one. */
+function channel<T extends object>(api: T): Remote<T> {
+  const { port1, port2 } = new MessageChannel();
+  const ep = (port: MessagePort): Endpoint => ({
+    postMessage: (m) => port.postMessage(m),
+    addEventListener: (type, l) => port.addEventListener(type, l),
+  });
+  expose(api, ep(port1));
+  const remote = wrap<T>(ep(port2));
+  port1.start();
+  port2.start();
+  return remote;
+}
+
+describe("calling across the channel", () => {
+  const api = {
+    add: (a: number, b: number) => a + b,
+    later: async (x: string) => `${x}!`,
+    fail: () => {
+      throw new Error("start and end snap to the same intersection");
+    },
+    count: (n: number, onEach: (i: number) => void) => {
+      for (let i = 0; i < n; i++) onEach(i);
+      return n;
+    },
+    shapes: () => ({ m: new Map([[1, 2]]), s: new Set(["a"]), a: new Float64Array([1.5]) }),
+  };
+  const remote = channel(api);
+
+  it("returns what the method returns, awaited", async () => {
+    expect(await remote.add(2, 3)).toBe(5);
+    expect(await remote.later("go")).toBe("go!");
+  });
+
+  it("rejects with the method's own words, which the page shows", async () => {
+    await expect(remote.fail()).rejects.toThrow("start and end snap to the same intersection");
+  });
+
+  it("calls a function argument back here, before the answer", async () => {
+    const seen: number[] = [];
+    expect(await remote.count(3, (i) => seen.push(i))).toBe(3);
+    expect(seen).toEqual([0, 1, 2]);
+  });
+
+  it("carries Maps, Sets and typed arrays whole", async () => {
+    const got = await remote.shapes();
+    expect(got.m.get(1)).toBe(2);
+    expect(got.s.has("a")).toBe(true);
+    expect(got.a[0]).toBe(1.5);
+  });
+
+  it("answers calls in the order they were made", async () => {
+    const all = await Promise.all([remote.later("a"), remote.add(1, 1), remote.later("b")]);
+    expect(all).toEqual(["a!", 2, "b!"]);
+  });
+
+  it("isn't mistaken for a promise", async () => {
+    // `await remote` would hang forever if the proxy offered a then()
+    expect(await Promise.resolve(remote)).toBe(remote);
+  });
+});
+
+describe.skipIf(!haveData)("routing in the worker, on the pinned data", () => {
+  const DAVIS: [number, number] = [-71.122258, 42.396748];
+  const KENDALL: [number, number] = [-71.086705, 42.362552];
+  const prefs: WirePrefs = { profileId: "young_kids", preferFlat: false, avoid: [], walkMaxM: 800 };
+  const source: DataSource = { remoteId: null, bundled: `${DATA}/` };
+  const load = async (src: DataSource, name: string): Promise<unknown> =>
+    JSON.parse(readFileSync(`${src.bundled}${name}`, "utf8")) as unknown;
+  let routing: Remote<RoutingApi>;
+  const progress: [number, number][] = [];
+
+  beforeAll(async () => {
+    routing = channel(createRoutingApi(load));
+    await routing.configure(source, "imperial");
+    await routing.loadManifest();
+    const first = await routing.ensure([DAVIS, KENDALL], 1, (done, total) => progress.push([done, total]));
+    expect(first).toEqual({ ready: true, rebuilt: true });
+  }, 60_000);
+
+  it("reports tile loading as it goes, to the last one", () => {
+    const [, total] = progress[0] ?? [0, 0];
+    expect(total).toBeGreaterThan(4);
+    expect(progress[progress.length - 1]).toEqual([total, total]);
+  });
+
+  it("rebuilds the graph only when the loaded tiles grew", async () => {
+    expect(await routing.ensure([DAVIS, KENDALL], 1)).toEqual({ ready: true, rebuilt: false });
+  });
+
+  it("plans the ground-truth trip: the Community Path, mostly protected", async () => {
+    const options = await routing.plan(DAVIS, KENDALL, prefs);
+    const safest = options.find((o) => o.id === "safest");
+    expect(safest?.payload.summary.pct_protected).toBeGreaterThan(70);
+    expect(JSON.stringify(safest?.payload.geojson)).toContain("Community Path");
+  });
+
+  it("writes its reasons in the rider's units, not the page's default", async () => {
+    try {
+      await routing.configure(source, "metric");
+      const why = async (): Promise<string> =>
+        JSON.stringify((await routing.plan(DAVIS, KENDALL, prefs)).map((o) => o.payload.summary.explanation));
+      const metric = await why();
+      await routing.configure(source, "imperial");
+      const imperial = await why();
+      expect(metric).toMatch(/\d (m|km)\b/);
+      expect(metric).not.toMatch(/\d (mi|ft)\b/);
+      expect(imperial).toMatch(/\d (mi|ft)\b/);
+      expect(imperial).not.toMatch(/\d (m|km)\b/);
+    } finally {
+      setUnits("imperial");
+    }
+    expect(getUnits()).toBe("imperial");
+  });
+
+  it("keeps a proposed lane to the one search that asked about it", async () => {
+    const plain = await routing.plan(DAVIS, KENDALL, prefs);
+    // a proposed lane down Mass Ave, the direct line
+    const lane: [number, number][] = [
+      [-71.1195, 42.3965],
+      [-71.105, 42.38],
+      [-71.095, 42.37],
+    ];
+    const what = await routing.planWith(lane, DAVIS, KENDALL, prefs);
+    expect(what.covered).toBeGreaterThanOrEqual(0);
+    // the next search is planned on the streets as they are
+    expect(JSON.stringify(await routing.plan(DAVIS, KENDALL, prefs))).toBe(JSON.stringify(plain));
+  });
+
+  it("keeps what routes avoid across a rebuild of the graph", async () => {
+    const before = await routing.plan(DAVIS, KENDALL, prefs);
+    const safest = before.find((o) => o.id === "safest");
+    const features = safest?.payload.geojson.features ?? [];
+    const coords = features.flatMap((f) => f.geometry.coordinates as [number, number][]);
+    // the whole middle of it marked: there has to be another way
+    const marks = coords.slice(Math.floor(coords.length / 4), Math.floor((coords.length * 3) / 4));
+    await routing.setSketchyMarks(marks.filter((_c, i) => i % 3 === 0));
+    expect(JSON.stringify(await routing.plan(DAVIS, KENDALL, prefs))).not.toBe(JSON.stringify(before));
+    // more tiles: the graph is rebuilt, and must still avoid the mark
+    const grown = await routing.ensure([DAVIS, [-71.2, 42.42]], 1);
+    expect(grown.rebuilt).toBe(true);
+    const after = await routing.plan(DAVIS, KENDALL, prefs);
+    expect(JSON.stringify(after)).not.toBe(JSON.stringify(before));
+    await routing.setSketchyMarks([]);
+  });
+
+  it("says why it can't, in words, when there is nothing to route on", async () => {
+    const empty = channel(createRoutingApi(load));
+    await empty.configure(source, "imperial");
+    await expect(empty.plan(DAVIS, KENDALL, prefs)).rejects.toThrow(/isn't mapped/);
+    expect(await empty.streetNameAt(DAVIS[0], DAVIS[1], 20)).toBeNull();
+  });
+
+  it("names the street under a point, and what kind of way it is", async () => {
+    expect(await routing.streetNameAt(-71.1223, 42.3967, 40)).not.toBeNull();
+    expect(await routing.edgeClassAt(-71.1223, 42.3967)).not.toBeNull();
+  });
+});

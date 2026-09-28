@@ -73,6 +73,13 @@ jobs:
       - name: Install
         run: npm ci
         working-directory: web
+      - name: Fetch the pinned test data
+        # The browser suite, and the unit tests that route (tests/routing.test.ts), run on a frozen data build (web/test-data.json), so
+        # a weekly rebuild can't fail this gate by moving what a test aims at.
+        # Its format is checked like the published snapshot's: code that needs a
+        # newer format has to move the pin in the same commit.
+        run: npm run test-data && bash ../scripts/check-data-format.sh web/test-data/data
+        working-directory: web
       - name: Type-check, test, build
         # test:coverage, not test: the coverage thresholds are the ratchet on unit
         # coverage, and they only apply when --coverage is passed. Running plain
@@ -83,13 +90,6 @@ jobs:
         working-directory: web
       - name: Install Playwright browser
         run: npx playwright install --with-deps chromium
-        working-directory: web
-      - name: Fetch the pinned test data
-        # The browser suite runs on a frozen data build (web/test-data.json), so
-        # a weekly rebuild can't fail this gate by moving what a test aims at.
-        # Its format is checked like the published snapshot's: code that needs a
-        # newer format has to move the pin in the same commit.
-        run: npm run test-data && bash ../scripts/check-data-format.sh web/test-data/data
         working-directory: web
       - name: Browser E2E (real app, pinned test data)
         run: npm run e2e

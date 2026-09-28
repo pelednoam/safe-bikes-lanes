@@ -66,6 +66,16 @@ for (const a of new Set([...plannerLoads, "maplibre-gl.mjs", ...maplibreLoads]))
   if (!exists(a)) problems.push(`index.html loads ${a}, which the build doesn't have`);
 }
 
+// 2b. every worker a precached script starts is precached too: routing runs
+// in one (src/routing.worker.ts), and a planner that loads offline but whose
+// worker doesn't can draw the map and never find a route
+for (const a of assets.filter((f) => f.endsWith(".js") && exists(f))) {
+  for (const m of readFileSync(join(DIST, a), "utf8").matchAll(/([\w.-]+\.worker-[\w-]+\.js)/g)) {
+    if (!assets.includes(m[1])) problems.push(`${a} starts the worker ${m[1]}, and sw.js doesn't precache it`);
+    if (!exists(m[1])) problems.push(`${a} starts the worker ${m[1]}, which the build doesn't have`);
+  }
+}
+
 // 3. every page's local scripts and styles exist, relative to the page
 function htmlFiles(dir) {
   return readdirSync(dir, { withFileTypes: true }).flatMap((d) => {

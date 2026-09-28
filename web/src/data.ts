@@ -91,11 +91,27 @@ export function dataUrl(name: string): string {
   return remoteId !== null ? SITE_DATA + name : `data/${name}`;
 }
 
+/** Where data comes from, decided once per launch by initDataSource: enough
+ * for a Web Worker, which can't see this module's state, to load exactly what
+ * the page would. */
+export interface DataSource {
+  /** The site's data in use (see usingRemoteData); null = the bundle. */
+  remoteId: string | null;
+  /** The bundle's data directory: "data/" on the page, an absolute URL in a
+   * worker, whose relative URLs resolve against its own script. */
+  bundled: string;
+}
+
+/** This page's data source, to hand to a worker. */
+export function dataSource(): DataSource {
+  return { remoteId, bundled: new URL("data/", document.baseURI).href };
+}
+
 /** Load a data layer: the site's (cached per version) when it wins, else the bundle's. */
-export async function loadJson<T>(name: string): Promise<T> {
-  if (remoteId !== null) {
+export async function loadJsonFrom<T>(source: DataSource, name: string): Promise<T> {
+  if (source.remoteId !== null) {
     try {
-      const cache = await caches.open(CACHE_PREFIX + remoteId);
+      const cache = await caches.open(CACHE_PREFIX + source.remoteId);
       const url = SITE_DATA + name;
       const hit = await cache.match(url);
       if (hit) return (await hit.json()) as T;
@@ -108,5 +124,10 @@ export async function loadJson<T>(name: string): Promise<T> {
       // fall through to the bundled copy
     }
   }
-  return (await (await fetch(`data/${name}`)).json()) as T;
+  return (await (await fetch(source.bundled + name)).json()) as T;
+}
+
+/** Load a data layer for this page. */
+export function loadJson<T>(name: string): Promise<T> {
+  return loadJsonFrom<T>({ remoteId, bundled: "data/" }, name);
 }

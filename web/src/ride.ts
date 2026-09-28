@@ -27,7 +27,7 @@ import {
   trackSlice,
 } from "./nav.js";
 import type { SpeakPriority } from "./speech.js";
-import type { RoutePayload } from "./types.js";
+import type { ProtectionClass, RoutePayload } from "./types.js";
 import { distVoice, fmtDistTight, lengthVoice, milestoneM, milestoneVoice, navRound } from "./units.js";
 
 /** Further than this from the route is off it. */
@@ -136,6 +136,9 @@ export interface RideStep {
   dot: [number, number];
   /** Metres along the route, when on it; what the ride recorder counts. */
   alongM: number | undefined;
+  /** What kind of way that stretch of the route is, when on it: the ride's
+   * record of how much of it was protected. */
+  cls: ProtectionClass | null;
   /** The route behind the rider, for dimming it. Null while off it. */
   done: [number, number][] | null;
   effects: RideEffect[];
@@ -169,6 +172,8 @@ export class RideEngine {
   private track: Track | null = null;
   private maneuvers: Maneuver[] = [];
   private alerts: RideAlert[] = [];
+  /** The route's stretches, each's class and where it ends, in order. */
+  private stretches: { untilM: number; cls: ProtectionClass }[] = [];
   private loopLeg: LoopLeg | null = null;
   private next = 0;
   /** 0 = nothing announced for `next`, 1 = far call, 2 = near call, 3 = "now" */
@@ -225,6 +230,14 @@ export class RideEngine {
     this.track = buildTrack(payload);
     this.maneuvers = buildManeuvers(payload);
     this.alerts = buildAlerts(payload);
+    let m = 0;
+    this.stretches = payload.geojson.features.map((f) => {
+      const coords = f.geometry.coordinates as [number, number][];
+      for (let i = 1; i < coords.length; i++) {
+        m += distM(coords[i - 1] as [number, number], coords[i] as [number, number]);
+      }
+      return { untilM: m, cls: f.properties.cls };
+    });
     this.next = 0;
     this.alertNext = 0;
     this.announceStage = 0;
@@ -249,6 +262,11 @@ export class RideEngine {
    * strayed which way to go. */
   rejoinBearing(): number | null {
     return this.track ? trackBearingAhead(this.track, 0, 0) : null;
+  }
+
+  private classAt(alongM: number): ProtectionClass | null {
+    for (const s of this.stretches) if (alongM <= s.untilM) return s.cls;
+    return this.stretches[this.stretches.length - 1]?.cls ?? null;
   }
 
   get routeM(): number {
@@ -341,6 +359,7 @@ export class RideEngine {
       // along-route progress rather than raw fix-to-fix distance, which counted
       // GPS wander as forward motion
       alongM: snap.offM <= OFF_ROUTE_M ? snap.alongM : undefined,
+      cls: snap.offM <= OFF_ROUTE_M ? this.classAt(snap.alongM) : null,
       done: null,
       effects,
     };
