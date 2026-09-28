@@ -47,7 +47,9 @@ export type ReadTile = (z: number, x: number, y: number, signal?: AbortSignal) =
 
 /** What this module needs from the browser; tests hand in their own. */
 export interface CacheDeps {
-  caches: CacheStorage;
+  /** Null where there is none (only secure contexts have CacheStorage): the
+   * map still draws, from the file, and only the offline download can't work. */
+  caches: CacheStorage | null;
   readTile: ReadTile;
 }
 
@@ -130,12 +132,20 @@ export async function cachedTile(
   signal?: AbortSignal,
 ): Promise<ArrayBuffer> {
   const key = tileKey(z, x, y);
-  const hit = await lookup(deps.caches, key, [TILE_CACHE, BROWSE_CACHE]);
-  if (hit !== undefined) return hit.arrayBuffer();
+  const store = deps.caches;
+  if (store !== null) {
+    // A cache that won't open or answer (storage blocked, a quota error, a
+    // private window) is a cache with nothing in it, not a map with no tiles:
+    // the tile comes from the file instead.
+    const hit = await lookup(store, key, [TILE_CACHE, BROWSE_CACHE]).catch(() => undefined);
+    if (hit !== undefined) return hit.arrayBuffer();
+  }
   const data = (await deps.readTile(z, x, y, signal)) ?? new ArrayBuffer(0);
   // Storing is best effort and must not delay the map, or fail it: a full
   // disk is not a reason to not draw the tile we already have.
-  if (data.byteLength > 0) void rememberBrowsed(deps.caches, key, data.slice(0)).catch(() => undefined);
+  if (store !== null && data.byteLength > 0) {
+    void rememberBrowsed(store, key, data.slice(0)).catch(() => undefined);
+  }
   return data;
 }
 
@@ -176,12 +186,73 @@ export function installTileCache(addProtocol: AddProtocol, deps: CacheDeps): voi
     if (t === null) throw new Error(`not a basemap tile: ${params.url}`);
     return { data: await cachedTile(t[0], t[1], t[2], deps, abort.signal) };
   });
-  void forgetCarto(deps.caches).catch(() => undefined);
+  if (deps.caches !== null) void forgetCarto(deps.caches).catch(() => undefined);
 }
 
 // ---------------------------------------------------------------------------
 // the "⬇ Offline map" download
 // ---------------------------------------------------------------------------
+
+function tileXY(lon: number, lat: number, z: number): [number, number] {
+  const n = 2 ** z;
+  const x = Math.floor(((lon + 180) / 360) * n);
+  const latR = (lat * Math.PI) / 180;
+  const y = Math.floor(((1 - Math.asinh(Math.tan(latR)) / Math.PI) / 2) * n);
+  return [x, y];
+}
+
+/** Metres between two points, near enough for spacing samples. */
+function approxM(a: [number, number], b: [number, number]): number {
+  const dx = (b[0] - a[0]) * 111_320 * Math.cos((((a[1] + b[1]) / 2) * Math.PI) / 180);
+  const dy = (b[1] - a[1]) * 110_540;
+  return Math.hypot(dx, dy);
+}
+
+/**
+ * The basemap tiles a ride along `line` draws, at each of `zooms`: every tile
+ * the line passes through, and at the deepest zoom the ring round it too, for
+ * a view a little wider than the road.
+ *
+ * One tile set serves every basemap theme, so there is nothing to get wrong
+ * when a rider flips to night mode halfway through an offline ride. The
+ * basemap stops at z14 and MapLibre overzooms it for closer views, so z13-14
+ * covers the z13-16 a ride displays.
+ *
+ * Sampled along each segment, not at its ends: a route's vertices can be far
+ * apart on a straight road or a long path, and sampling only where they fell
+ * left the tiles in between out of a download that said it was complete.
+ */
+export function routeTiles(line: [number, number][], zooms: number[]): TileXYZ[] {
+  const deepest = Math.max(...zooms);
+  const tiles = new Map<string, TileXYZ>();
+  const add = (z: number, x: number, y: number): void => {
+    tiles.set(`${z}/${x}/${y}`, [z, x, y]);
+  };
+  for (const z of zooms) {
+    const spread = z === deepest ? 1 : 0;
+    // well under a tile's width at this zoom (about 2.4 km at z14 here), so
+    // no tile the line crosses is stepped over
+    const stepM = (40_075_000 / 2 ** z) * Math.cos((42.4 * Math.PI) / 180) / 4;
+    const visit = (p: [number, number]): void => {
+      const [x, y] = tileXY(p[0], p[1], z);
+      for (let dx = -spread; dx <= spread; dx++) {
+        for (let dy = -spread; dy <= spread; dy++) add(z, x + dx, y + dy);
+      }
+    };
+    for (let i = 0; i < line.length; i++) {
+      const a = line[i] as [number, number];
+      visit(a);
+      const b = line[i + 1];
+      if (b === undefined) break;
+      const steps = Math.floor(approxM(a, b) / stepM);
+      for (let k = 1; k <= steps; k++) {
+        const t = k / (steps + 1);
+        visit([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
+      }
+    }
+  }
+  return [...tiles.values()];
+}
 
 /** Ask the browser not to evict what is stored here under storage pressure,
  * and on iOS not to wipe it after seven days without a visit. Worth asking at
@@ -212,7 +283,7 @@ export async function downloadOffline(
   deps: CacheDeps | null,
   nav: Navigator = navigator,
 ): Promise<DownloadResult> {
-  if (deps === null) return { stored: 0, failed: tiles.length, persisted: false };
+  if (deps === null || deps.caches === null) return { stored: 0, failed: tiles.length, persisted: false };
   const persisted = await requestPersistence(nav);
   const pinned = await deps.caches.open(TILE_CACHE);
   const browse = await deps.caches.open(BROWSE_CACHE);

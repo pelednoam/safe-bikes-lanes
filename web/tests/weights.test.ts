@@ -55,3 +55,23 @@ describe("the safety model", () => {
     expect(disagree, "the pipeline and the router price these edges differently").toEqual([]);
   });
 });
+
+describe("a class this build of the app doesn't know", () => {
+  // A data build newer than the app can name a class the app has never seen.
+  // Unpriced, it was NaN, and a NaN weight breaks the search; priced as a
+  // quiet street, it would be a guess that an unknown street is safe for a child.
+  const unknown = "gravel_boardwalk" as ProtectionClass;
+
+  it("is priced as the worst street, never as NaN", () => {
+    for (const profile of Object.values(PROFILES)) {
+      const price = facilityMultiplier(profile, unknown, undefined, false);
+      expect(Number.isFinite(price)).toBe(true);
+      expect(price).toBe(profile.mult.busy_street);
+    }
+  });
+
+  it("doesn't lower a known facility's price when it is the street under it", () => {
+    const young = PROFILES["young_kids"];
+    expect(facilityMultiplier(young, "lane", unknown, false)).toBe(young.mult.lane);
+  });
+});

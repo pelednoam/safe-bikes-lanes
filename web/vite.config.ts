@@ -6,6 +6,7 @@
 // and hand-kept lists said what to copy and what the service worker should
 // precache. Each list drifted at least once.
 import { execSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
@@ -77,8 +78,21 @@ function precache(): Plugin {
       const sw = readFileSync(swPath, "utf8");
       const marker = "/* BUILD_ASSETS */";
       if (!sw.includes(marker)) throw new Error("precache: public/sw.js has no BUILD_ASSETS marker");
-      const list = [...files].sort().map((f) => JSON.stringify(f)).join(",\n  ");
-      writeFileSync(swPath, sw.replace(marker, `${list},`));
+      const sorted = [...files].sort();
+      const list = sorted.map((f) => JSON.stringify(f)).join(",\n  ");
+      // The shell cache is named for exactly what it holds: a new build is a
+      // new cache, and the old one is deleted when it activates (public/sw.js).
+      const idMarker = '/* BUILD_ID */ "dev"';
+      if (!sw.includes(idMarker)) throw new Error("precache: public/sw.js has no BUILD_ID marker");
+      // By content, not only by name: index.html and compat.js keep their names
+      // from build to build, and a change to either is a new build too.
+      const hash = createHash("sha256");
+      for (const f of [...sorted, "index.html", "compat.js"]) {
+        const path = join(out, f);
+        hash.update(f).update(existsSync(path) ? readFileSync(path) : "");
+      }
+      const id = hash.digest("hex").slice(0, 12);
+      writeFileSync(swPath, sw.replace(marker, `${list},`).replace(idMarker, JSON.stringify(id)));
       // the manifest was for this; it isn't part of the site
       rmSync(join(out, ".vite"), { recursive: true, force: true });
     },

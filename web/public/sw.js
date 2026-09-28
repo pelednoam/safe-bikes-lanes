@@ -4,9 +4,13 @@
 // single tsconfig project; this file is small, boilerplate, and stable.
 "use strict";
 
-// v12: the first build from Vite. The page's code is now content-hashed files,
-// not app.js and its modules, so the old shell's entries are all obsolete.
-const CACHE = "family-bike-router-v12";
+// One shell cache per build, named by the build from what it precaches
+// (vite.config.ts writes the id in; "dev" only in an unbuilt copy). A fixed
+// name, as this was until v12, kept every build's content-hashed bundles in one
+// cache forever: activate below deletes only caches with other names, so a
+// phone collected each deploy until storage ran out, and then a new build's
+// install failed and it stayed on the old one.
+const CACHE = "family-bike-router-" + /* BUILD_ID */ "dev";
 // Precache the shell + the tile manifests + eager POIs. The routing graph
 // (data/tiles/*.json), the display network (data/nettiles/*.json), and the
 // heavy overlays (heatmap/elevation/lane) all load on demand — cached
@@ -183,6 +187,10 @@ function networkFirst(event, req) {
       void cached().then((hit) => {
         // Nothing cached: keep waiting — a late answer beats none.
         if (hit === undefined) return;
+        // The network may have answered while the cache was being read: then
+        // the page is running what the network sent, and marking it stale would
+        // answer the rest of its shell from the cache, gluing two builds together.
+        if (answered) return;
         if (event.request.mode === "navigate" && event.resultingClientId) {
           staleClients.add(event.resultingClientId);
         }

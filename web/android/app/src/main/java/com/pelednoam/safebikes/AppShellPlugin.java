@@ -2,13 +2,18 @@ package com.pelednoam.safebikes;
 
 import android.Manifest;
 import android.content.ActivityNotFoundException;
+import android.content.ContentResolver;
+import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.location.LocationManager;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Environment;
+import android.provider.MediaStore;
 import android.provider.Settings;
+import android.util.Base64;
 import android.view.WindowManager;
 
 import androidx.core.content.ContextCompat;
@@ -22,6 +27,11 @@ import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.OutputStream;
 
 /**
  * What the web app needs from Android that no installed plugin gives it.
@@ -201,6 +211,60 @@ public class AppShellPlugin extends Plugin {
             call.resolve(result);
         } catch (RuntimeException e) {
             call.reject(e.getMessage() == null ? "the download did not start" : e.getMessage());
+        }
+    }
+
+    /**
+     * Save a file the page made (a GPX, a backup) into Downloads.
+     *
+     * <p>The page used to hand these to the WebView as an {@code <a download>}
+     * of a blob: URL. A WebView has no download of its own: that reached
+     * MainActivity's DownloadListener, which cannot fetch a blob: URL, and its
+     * fallback crashed the app. The bytes come here instead, base64 over the
+     * bridge. Downloads through MediaStore on Android 10 and later, which needs
+     * no permission; before that the app's own Downloads folder, as for updates.
+     */
+    @PluginMethod
+    public void saveFile(PluginCall call) {
+        String name = call.getString("name");
+        String mime = call.getString("mime", "application/octet-stream");
+        String data = call.getString("data");
+        if (name == null || !name.matches("[A-Za-z0-9._-]{1,120}") || data == null) {
+            call.reject("nothing to save, or not a plain file name");
+            return;
+        }
+        try {
+            byte[] bytes = Base64.decode(data, Base64.DEFAULT);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                ContentResolver resolver = getContext().getContentResolver();
+                ContentValues values = new ContentValues();
+                values.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
+                values.put(MediaStore.MediaColumns.MIME_TYPE, mime);
+                values.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
+                Uri uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+                if (uri == null) {
+                    throw new IOException("Downloads refused the file");
+                }
+                try (OutputStream out = resolver.openOutputStream(uri)) {
+                    if (out == null) {
+                        throw new IOException("Downloads gave nothing to write to");
+                    }
+                    out.write(bytes);
+                }
+            } else {
+                File dir = getContext().getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
+                if (dir == null) {
+                    throw new IOException("no Downloads folder on this phone");
+                }
+                try (FileOutputStream out = new FileOutputStream(new File(dir, name))) {
+                    out.write(bytes);
+                }
+            }
+            JSObject result = new JSObject();
+            result.put("name", name);
+            call.resolve(result);
+        } catch (IOException | RuntimeException e) {
+            call.reject(e.getMessage() == null ? "the file was not saved" : e.getMessage());
         }
     }
 }

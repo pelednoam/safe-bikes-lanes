@@ -391,6 +391,37 @@ describe("a wrong turn", () => {
     expect(said).toBeLessThanOrEqual(Math.ceil((200 * 1000) / REROUTE_ANNOUNCE_MIN_MS));
   });
 
+  it("says so when the rider is back on the line before the new way arrives", () => {
+    // the way back is still being planned (the worker is slow on a phone):
+    // arriving now, it would send a rider who already put things right off again
+    const r = new Ride(route(TOWN));
+    r.onReroute = () => null; // never answered, as far as this ride knows
+    r.ride({ untilM: 320, divertAtM: 200, divertM: 90, fixHz: 2 });
+    const effects = r.effects.map((e) => e.type);
+    const asked = effects.indexOf("reroute");
+    expect(asked).toBeGreaterThan(-1);
+    expect(effects.indexOf("rejoined")).toBeGreaterThan(asked);
+    expect(effects.filter((t) => t === "rejoined")).toHaveLength(1);
+  });
+
+  it("doesn't say the rider rejoined when no reroute was asked for", () => {
+    const r = new Ride(route(TOWN));
+    // off the line for two fixes, one short of a wrong turn, and back
+    r.ride({ untilM: 320, divertAtM: 200, divertM: 6, fixHz: 1 });
+    r.fix(offsetFix([LON + 250 / mPerDegLon(LAT), LAT], 0, OFF_ROUTE_M + 20));
+    r.fix(offsetFix([LON + 252 / mPerDegLon(LAT), LAT], 0, OFF_ROUTE_M + 20));
+    r.ride({ fromM: 260, untilM: 300 });
+    expect(r.effects.some((e) => e.type === "reroute")).toBe(false);
+    expect(r.effects.some((e) => e.type === "rejoined")).toBe(false);
+  });
+
+  it("isn't told it rejoined once the new way has been handed over", () => {
+    const r = new Ride(route(TOWN)); // default: every reroute is answered at once
+    r.ride({ untilM: 260, divertAtM: 200, divertM: 90, fixHz: 2 });
+    expect(r.effects.some((e) => e.type === "reroute")).toBe(true);
+    expect(r.effects.some((e) => e.type === "rejoined")).toBe(false);
+  });
+
   it("follows the rider's direction when asked to go their way", () => {
     const r = new Ride(route(TOWN));
     r.myWay = true;
@@ -481,13 +512,19 @@ describe("the trip line", () => {
     expect(r.last("trip")?.minutes).toBe(Math.round((4.1 / 10) * 60));
   });
 
-  it("stops holding the view still once the rider is moving again", () => {
+  it("holds the view still while stopped, and turns it once moving", () => {
+    // At a corner the way ahead turns: Alpha runs east, Beta north from 400 m.
+    // A stationary fix that lands just round it (GPS drift at a light) must not
+    // swing the map a quarter turn; moving there, it should follow the street.
     const r = new Ride(route(TOWN));
-    r.ride({ untilM: 200 });
+    r.ride({ untilM: 330 });
     const riding = r.engine.bearingTarget;
-    r.ride({ fromM: 200, untilM: 205, pauseAtM: 200, pauseSeconds: 30 });
-    // stopped: the map doesn't spin in place
-    expect(Math.abs(r.engine.bearingTarget - riding)).toBeLessThan(25);
+    expect(riding).toBeGreaterThan(60); // looking along Alpha, east
+    const round = pointAlong(pathOf(r.payload), 430).at;
+    for (let i = 0; i < 5; i++) r.fix({ lon: round[0], lat: round[1], accuracy: 8, speed: 0, heading: 0 });
+    expect(r.engine.bearingTarget).toBe(riding);
+    for (let i = 0; i < 5; i++) r.fix({ lon: round[0], lat: round[1], accuracy: 8, speed: 3, heading: 0 });
+    expect(Math.abs(r.engine.bearingTarget - riding)).toBeGreaterThan(30);
   });
 });
 
@@ -621,6 +658,47 @@ describe("a round trip", () => {
     expect(r.effects.filter((e) => e.type === "arrived")).toHaveLength(0);
     r.ride({ fromM: 50 });
     expect(r.effects.filter((e) => e.type === "arrived")).toHaveLength(1);
+  });
+
+  it("keeps counting after a GPS gap, as far as a bicycle could have gone in it", () => {
+    // a tunnel, a phone in a pocket: progress used to stop for good, because
+    // the rider was more than a step past the furthest point from then on
+    const r = new Ride(route(LOOP));
+    r.engine.setRoute(r.payload, { legM: 0, resumeM: 0 });
+    r.ride({ untilM: 300 });
+    expect(r.engine.loopDoneM).toBeLessThan(320);
+    r.now += 90_000; // a minute and a half without a fix: 600 m at 6.7 m/s
+    r.ride({ fromM: 900, untilM: 1100 });
+    expect(r.engine.loopDoneM).toBeGreaterThan(1050);
+  });
+
+  it("counts from where a way back rejoins the loop further round", () => {
+    // the way back from a wrong turn can join the loop ahead of where the
+    // rider left it: the track followed now starts 1000 m round the loop
+    const r = new Ride(route(LOOP));
+    r.engine.setRoute(r.payload, { legM: 0, resumeM: 0 });
+    r.ride({ untilM: 300 });
+    r.engine.setRoute(r.payload, { legM: 0, resumeM: 1000 });
+    r.ride({ untilM: 100 });
+    expect(r.engine.loopDoneM).toBeGreaterThan(1050);
+  });
+
+  it("doesn't count snaps onto the far side as ridden, however many in a row", () => {
+    // a wrong turn's first metres can run past another stretch of the loop,
+    // and every fix there snaps to it: three in a row were once believed, and
+    // the way back rejoined the loop a kilometre ahead of the rider
+    const r = new Ride(route(LOOP));
+    r.engine.setRoute(r.payload, { legM: 0, resumeM: 0 });
+    r.ride({ untilM: 300 });
+    const done = r.engine.loopDoneM;
+    const far = pointAlong(pathOf(r.payload), 1300).at;
+    for (let i = 0; i < 6; i++) {
+      const step = r.fix({ lon: far[0], lat: far[1], accuracy: 8, speed: 4, heading: 270 });
+      // on the loop, over there: the case under test, not an off-route fix
+      expect(step?.alongM ?? 0).toBeGreaterThan(1200);
+    }
+    r.ride({ fromM: 305, untilM: 320 });
+    expect(r.engine.loopDoneM).toBeLessThan(done + 100);
   });
 
   it("counts progress round it forwards only, a bicycle's worth at a time", () => {

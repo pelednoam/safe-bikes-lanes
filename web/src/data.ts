@@ -107,6 +107,11 @@ export function dataSource(): DataSource {
   return { remoteId, bundled: new URL("data/", document.baseURI).href };
 }
 
+/** Tile sets that only make sense whole, from one build: routing tiles are
+ * stitched together by node ids that are consistent within a build and not
+ * between two. */
+const ONE_BUILD = /^(tiles|nettiles)\//;
+
 /** Load a data layer: the site's (cached per version) when it wins, else the bundle's. */
 export async function loadJsonFrom<T>(source: DataSource, name: string): Promise<T> {
   if (source.remoteId !== null) {
@@ -121,8 +126,12 @@ export async function loadJsonFrom<T>(source: DataSource, name: string): Promise
         return (await resp.json()) as T;
       }
     } catch {
-      // fall through to the bundled copy
+      // fall through to the bundled copy, unless it is from another build
     }
+    // One tile of the site's build that didn't arrive, filled in from the
+    // bundle's, joined the graph to tiles of another build: a graph that
+    // routes, wrongly, and says nothing. Failing is honest, and is retried.
+    if (ONE_BUILD.test(name)) throw new Error(`couldn't load ${name} of the site's data`);
   }
   return (await (await fetch(source.bundled + name)).json()) as T;
 }

@@ -54,7 +54,8 @@ async function cutTheInternet(context: BrowserContext): Promise<void> {
   );
 }
 
-async function downloadOfflineMap(page: Page): Promise<void> {
+/** Download the route's tiles, and say what the button said when it finished. */
+async function downloadOfflineMap(page: Page): Promise<string> {
   await page.locator("summary", { hasText: "Export & offline" }).first().click();
   const btn = page.locator("#offline-btn");
   await btn.scrollIntoViewIfNeeded();
@@ -66,11 +67,18 @@ async function downloadOfflineMap(page: Page): Promise<void> {
     null,
     { timeout: 30_000 },
   );
-  await page.waitForFunction(
-    () => !(document.getElementById("offline-btn") as HTMLButtonElement).disabled,
+  // The label read the moment it finishes: it goes back to idle about four
+  // seconds later, and a retrying "doesn't say missing" check passed a failed
+  // download once the "⚠ N tiles missing" had gone.
+  const done = await page.waitForFunction(
+    () => {
+      const b = document.getElementById("offline-btn") as HTMLButtonElement;
+      return b.disabled ? false : (b.textContent ?? "");
+    },
     null,
     { timeout: 120_000 },
   );
+  return String(await done.jsonValue());
 }
 
 /** Rendered basemap line features of one theme — what a rider would see, not
@@ -93,8 +101,8 @@ test("a downloaded route draws its map in the app with no internet", async ({ co
   const page = await context.newPage();
   await page.goto(ROUTE);
   await expect(page.locator(".option-card").first()).toBeVisible({ timeout: 60_000 });
-  await downloadOfflineMap(page);
-  await expect(page.locator("#offline-btn")).not.toContainText(/missing|failed/);
+  const said = await downloadOfflineMap(page);
+  expect(said).toContain("offline ready");
 
   // Relaunch: every launch of the app used to delete the tile cache.
   await page.reload();

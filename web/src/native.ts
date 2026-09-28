@@ -371,6 +371,50 @@ export function updateFileName(version: string | undefined): string {
     : "family-bike-router.apk";
 }
 
+interface SavePlugin {
+  saveFile(options: { name: string; mime: string; data: string }): Promise<{ name: string }>;
+}
+
+/** The bytes of `blob` as base64, which is how they cross the bridge. */
+async function base64Of(blob: Blob): Promise<string> {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(bin);
+}
+
+/**
+ * Save a file into the phone's Downloads, in the app. Null where there is no
+ * AppShell that can (the website, or an app from before it could), so the
+ * caller falls back to a download link; a string saying what went wrong where
+ * it tried and failed.
+ *
+ * An <a download> of a blob: URL is how a browser saves a file, and in the app
+ * it crashed: a WebView hands the link to MainActivity's DownloadListener, which
+ * can't fetch a blob: URL (see MainActivity).
+ */
+/** Whether this is the app, with an AppShell that can save files. */
+export function canSaveNative(): boolean {
+  const shell = nativePlugin<SavePlugin>("AppShell");
+  return shell !== null && typeof shell.saveFile === "function";
+}
+
+export type SaveResult = { saved: true } | { error: string };
+
+export async function saveFileNative(blob: Blob, name: string): Promise<SaveResult | null> {
+  const shell = nativePlugin<SavePlugin>("AppShell");
+  if (shell === null || typeof shell.saveFile !== "function") return null;
+  try {
+    const mime = blob.type || "application/octet-stream";
+    await shell.saveFile({ name, mime, data: await base64Of(blob) });
+    return { saved: true };
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 interface DownloadPlugin {
   downloadUpdate(options: { url: string; fileName: string }): Promise<{ status: string }>;
 }

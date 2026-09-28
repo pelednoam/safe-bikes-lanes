@@ -121,15 +121,15 @@ function globalAddProtocol(): AddProtocol | undefined {
 }
 
 /** The tile cache's link to the basemap file: tiles read out of it by byte
- * range, one PMTiles reader per page. Null where there's no CacheStorage
- * (only secure contexts have it), which the protocol can't do without. */
-let deps: CacheDeps | null | undefined;
-export function tileDeps(): CacheDeps | null {
+ * range, one PMTiles reader per page, through CacheStorage where there is one.
+ * Where there isn't (only secure contexts have it), the map still draws, from
+ * the file: it used to install no protocol at all there, and drew no basemap. */
+let deps: CacheDeps | undefined;
+export function tileDeps(): CacheDeps {
   if (deps !== undefined) return deps;
-  if (typeof caches === "undefined") return (deps = null);
   const file = new PMTiles(basemapUrl());
   return (deps = {
-    caches,
+    caches: typeof caches === "undefined" ? null : caches,
     readTile: async (z, x, y, signal) => (await file.getZxy(z, x, y, signal))?.data,
   });
 }
@@ -164,8 +164,7 @@ export function createBasemap(map: MLMap, anchor: () => string | undefined, opti
   // Here rather than at each call site: every page builds its basemap through
   // this, right after constructing its map, before the first tile is asked for.
   const addProtocol = globalAddProtocol();
-  const cacheDeps = tileDeps();
-  if (addProtocol !== undefined && cacheDeps !== null) installTileCache(addProtocol, cacheDeps);
+  if (addProtocol !== undefined) installTileCache(addProtocol, tileDeps());
   // The source itself is in each page's initial style (basemapSource()): the
   // style is still loading here, when adding one would throw.
 

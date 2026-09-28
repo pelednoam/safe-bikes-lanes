@@ -1,4 +1,6 @@
 // Handing a file to the rider: a download, or the phone's share sheet.
+
+import { canSaveNative, saveFileNative } from "./native.js";
 //
 // Both went wrong in WebKit, which is every browser on an iPhone:
 //
@@ -40,6 +42,27 @@ export function downloadBlob(blob: Blob, filename: string, env: DownloadEnv = br
   const url = env.createObjectURL(blob);
   env.click(url, filename);
   env.setTimeout(() => env.revokeObjectURL(url), REVOKE_AFTER_MS);
+}
+
+/**
+ * Save a blob as a file, wherever the page is running: into Downloads in the
+ * Android app (see saveFileNative), as a download in a browser. Says what
+ * happened, so the button that asked can tell the rider.
+ *
+ * The browser's download starts before anything is awaited: WebKit honours an
+ * <a download> click only inside the tap that asked for it.
+ */
+export function saveBlob(
+  blob: Blob,
+  filename: string,
+  app: { can: () => boolean; save: typeof saveFileNative } = { can: canSaveNative, save: saveFileNative },
+  env?: DownloadEnv,
+): Promise<{ saved: true } | { error: string }> {
+  if (!app.can()) {
+    downloadBlob(blob, filename, env);
+    return Promise.resolve({ saved: true });
+  }
+  return app.save(blob, filename).then((r) => r ?? { error: "this version of the app can't save files" });
 }
 
 /** A picture being drawn for sharing, available synchronously once drawn —

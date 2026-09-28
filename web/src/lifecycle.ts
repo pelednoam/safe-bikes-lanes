@@ -61,8 +61,11 @@ export class ScreenLock {
     if (api === undefined) return; // unsupported: navigation still works
     try {
       const got = await api.request("screen");
-      if (!this.wanted) {
-        // the ride ended while the request was in flight
+      // The ride ended while the request was in flight, or another request
+      // (the ride starting, and the page coming back into view) got there
+      // first: this one would be held with nothing to release it, and the
+      // screen would never sleep again.
+      if (!this.wanted || this.held) {
         void got.release().catch(() => undefined);
         return;
       }

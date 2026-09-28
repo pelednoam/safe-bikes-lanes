@@ -255,6 +255,27 @@ describe("loading a layer", () => {
     await mod.initDataSource();
     expect(await mod.loadJson("newish.json")).toEqual({ from: "bundle" });
   });
+
+  it("never fills a routing tile of the site's build in from the bundle's", async () => {
+    // tiles are stitched together by node ids that hold within one build: one
+    // bundled tile among the site's made a graph that routed, wrongly, silently
+    vi.doMock("../src/native.js", () => ({ isNativeApp: () => true }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.endsWith("meta.json")) {
+          return jsonResponse({ built: url.startsWith("http") ? "2026-08-05" : "2026-07-01" });
+        }
+        return url.startsWith("http") ? jsonResponse({}, false) : jsonResponse({ from: "bundle" });
+      }),
+    );
+    const mod = await import("../src/data.js");
+    await mod.initDataSource();
+    await expect(mod.loadJson("tiles/12_34.json")).rejects.toThrow(/site's data/);
+    await expect(mod.loadJson("nettiles/12_34.json")).rejects.toThrow(/site's data/);
+    // an ordinary layer still falls back
+    expect(await mod.loadJson("pois.geojson")).toEqual({ from: "bundle" });
+  });
 });
 
 describe("the module's own defaults", () => {

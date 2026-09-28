@@ -47,7 +47,7 @@ async function planned(page: Page): Promise<void> {
  * immediately and samples a half-filled cache. The button is disabled for
  * exactly the length of the download.
  */
-async function downloadOfflineMap(page: Page): Promise<void> {
+async function downloadOfflineMap(page: Page): Promise<string> {
   await page.locator("summary", { hasText: "Export & offline" }).first().click();
   const btn = page.locator("#offline-btn");
   await btn.scrollIntoViewIfNeeded();
@@ -57,11 +57,17 @@ async function downloadOfflineMap(page: Page): Promise<void> {
     null,
     { timeout: budget(30_000) },
   );
-  await page.waitForFunction(
-    () => !(document.getElementById("offline-btn") as HTMLButtonElement).disabled,
+  // and what it said the moment it finished: the label goes back to idle a
+  // few seconds later, so "⚠ N tiles missing" is only there to read then
+  const done = await page.waitForFunction(
+    () => {
+      const b = document.getElementById("offline-btn") as HTMLButtonElement;
+      return b.disabled ? false : (b.textContent ?? "");
+    },
     null,
     { timeout: budget(180_000) },
   );
+  return String(await done.jsonValue());
 }
 
 function cachedTiles(page: Page, cacheName: string): Promise<string[]> {
@@ -85,7 +91,10 @@ test("a downloaded route draws its map with the network cut", { tag: "@live" }, 
     else if (/cartocdn|tile\.openstreetmap|protomaps/.test(url.hostname)) elsewhere.add(url.hostname);
   });
   await planned(page);
-  await downloadOfflineMap(page);
+  const said = await downloadOfflineMap(page);
+  // every tile of the route stored, not some: the map drawing below only
+  // proves that part of it is there
+  expect(said).toContain("offline ready");
 
   const urls = await cachedTiles(page, TILE_CACHE);
   const mvt = urls.filter((u) => u.endsWith(".mvt"));

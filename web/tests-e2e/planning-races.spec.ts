@@ -42,13 +42,19 @@ async function boot(page: Page, hash: string): Promise<void> {
   });
 }
 
-/** Routing tiles answer only after `ms` — the phone on a slow street. */
-async function slowTiles(page: Page, ms: number): Promise<void> {
+/** Routing tiles answer only after `ms` — the phone on a slow street. Says
+ * how many it has held up, so a test can check its race really ran: routing
+ * tiles are fetched by the routing worker, and a delay that never applied to
+ * them would leave these tests passing without a race in them. */
+async function slowTiles(page: Page, ms: number): Promise<{ delayed: () => number }> {
+  let delayed = 0;
   await page.route(/\/data\/tiles\/[^/]+\.json$/, async (route) => {
     if (route.request().url().endsWith("manifest.json")) return route.continue();
+    delayed++;
     await new Promise((r) => setTimeout(r, ms));
     return route.continue();
   });
+  return { delayed: () => delayed };
 }
 
 /** A location request that is held until the test releases it, like a cold GPS.
@@ -156,11 +162,13 @@ test("the loading line goes away after a route, and stays away", async ({ page }
 });
 
 test("Reset while the map is loading means reset", async ({ page }) => {
-  await slowTiles(page, 2500);
+  const slow = await slowTiles(page, 2500);
   await boot(page, DAVIS_KENDALL);
   await expect(page.locator("#loading")).toContainText(/Loading the map/, {
     timeout: budget(20_000),
   });
+  // the plan really is waiting on held tiles: this is the race, not a guess at it
+  await expect.poll(slow.delayed, { timeout: budget(20_000) }).toBeGreaterThan(0);
   await page.locator("#reset").click();
   // long enough for the abandoned request to have finished, had it carried on
   await settled(page);
@@ -229,7 +237,7 @@ test("the last destination asked for is the one that gets drawn", async ({ page 
   // route, selection and framing, with the end pin sitting on the near one.
   await boot(page, DAVIS_KENDALL);
   await expect(page.locator(".option-card").first()).toBeVisible({ timeout: budget(120_000) });
-  await slowTiles(page, 4000);
+  const slow = await slowTiles(page, 4000);
   const far: [number, number] = [-71.1829, 42.3651];
   const near: [number, number] = [-71.1043, 42.3818];
   await page.evaluate(() => window._map?.jumpTo({ center: [-71.16, 42.375], zoom: 12 }));
@@ -242,7 +250,9 @@ test("the last destination asked for is the one that gets drawn", async ({ page 
     await page.mouse.click(xy.x, xy.y);
   };
   await click(far);
-  await page.waitForTimeout(400);
+  // the far plan is held on its tiles: without this the near one could finish
+  // first because the far one never waited at all, and the test passes anyway
+  await expect.poll(slow.delayed, { timeout: budget(20_000) }).toBeGreaterThan(0);
   await click(near);
   // past the far request's tile wait, so it has had every chance to land
   await settled(page);
@@ -262,14 +272,15 @@ test("closing the reach map while it loads is not a crash", async ({ page }) => 
     if (m.type() === "error" && /Uncaught|TypeError/.test(m.text())) errors.push(m.text());
   });
   await boot(page, "#c=-71.105,42.383,13");
-  await slowTiles(page, 2500);
+  const slow = await slowTiles(page, 2500);
   await openReachMap(page);
   const pt = await page.evaluate(() => {
     const p = window._map?.project([-71.105, 42.39]);
     return { x: Math.round(p?.x ?? 0), y: Math.round(p?.y ?? 0) };
   });
   await page.mouse.click(pt.x, pt.y);
-  await page.waitForTimeout(300);
+  // closed while it really is loading, not before it began or after it ended
+  await expect.poll(slow.delayed, { timeout: budget(20_000) }).toBeGreaterThan(0);
   await page.locator("#shed-btn").click(); // close it mid-load
   // until the held tiles have all landed and the abandoned flood has had its
   // turn. The round trip through the page waits out the router build, which
@@ -297,9 +308,10 @@ test("a smaller reach asked for last is the one shown", async ({ page }) => {
   await page.mouse.click(pt.x, pt.y);
   await expect(page.locator("#shed-info")).toContainText("reachable", { timeout: budget(120_000) });
   // the big budget waits on tiles; the small one it is replaced by does not
-  await slowTiles(page, 3000);
+  const slow = await slowTiles(page, 3000);
   await setBudget(page, 8);
-  await page.waitForTimeout(200);
+  // the big reach is held on tiles it needs, so the small one really overtakes it
+  await expect.poll(slow.delayed, { timeout: budget(20_000) }).toBeGreaterThan(0);
   await setBudget(page, 1);
   await settled(page);
   await expect(page.locator("#shed-info")).toContainText(/within a perceived (0\.6 mi|1 km)/);

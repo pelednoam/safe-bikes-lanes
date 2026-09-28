@@ -19,11 +19,15 @@ async function boot(page: Page, hash = ""): Promise<void> {
   });
 }
 
+/** A layer's visibility, or "missing": a layer that isn't on the map read as
+ * "visible" (no visibility property is the default), so a check that the
+ * aerial view shows passed with no aerial layer at all. */
 function vis(page: Page, layer: string): Promise<string> {
-  return page.evaluate(
-    (l) => (window._map?.getLayoutProperty(l, "visibility") as string | undefined) ?? "visible",
-    layer,
-  );
+  return page.evaluate((l) => {
+    const map = window._map;
+    if (!map?.getLayer(l)) return "missing";
+    return (map.getLayoutProperty(l, "visibility") as string | undefined) ?? "visible";
+  }, layer);
 }
 
 /** Which basemap themes are actually showing, as "light"/"dark".

@@ -24,10 +24,12 @@ async function boot(page: import("@playwright/test").Page): Promise<string[]> {
 }
 
 function vis(page: import("@playwright/test").Page, layer: string): Promise<string> {
-  return page.evaluate(
-    (l) => (window._map?.getLayoutProperty(l, "visibility") as string | undefined) ?? "visible",
-    layer,
-  );
+  // "missing" for a layer that isn't on the map, which otherwise read as visible
+  return page.evaluate((l) => {
+    const map = window._map;
+    if (!map?.getLayer(l)) return "missing";
+    return (map.getLayoutProperty(l, "visibility") as string | undefined) ?? "visible";
+  }, layer);
 }
 
 async function openSection(

@@ -352,11 +352,17 @@ export function facilityMultiplier(
   road: ProtectionClass | undefined,
   busy: boolean,
 ): number {
-  let mult = profile.mult[cls];
+  // A class this build doesn't know (a data build newer than the app) is
+  // priced as the worst street there is. Unpriced it was NaN, and a NaN weight
+  // breaks the search; priced as quiet it would be a guess that an unknown
+  // street is safe for a child, which is the wrong guess to make.
+  const worst = profile.mult.busy_street;
+  let mult = (profile.mult as Partial<Record<string, number>>)[cls] ?? worst;
   if (busy && cls === "lane") mult = profile.busyLane;
   if (busy && cls === "buffered") mult = profile.busyBuffered;
-  if (busy && cls === "sharrow") mult = profile.mult.busy_street;
-  if (road !== undefined) mult = Math.min(mult, profile.mult[road]);
+  if (busy && cls === "sharrow") mult = worst;
+  const floor = road === undefined ? undefined : (profile.mult as Partial<Record<string, number>>)[road];
+  if (floor !== undefined) mult = Math.min(mult, floor);
   return mult;
 }
 
@@ -417,7 +423,9 @@ export class Router {
         w[i] = e[2];
         return;
       }
-      const cls = this.g.classes[e[3]] ?? "quiet_street";
+      // an index past the class table is as unknown as a name it doesn't
+      // have: priced as the worst street, never as a quiet one
+      const cls = this.g.classes[e[3]] ?? "busy_street";
       if (this.upgraded.has(i)) {
         // built: the separated multiplier on its true length, and neither the
         // crash history nor the crossing penalty the build would remove. The

@@ -111,18 +111,47 @@ describe("planOptions", () => {
     ]);
   });
 
-  it("is the only way app.ts asks for route options", () => {
+  it("is how every route the app asks for is planned, with every preference", () => {
     // The reroute, the detour and the resume each spelled the positional call
-    // out for themselves, and all three left the walking limit off. Held here
-    // so the next call written by hand cannot drop a preference again.
-    const app = readFileSync(
-      join(dirname(fileURLToPath(import.meta.url)), "..", "src", "app.ts"),
-      "utf8",
-    );
-    const direct = app
-      .split("\n")
-      .map((line, i) => ({ line: line.trim(), n: i + 1 }))
-      .filter(({ line }) => /\.routeOptions\(/.test(line) && !line.startsWith("//"));
-    expect(direct.map(({ n, line }) => `app.ts:${n} ${line}`)).toEqual([]);
+    // out for themselves, and all three left the walking limit off. Routing now
+    // runs in a worker (src/routing.ts), so this holds both halves: the worker
+    // plans only through planOptions, and every question the page puts to it
+    // carries the rider's whole set of preferences.
+    const src = join(dirname(fileURLToPath(import.meta.url)), "..", "src");
+    const code = (name: string): string[] =>
+      readFileSync(join(src, name), "utf8")
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => !line.startsWith("//") && !line.startsWith("*"));
+
+    for (const name of ["app.ts", "routing.ts"]) {
+      const direct = code(name).filter((line) => /\.routeOptions\(/.test(line));
+      expect(direct, `${name} plans around planOptions`).toEqual([]);
+    }
+    const worker = code("routing.ts").join("\n");
+    expect(worker.match(/planOptions\(/g)?.length ?? 0).toBeGreaterThan(0);
+
+    // Every plan the page asks for: the arguments after the two points are the
+    // rider's preferences, routePrefs(), or (search grades, planned against a
+    // snapshot of them) an object that names every field of RoutePrefs.
+    const app = code("app.ts").join("\n");
+    const calls = [...app.matchAll(/routing\.plan(?:With)?\(/g)].map((m) => {
+      // the call's own arguments, up to its matching parenthesis
+      let depth = 1;
+      let i = (m.index ?? 0) + m[0].length;
+      const from = i;
+      for (; i < app.length && depth > 0; i++) {
+        if (app[i] === "(") depth++;
+        else if (app[i] === ")") depth--;
+      }
+      return app.slice(from, i - 1);
+    });
+    expect(calls.length, "app.ts no longer plans through the worker").toBeGreaterThan(4);
+    for (const call of calls) {
+      const complete =
+        call.includes("routePrefs()") ||
+        ["profileId", "preferFlat", "avoid", "walkMaxM"].every((field) => call.includes(field));
+      expect(complete, `routing.plan(${call.slice(0, 80)}…) drops a preference`).toBe(true);
+    }
   });
 });

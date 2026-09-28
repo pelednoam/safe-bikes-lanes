@@ -228,6 +228,53 @@ describe("SpeechQueue on the native engine", () => {
     ]);
   });
 
+  it("moves on from a native line that never finishes, so a warning is still said", async () => {
+    // a TTS engine that hangs, or a plugin call lost across an app switch:
+    // the queue waited on it for good, and everything after went unsaid
+    const spoken: string[] = [];
+    const native = {
+      stops: 0,
+      speak: (t: string): Promise<boolean> => {
+        spoken.push(t);
+        return new Promise<boolean>(() => undefined); // never settles
+      },
+    };
+    const clock = new FakeClock();
+    const q = new SpeechQueue(engine(new FakeSynth(), native), clock, () => undefined);
+    q.speak("in 100 meters, turn left onto Elm Street");
+    q.speak("busy street crossing. gather up.", "safety");
+    await flush();
+    expect(spoken).toEqual(["in 100 meters, turn left onto Elm Street"]);
+    clock.advance(30_000);
+    await flush();
+    expect(spoken).toEqual(["in 100 meters, turn left onto Elm Street", "busy street crossing. gather up."]);
+  });
+
+  it("doesn't let a native line's fallback timer cut the next line short", async () => {
+    const ends: (() => void)[] = [];
+    const spoken: string[] = [];
+    const native = {
+      stops: 0,
+      speak: (t: string): Promise<boolean> =>
+        new Promise((resolve) => {
+          spoken.push(t);
+          ends.push(() => resolve(true));
+        }),
+    };
+    const clock = new FakeClock();
+    const q = new SpeechQueue(engine(new FakeSynth(), native), clock, () => undefined);
+    q.speak("turn left");
+    q.speak("then right onto a very long street name that takes a while to say");
+    q.speak("halfway there!");
+    await flush();
+    ends[0]?.(); // the first line ends at once; its timer is still pending
+    await flush();
+    expect(spoken).toHaveLength(2);
+    clock.advance(5_000); // the first line's fallback fires, mid second line
+    await flush();
+    expect(spoken, "the first line's timer finished the second one").toHaveLength(2);
+  });
+
   it("falls back to the browser when the native engine cannot speak", async () => {
     const synth = new FakeSynth();
     const q = new SpeechQueue(

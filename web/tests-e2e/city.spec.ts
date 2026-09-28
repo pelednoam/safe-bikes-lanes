@@ -502,10 +502,12 @@ test("every published city gets a page describing that city", async ({ page }) =
 test("the aerial view keeps the colours, and the street names, on top of it", async ({ page }) => {
   await openCity(page);
   const layer = async (id: string): Promise<string> =>
-    await page.evaluate(
-      (l) => (window._map?.getLayoutProperty(l, "visibility") as string) ?? "visible",
-      id,
-    );
+    // "missing" for a layer that isn't on the map, which otherwise read as visible
+    await page.evaluate((l) => {
+      const map = window._map;
+      if (!map?.getLayer(l)) return "missing";
+      return (map.getLayoutProperty(l, "visibility") as string | undefined) ?? "visible";
+    }, id);
 
   // The street names are a group of vector label layers (labels-*), from the
   // same basemap file as the rest. They are installed the first time the photo

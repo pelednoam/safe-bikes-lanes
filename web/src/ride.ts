@@ -79,6 +79,9 @@ const ARRIVED_M = 15;
 /** The most loop progress one fix can add: a minute of fast riding, which
  * also covers a short GPS gap. */
 const LOOP_PROGRESS_MAX_STEP_M = 400;
+/** The fastest a rider covers ground, for how far round the loop a fix after a
+ * gap may believably be: a fast descent, not a car. */
+const LOOP_FASTEST_MPS = 10;
 /** Hazards are called this far out, and held on screen until this far past. */
 const HAZARD_CALL_M = 100;
 const HAZARD_HOLD_M = 30;
@@ -129,6 +132,9 @@ export type RideEffect =
   /** Plan a way on from `from` and hand it to setRoute. `heading` is set when
    * the new way should follow the rider's direction. */
   | { type: "reroute"; from: [number, number]; heading: number | null }
+  /** Back on the route after asking for a reroute: a way on that is still
+   * being planned is no longer wanted. */
+  | { type: "rejoined" }
   | { type: "arrived"; atStop: boolean; totalM: number };
 
 export interface RideStep {
@@ -201,6 +207,13 @@ export class RideEngine {
   private rerouteTries = 0;
   /** When a reroute was last said, so one wrong turn says it once. */
   private rerouteSpokenAt = 0;
+  /** A reroute has been asked for and the rider hasn't been on a route since. */
+  private awaitingReroute = false;
+  /** When the last on-loop fix came: how long a gap in them has lasted. */
+  private lastLoopAt: number | null = null;
+  /** Where a way back rejoins the loop, further round than the rider had got:
+   * the one jump in progress that is announced rather than inferred. */
+  private rejoinAt: number | null = null;
 
   constructor(private readonly ctx: RideContext) {}
 
@@ -220,6 +233,8 @@ export class RideEngine {
     this.rerouteSpokenAt = 0;
     this.alertUntilM = 0;
     this.loopDoneM = 0;
+    this.lastLoopAt = null;
+    this.rejoinAt = null;
     this.bearingTarget = 0;
     this.zoomTarget = NAV_ZOOM_CRUISE;
   }
@@ -250,6 +265,8 @@ export class RideEngine {
     this.arrived = false;
     this.nextMilestone = 1;
     this.halfway = false;
+    this.awaitingReroute = false;
+    this.rejoinAt = loopLeg !== null && loopLeg.resumeM > this.loopDoneM ? loopLeg.resumeM : null;
   }
 
   /** The alert was taken down by something else: a hazard held on screen is
@@ -399,24 +416,43 @@ export class RideEngine {
           buzz(80, 60, 80);
         }
         this.rerouteTries++;
+        this.awaitingReroute = true;
         effects.push({ type: "reroute", from: here, heading });
       }
       return step;
     }
     this.offCount = 0;
     this.rerouteTries = 0;
+    if (this.awaitingReroute) {
+      // The rider found the way back before the new one arrived. Switching to
+      // it now would send them off the line they are on, to follow a way back
+      // from a wrong turn they already put right.
+      this.awaitingReroute = false;
+      effects.push({ type: "rejoined" });
+    }
     effects.push({ type: "clearGpsAlert" });
     this.hint = snap.idx;
     step.done = trackSlice(track, snap.alongM);
     // How far round the loop, once this track is on it. Forwards only, and only
-    // by what a bicycle can cover between fixes: a loop crosses and runs back
-    // along its own streets, and a snap onto the far side of one of those must
-    // not count the stretch in between as ridden.
+    // by what a bicycle can cover: a loop crosses and runs back along its own
+    // streets, and a snap onto the far side of one of those (a wrong turn's
+    // first metres pass close to them) must not count the stretch in between
+    // as ridden. What a bicycle can cover grows with the time since the last
+    // fix on the loop, so a GPS gap is ridden on from; capped at one step
+    // regardless, progress stopped for good after any gap longer than that.
+    // And a way back that rejoins further round says where, so reaching it
+    // counts.
     if (this.loopLeg !== null && snap.alongM >= this.loopLeg.legM) {
       const round = this.loopLeg.resumeM + snap.alongM - this.loopLeg.legM;
-      if (round > this.loopDoneM && round - this.loopDoneM <= LOOP_PROGRESS_MAX_STEP_M) {
+      const gapS = this.lastLoopAt === null ? 0 : Math.max(0, (now - this.lastLoopAt) / 1000);
+      const reach = LOOP_PROGRESS_MAX_STEP_M + LOOP_FASTEST_MPS * gapS;
+      const rejoining =
+        this.rejoinAt !== null && round >= this.rejoinAt && round - this.rejoinAt <= LOOP_PROGRESS_MAX_STEP_M;
+      if (round > this.loopDoneM && (round - this.loopDoneM <= reach || rejoining)) {
         this.loopDoneM = round;
+        if (rejoining) this.rejoinAt = null;
       }
+      this.lastLoopAt = now;
     }
 
     // advance past maneuvers we've already ridden through
@@ -526,8 +562,11 @@ export class RideEngine {
     // Camera targets — the map's animation loop eases toward these. Bearing is
     // averaged over the track ahead (a per-segment bearing swings wildly on
     // twisty paths), and held steady when stopped so the map doesn't spin in
-    // place.
-    if (this.speed > 0.8 || this.bearingTarget === 0) {
+    // place. Stopped by this fix's own speed where it has one: the smoothed
+    // speed is still above walking pace for the first seconds of a stop, and a
+    // fix drifting round the corner at a light turned the map a quarter turn.
+    const rolling = (this.fixSpeed ?? this.speed) > 0.8;
+    if (rolling || this.bearingTarget === 0) {
       this.bearingTarget = trackBearingAhead(track, snap.idx, snap.alongM);
     }
     this.zoomTarget = distToNext <= NAV_ZOOM_TURN_M ? NAV_ZOOM_TURN : NAV_ZOOM_CRUISE;

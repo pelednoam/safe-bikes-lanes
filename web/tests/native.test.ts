@@ -329,3 +329,60 @@ describe("starting an APK download", () => {
     expect(opened).toEqual(["https://example.test/app.apk"]);
   });
 });
+
+describe("saving a file in the app", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  function withShell(shell: Record<string, unknown> | null): void {
+    (globalThis as unknown as { window: Record<string, unknown> }).window = {
+      Capacitor: {
+        isNativePlatform: () => true,
+        registerPlugin: (name: string) => {
+          if (name === "AppShell" && shell !== null) return shell;
+          return {};
+        },
+      },
+    };
+  }
+
+  it("hands AppShell the bytes, whole, as base64", async () => {
+    const got: { name?: string; mime?: string; data?: string } = {};
+    withShell({
+      saveFile: async (o: { name: string; mime: string; data: string }) => {
+        Object.assign(got, o);
+        return { name: o.name };
+      },
+    });
+    const mod = await import("../src/native.js");
+    // larger than one 32 KiB chunk of the encoder, and not all ASCII
+    const text = "héllo, ".repeat(10_000);
+    expect(mod.canSaveNative()).toBe(true);
+    expect(await mod.saveFileNative(new Blob([text], { type: "application/gpx+xml" }), "r.gpx")).toEqual({
+      saved: true,
+    });
+    expect(got.name).toBe("r.gpx");
+    expect(got.mime).toBe("application/gpx+xml");
+    expect(Buffer.from(got.data ?? "", "base64").toString("utf8")).toBe(text);
+  });
+
+  it("reports a refusal in AppShell's own words", async () => {
+    withShell({
+      saveFile: async () => {
+        throw new Error("Downloads refused the file");
+      },
+    });
+    const mod = await import("../src/native.js");
+    expect(await mod.saveFileNative(new Blob(["x"]), "r.gpx")).toEqual({
+      error: "Downloads refused the file",
+    });
+  });
+
+  it("is not there in an app from before it could save", async () => {
+    withShell({});
+    const mod = await import("../src/native.js");
+    expect(mod.canSaveNative()).toBe(false);
+    expect(await mod.saveFileNative(new Blob(["x"]), "r.gpx")).toBeNull();
+  });
+});

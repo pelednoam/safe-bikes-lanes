@@ -8,10 +8,11 @@
 // passed as an argument is called back on the page: that is how tile loading
 // reports progress.
 //
-// The worker handles one message at a time, and every Router method is
-// synchronous, so each call runs to completion before the next begins. That is
+// The worker handles one message at a time, and a synchronous method (every
+// Router search) runs to completion before the next message is read. That is
 // what keeps a what-if atomic (see withUpgraded): nothing else can route while
-// a proposed lane is applied.
+// a proposed lane is applied. An async method (tile loading) can interleave
+// with others at its awaits, so none of them may leave shared state half-set.
 // ---------------------------------------------------------------------------
 
 /** Both a Worker and a worker's own global scope. */
@@ -19,6 +20,16 @@ export interface Endpoint {
   postMessage(message: unknown): void;
   addEventListener(type: "message", listener: (e: MessageEvent) => void): void;
 }
+
+/** A Worker, which can also fail: its script doesn't load, it runs out of
+ * memory, or a message can't be read. */
+export interface FallibleEndpoint extends Endpoint {
+  addEventListener(type: "message", listener: (e: MessageEvent) => void): void;
+  addEventListener(type: "error" | "messageerror", listener: (e: Event) => void): void;
+}
+
+/** What every call is rejected with once the worker has failed. */
+export const WORKER_FAILED = "the route finder stopped working — reload the app to start it again";
 
 /** `T`, with every method returning a promise. */
 export type Remote<T> = {
@@ -81,8 +92,10 @@ function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-export function wrap<T extends object>(ep: Endpoint): Remote<T> {
+export function wrap<T extends object>(ep: Endpoint | FallibleEndpoint): Remote<T> {
   let nextId = 0;
+  /** Set once the worker has failed: it answers nothing from then on. */
+  let failed: string | null = null;
   const pending = new Map<
     number,
     { resolve: (v: unknown) => void; reject: (e: Error) => void; fns: ((...a: unknown[]) => void)[] }
@@ -99,6 +112,18 @@ export function wrap<T extends object>(ep: Endpoint): Remote<T> {
       else call.reject(new Error(String(msg.value)));
     }
   });
+  // A worker that fails answers nothing, ever: without this, every call made
+  // to it waited forever — a plan stuck on "Finding the safest way…" and, mid-
+  // ride, a reroute that never came. Everything waiting is told now, and
+  // everything asked later is told at once.
+  const fail = (): void => {
+    failed = WORKER_FAILED;
+    for (const call of pending.values()) call.reject(new Error(WORKER_FAILED));
+    pending.clear();
+  };
+  // (a MessagePort, as in the tests, never fires these; a Worker does)
+  (ep as FallibleEndpoint).addEventListener("error", fail);
+  (ep as FallibleEndpoint).addEventListener("messageerror", fail);
   return new Proxy({} as Remote<T>, {
     get(_target, method) {
       if (typeof method !== "string") return undefined;
@@ -106,6 +131,10 @@ export function wrap<T extends object>(ep: Endpoint): Remote<T> {
       if (method === "then") return undefined;
       return (...args: unknown[]): Promise<unknown> =>
         new Promise((resolve, reject) => {
+          if (failed !== null) {
+            reject(new Error(failed));
+            return;
+          }
           const id = nextId++;
           const fns: ((...a: unknown[]) => void)[] = [];
           const wire = args.map((a): Wire => {

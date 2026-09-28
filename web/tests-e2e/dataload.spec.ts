@@ -37,9 +37,11 @@ test("a street network that will not load does not throw on every pan", async ({
   page.on("console", (m) => {
     if (m.type() === "error" && /Uncaught/.test(m.text())) errors.push(m.text());
   });
-  await page.route(/\/data\/nettiles\/manifest\.json$/, (route) =>
-    route.abort("internetdisconnected"),
-  );
+  let aborted = 0;
+  await page.route(/\/data\/nettiles\/manifest\.json$/, (route) => {
+    aborted++;
+    return route.abort("internetdisconnected");
+  });
   await page.goto("/#c=-71.105,42.383,14");
   await page.waitForFunction(() => window._map !== undefined, null, { timeout: budget(60_000) });
   for (const dx of [120, -200, 160]) {
@@ -47,5 +49,8 @@ test("a street network that will not load does not throw on every pan", async ({
     await page.waitForTimeout(700);
   }
   await page.evaluate(() => new Promise((r) => setTimeout(r, 0)));
+  // the failure really happened: a pattern that matched nothing passed this
+  // while testing an app whose network loaded fine
+  expect(aborted, "the network manifest was never asked for, so never failed").toBeGreaterThan(0);
   expect(errors).toEqual([]);
 });

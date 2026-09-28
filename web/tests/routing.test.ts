@@ -9,11 +9,22 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 import type { DataSource } from "../src/data.js";
 import { createRoutingApi, type RoutingApi, type WirePrefs } from "../src/routing.js";
-import { type Endpoint, expose, type Remote, wrap } from "../src/rpc.js";
+import {
+  type Endpoint,
+  expose,
+  type FallibleEndpoint,
+  type Remote,
+  WORKER_FAILED,
+  wrap,
+} from "../src/rpc.js";
 import { getUnits, setUnits } from "../src/units.js";
 
 const DATA = join(dirname(fileURLToPath(import.meta.url)), "..", "test-data", "data");
 const haveData = existsSync(join(DATA, "tiles", "manifest.json"));
+// Skipped only on a machine that hasn't fetched the pinned data (npm run
+// test-data). CI fetches it before the unit tests, so there a missing dataset
+// is a failure, not a quiet skip of the only tests that route through the worker.
+const skipRouting = !haveData && process.env["CI"] === undefined;
 
 /** A worker, minus the thread: both ends of a channel in this one. */
 function channel<T extends object>(api: T): Remote<T> {
@@ -71,13 +82,27 @@ describe("calling across the channel", () => {
     expect(all).toEqual(["a!", 2, "b!"]);
   });
 
+  it("tells every caller when the worker fails, instead of leaving them waiting", async () => {
+    // a worker whose script didn't load, or that ran out of memory: it answers
+    // nothing, and a plan or a mid-ride reroute used to wait on it forever
+    class DeadWorker extends EventTarget {
+      postMessage(): void {}
+    }
+    const worker = new DeadWorker();
+    const dead = wrap<{ plan(): number }>(worker as unknown as FallibleEndpoint);
+    const waiting = dead.plan();
+    worker.dispatchEvent(new Event("error"));
+    await expect(waiting).rejects.toThrow(WORKER_FAILED);
+    await expect(dead.plan()).rejects.toThrow(WORKER_FAILED);
+  });
+
   it("isn't mistaken for a promise", async () => {
     // `await remote` would hang forever if the proxy offered a then()
     expect(await Promise.resolve(remote)).toBe(remote);
   });
 });
 
-describe.skipIf(!haveData)("routing in the worker, on the pinned data", () => {
+describe.skipIf(skipRouting)("routing in the worker, on the pinned data", () => {
   const DAVIS: [number, number] = [-71.122258, 42.396748];
   const KENDALL: [number, number] = [-71.086705, 42.362552];
   const prefs: WirePrefs = { profileId: "young_kids", preferFlat: false, avoid: [], walkMaxM: 800 };

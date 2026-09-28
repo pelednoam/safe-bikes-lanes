@@ -50,7 +50,7 @@ test("on a phone held sideways, the route is framed above the sheet", async ({ p
   await page.setViewportSize({ width: 844, height: 390 });
   await planned(page);
   await page.waitForTimeout(2500); // the fit animates
-  const lowest = await page.evaluate(async () => {
+  const ys = await page.evaluate(async () => {
     const map = window._map;
     const src = map?.getSource("route") as { getData(): Promise<GeoJSON.FeatureCollection> } | undefined;
     const ys = ((await src?.getData())?.features ?? []).flatMap((f) =>
@@ -58,8 +58,12 @@ test("on a phone held sideways, the route is framed above the sheet", async ({ p
         ? f.geometry.coordinates.map((c) => map?.project(c as [number, number]).y ?? 0)
         : [],
     );
-    return Math.max(...ys);
+    return ys;
   });
+  // Math.max of nothing is -Infinity, which is "above the sheet": with no
+  // route drawn the check below passed while testing nothing
+  expect(ys.length, "no route was drawn to frame").toBeGreaterThan(1);
+  const lowest = Math.max(...ys);
   const sheetTop = await page.evaluate(
     () => document.getElementById("panel")?.getBoundingClientRect().top ?? 0,
   );

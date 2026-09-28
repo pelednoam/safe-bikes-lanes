@@ -21,7 +21,7 @@ import {
 } from "./basemap.js";
 import { maplibregl } from "./maplibre.js";
 import { CLASS_COLORS } from "./weights.gen.js";
-import { downloadOffline, type TileXYZ } from "./tilecache.js";
+import { downloadOffline, routeTiles } from "./tilecache.js";
 import type { NativeFix } from "./native.js";
 import {
   askForRideNotifications,
@@ -65,7 +65,7 @@ import {
   GRADE_TEXT,
   segmentHtml,
 } from "./segment.js";
-import type { Maneuver, Track } from "./nav.js";
+import type { Maneuver } from "./nav.js";
 import { buildTrack, distM, sunsetTime } from "./nav.js";
 import { type LoopLeg, navDistText, RideEngine, type RideEffect } from "./ride.js";
 import type { HazardCategory, HazardReport } from "./hazards.js";
@@ -127,7 +127,7 @@ import { wrap } from "./rpc.js";
 import { type SpeakPriority, SpeechQueue } from "./speech.js";
 import { loopRejoinPoint, payloadLength, rejoinOption } from "./rejoin.js";
 import { decodePlan, encodePlan } from "./permalink.js";
-import { downloadBlob, PreparedImage, shareImage } from "./share.js";
+import { PreparedImage, saveBlob, shareImage } from "./share.js";
 import { readItem, readJson, removeItem, trimRecord, writeItem } from "./storage.js";
 import { DeferredReload, ScreenLock, type WakeLockApi } from "./lifecycle.js";
 import { drawRideCard, drawTotalsCard, rideShareText, totalsShareText } from "./sharecard.js";
@@ -1083,8 +1083,13 @@ function plainError(err: unknown): string {
  * a request that has returned without drawing anything. */
 function beginPlan(): Ticket {
   const ticket = routeLane.begin();
-  // a hypothetical trip belongs to the ends and settings it was asked about
+  // A hypothetical trip belongs to the ends and settings it was asked about.
+  // The real trip goes back on screen, not just out of memory: forgotten, the
+  // proposed lane's routes stayed up whenever this plan stopped short or
+  // failed, and ▶ Navigate rode a lane that doesn't exist.
+  const real = whatIfReal;
   endWhatIf();
+  if (real !== null) showRealTrip(real);
   el<HTMLDivElement>("loading").style.display = "none";
   return ticket;
 }
@@ -1755,11 +1760,22 @@ async function showMapillaryPreview(lon: number, lat: number): Promise<void> {
 // GPX + cue sheet
 // ---------------------------------------------------------------------------
 
+/** Say on the button what became of a file it saved, for a moment. */
+function toldSaved(btn: HTMLElement, result: { saved: true } | { error: string }): void {
+  const prev = btn.textContent;
+  btn.textContent = "saved" in result ? "✓ saved to Downloads" : `⚠ not saved: ${result.error}`;
+  window.setTimeout(() => {
+    btn.textContent = prev;
+  }, 3000);
+}
+
 el<HTMLButtonElement>("gpx").addEventListener("click", () => {
   const sel = options.find((o) => o.id === selectedId);
   if (!sel) return;
   const gpx = toGPX(sel.payload, `Family bike route (${sel.label})`);
-  downloadBlob(new Blob([gpx], { type: "application/gpx+xml" }), "family-bike-route.gpx");
+  const saving = saveBlob(new Blob([gpx], { type: "application/gpx+xml" }), "family-bike-route.gpx");
+  // in a browser the download is its own confirmation; in the app it isn't
+  if (isNativeApp()) void saving.then((r) => toldSaved(el<HTMLButtonElement>("gpx"), r));
 });
 
 el<HTMLButtonElement>("print-cues").addEventListener("click", () => {
@@ -3772,10 +3788,14 @@ el<HTMLButtonElement>("from-pick").addEventListener("click", () => {
 el<HTMLButtonElement>("backup-save").addEventListener("click", () => {
   const backup = exportBackup(new Date().toISOString());
   const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
-  downloadBlob(blob, `family-bike-router-backup-${new Date().toISOString().slice(0, 10)}.json`);
   const places = listPlaces().length;
-  el<HTMLDivElement>("backup-note").textContent =
-    `Backed up ${places} saved place${places === 1 ? "" : "s"} and your marks.`;
+  const note = el<HTMLDivElement>("backup-note");
+  void saveBlob(blob, `family-bike-router-backup-${new Date().toISOString().slice(0, 10)}.json`).then((r) => {
+    note.textContent =
+      "saved" in r
+        ? `Backed up ${places} saved place${places === 1 ? "" : "s"} and your marks.`
+        : `The backup was not saved: ${r.error}`;
+  });
 });
 
 el<HTMLButtonElement>("backup-load").addEventListener("click", () => {
@@ -4446,7 +4466,7 @@ function shareCard(text: string, image: PreparedImage, filename: string, btn: HT
     canShare: typeof navigator.canShare === "function" ? (d) => navigator.canShare(d) : undefined,
     share: typeof navigator.share === "function" ? (d) => navigator.share(d) : undefined,
     copy: (t) => navigator.clipboard.writeText(t),
-    download: (b, f) => downloadBlob(b, f),
+    download: (b, f) => void saveBlob(b, f),
     tell: (message) => {
       const prev = btn.textContent;
       btn.textContent = `✓ ${message}`;
@@ -4935,11 +4955,22 @@ async function rideOptionsFrom(
  * right is worse than none. */
 const rideLane = new Lane();
 const rideStale = (ticket: Ticket): boolean => ticket.stale() || !navActive;
+/** A reroute is also dropped when the rider rejoins before it arrives. */
+const rerouteLane = new Lane();
 
 /** Re-plan the ride from where the rider is, keeping where it is going: after
  * something changed what the router must avoid. */
 async function replanRide(): Promise<void> {
   if (!routerReady || !navLastPos) return;
+  // The destination pin may be why: dragged mid-ride, it used to re-plan to
+  // where the ride had been going, with the pin and the guidance apart. On a
+  // detour the pin is still the ride's destination, the one Resume returns to;
+  // a round trip's pin is its start, which it already ends at.
+  const pin = end?.getLngLat();
+  if (pin !== undefined && navLoop === null) {
+    if (navOriginalDest !== null) navOriginalDest = [pin.lng, pin.lat];
+    else navDest = [pin.lng, pin.lat];
+  }
   const ticket = rideLane.begin();
   try {
     const found = await rideOptionsFrom(navLastPos);
@@ -5310,6 +5341,9 @@ function applyRideEffect(e: RideEffect): void {
     case "reroute":
       void rerouteFrom(e.from, e.heading);
       return;
+    case "rejoined":
+      rerouteLane.cancel();
+      return;
     case "arrived":
       showArrival(e.atStop, e.totalM);
       return;
@@ -5318,7 +5352,9 @@ function applyRideEffect(e: RideEffect): void {
 
 /** A wrong turn: plan the way on from here, and say which way it goes. */
 async function rerouteFrom(from: [number, number], heading: number | null): Promise<void> {
-  const ticket = rideLane.begin();
+  const ride = rideLane.begin();
+  const mine = rerouteLane.begin();
+  const ticket: Ticket = { stale: () => ride.stale() || mine.stale() };
   try {
     const found = await rideOptionsFrom(from, heading ?? undefined);
     if (rideStale(ticket)) return;
@@ -5400,9 +5436,14 @@ async function startNav(): Promise<void> {
   // unsupported or denied, navigation still works; taken again whenever the
   // page comes back into view (see lifecycle.ts)
   await screenLock.acquire();
+  // Each wait is a moment the ride can end in (exit, or Back, pressed while a
+  // permission dialog is up). Starting a GPS watch or pushing a Back guard for
+  // a ride already over left the phone tracking, and a Back that did nothing.
+  if (!navActive) return;
   // Location last, permission first: on Android 14+ the background watcher's
   // foreground service cannot start without it (see navStartLocation).
   await navStartLocation(true);
+  if (!navActive) return;
   // absorb one Back press: on Android the hardware button is a thumb-brush from
   // ending the ride, and there was no guard of any kind
   history.pushState({ navigating: true }, "");
@@ -5837,46 +5878,11 @@ map.on("mousedown", pauseFollowForInput);
 // service worker
 // ---------------------------------------------------------------------------
 
-function tileXY(lon: number, lat: number, z: number): [number, number] {
-  const n = 2 ** z;
-  const x = Math.floor(((lon + 180) / 360) * n);
-  const latR = (lat * Math.PI) / 180;
-  const y = Math.floor(((1 - Math.asinh(Math.tan(latR)) / Math.PI) / 2) * n);
-  return [x, y];
-}
-
-function routeTiles(track: Track): TileXYZ[] {
-  // One tile set serves every basemap mode, so there is no light/dark choice to
-  // make here, and nothing to get wrong when a rider flips theme halfway
-  // through an offline ride.
-  //
-  // The basemap stops at z14 (BASEMAP_MAXZOOM) and MapLibre overzooms it for
-  // closer views, so z13-14 covers the z13-16 a ride actually displays.
-  const tiles = new Map<string, TileXYZ>();
-  for (const z of [13, BASEMAP_MAXZOOM]) {
-    // sample the track densely enough that no tile is skipped at this zoom
-    const stepM = z >= BASEMAP_MAXZOOM ? 250 : 400;
-    let nextAt = 0;
-    track.coords.forEach((c, i) => {
-      if ((track.cumM[i] ?? 0) < nextAt && i !== track.coords.length - 1) return;
-      nextAt = (track.cumM[i] ?? 0) + stepM;
-      const [x, y] = tileXY(c[0], c[1], z);
-      const spread = z >= BASEMAP_MAXZOOM ? 1 : 0; // 3x3 corridor at the deepest zoom
-      for (let dx = -spread; dx <= spread; dx++) {
-        for (let dy = -spread; dy <= spread; dy++) {
-          tiles.set(`${z}/${x + dx}/${y + dy}`, [z, x + dx, y + dy]);
-        }
-      }
-    });
-  }
-  return [...tiles.values()];
-}
-
 el<HTMLButtonElement>("offline-btn").addEventListener("click", () => {
   const sel = options.find((o) => o.id === selectedId);
   if (!sel) return;
   const btn = el<HTMLButtonElement>("offline-btn");
-  const tiles = routeTiles(buildTrack(sel.payload));
+  const tiles = routeTiles(buildTrack(sel.payload).coords, [13, BASEMAP_MAXZOOM]);
   btn.disabled = true;
   // Tiles only: the style is built in the page (basemap.ts), so a cold start
   // offline has what it needs to paint them, in either theme.
@@ -6407,6 +6413,10 @@ function clearWhatIf(): void {
   if (real === null) return;
   // anything still working out a what-if is for a view that is gone
   routeLane.cancel();
+  showRealTrip(real);
+}
+
+function showRealTrip(real: { options: RouteOption[]; selected: RouteOption["id"] | null }): void {
   options = real.options;
   const back = real.selected ?? options[0]?.id;
   if (back !== undefined) selectOption(back);

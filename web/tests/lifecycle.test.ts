@@ -91,6 +91,39 @@ describe("ScreenLock", () => {
     expect(lock.held).toBe(false);
   });
 
+  it("keeps one lock when two requests overlap, and lets the screen sleep after", async () => {
+    // the ride starting and the page coming back into view at once: two
+    // requests in flight, and the second used to leave the first held with
+    // nothing to release it
+    const resolvers: ((s: LockSentinel) => void)[] = [];
+    const made: { released: boolean }[] = [];
+    const api: WakeLockApi = {
+      request: () =>
+        new Promise<LockSentinel>((r) => {
+          resolvers.push(r);
+        }),
+    };
+    const lock = new ScreenLock(() => api, () => true);
+    const first = lock.acquire();
+    const second = lock.onVisibilityChange();
+    for (const r of resolvers) {
+      const s = {
+        released: false,
+        release: async (): Promise<void> => {
+          s.released = true;
+        },
+      };
+      made.push(s);
+      r(s);
+    }
+    await Promise.all([first, second]);
+    expect(made.length).toBe(2);
+    expect(made.filter((m) => !m.released)).toHaveLength(1);
+    lock.release();
+    await Promise.resolve();
+    expect(made.every((m) => m.released)).toBe(true);
+  });
+
   it("is harmless where the browser has no wake lock", async () => {
     const lock = new ScreenLock(() => undefined, () => true);
     await lock.acquire();

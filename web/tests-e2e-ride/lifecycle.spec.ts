@@ -130,7 +130,9 @@ test("a new version of the app waits for the ride to end before reloading", asyn
   await page.locator("#nav-exit").click();
   await page.locator("#nav-ask-yes").click();
   await expect
-    .poll(() => page.evaluate(() => window.__marker).catch(() => undefined), { timeout: 30_000 })
+    // mid-reload an evaluate throws; that is "not yet", not "reloaded", so it
+    // polls again until the new page itself answers that the marker is gone
+    .poll(() => page.evaluate(() => window.__marker).catch(() => "reloading"), { timeout: 30_000 })
     .toBeUndefined();
 });
 
@@ -170,17 +172,18 @@ test("after a ride, Back leaves the ride behind instead of doing nothing", async
   await planned(page);
   const before = await page.evaluate(() => window.location.hash);
   await startRide(page);
+  const onRideEntry = (): Promise<boolean> =>
+    page.evaluate(() => (history.state as { navigating?: boolean } | null)?.navigating === true);
+  // The ride's entry is there to begin with: without this, a ride that never
+  // pushed one passed the check below by never having had it.
+  await expect
+    .poll(onRideEntry, { message: "the ride pushed no history entry to catch Back" })
+    .toBe(true);
   await page.locator("#nav-exit").click();
   await page.locator("#nav-ask-yes").click();
   await expect(page.locator("#nav-banner")).toBeHidden();
   await expect
-    .poll(
-      () =>
-        page.evaluate(
-          () => (history.state as { navigating?: boolean } | null)?.navigating === true,
-        ),
-      { message: "the ride's history entry is still the current one" },
-    )
+    .poll(onRideEntry, { message: "the ride's history entry is still the current one" })
     .toBe(false);
   // and the link still describes the trip on screen
   expect(await page.evaluate(() => window.location.hash)).toBe(before);

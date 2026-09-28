@@ -6,6 +6,7 @@ import {
   type DownloadEnv,
   PreparedImage,
   REVOKE_AFTER_MS,
+  saveBlob,
   shareImage,
   type ShareEnv,
 } from "../src/share.js";
@@ -133,5 +134,52 @@ describe("downloadBlob in a real browser", () => {
       g["document"] = had.document;
       g["window"] = had.window;
     }
+  });
+});
+
+describe("saving a file the page made", () => {
+  const env = (): DownloadEnv & { clicked: string[] } => {
+    const clicked: string[] = [];
+    return {
+      clicked,
+      createObjectURL: () => "blob:x",
+      revokeObjectURL: () => undefined,
+      click: (_u, f) => clicked.push(f),
+      setTimeout: () => undefined,
+    };
+  };
+  const blob = new Blob(["<gpx/>"], { type: "application/gpx+xml" });
+
+  it("downloads at once in a browser, inside the tap that asked", () => {
+    // WebKit honours an <a download> only inside the tap: nothing may be
+    // awaited before it
+    const e = env();
+    void saveBlob(blob, "route.gpx", { can: () => false, save: async () => null }, e);
+    expect(e.clicked).toEqual(["route.gpx"]);
+  });
+
+  it("saves into Downloads in the app, and never through a blob: link", async () => {
+    // the blob: link reached MainActivity's DownloadListener and crashed the app
+    const e = env();
+    const saved: string[] = [];
+    const result = await saveBlob(
+      blob,
+      "route.gpx",
+      { can: () => true, save: async (_b, name) => (saved.push(name), { saved: true }) },
+      e,
+    );
+    expect(result).toEqual({ saved: true });
+    expect(saved).toEqual(["route.gpx"]);
+    expect(e.clicked).toEqual([]);
+  });
+
+  it("says why, when the app could not save it", async () => {
+    const result = await saveBlob(
+      blob,
+      "route.gpx",
+      { can: () => true, save: async () => ({ error: "Downloads refused the file" }) },
+      env(),
+    );
+    expect(result).toEqual({ error: "Downloads refused the file" });
   });
 });

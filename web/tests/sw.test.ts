@@ -240,6 +240,61 @@ describe("a connection that is barely there", () => {
   });
 });
 
+describe("a page the network answered after all", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("is not marked as running from the cache", async () => {
+    // At the timeout the worker reads the cache, which takes a moment. If the
+    // network answers inside that moment, the page runs what the network sent,
+    // and marking it stale answered the rest of its session from the cache:
+    // a new page running old modules.
+    let arrive: (r: Response) => void = () => undefined;
+    const w = loadWorker((req) =>
+      req.url.endsWith("index.html")
+        ? new Promise<Response>((resolve) => {
+            arrive = resolve;
+          })
+        : Promise.resolve(body("new module")),
+    );
+    await seed(w, "index.html", "old page");
+    await seed(w, "app.js", "old module");
+    // the cache is slow to answer: the network wins the race by a hair
+    const realMatch = w.caches.match.bind(w.caches);
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    w.caches.match = async (req: RequestInfo | URL) => {
+      await gate;
+      return realMatch(req);
+    };
+    const page = w.request("index.html", { navigate: true, resultingClientId: "tab-1" });
+    await vi.advanceTimersByTimeAsync(Number(w.consts["NETWORK_TIMEOUT_MS"] ?? 60_000));
+    arrive(body("new page"));
+    expect(await (await (page.response as Promise<Response>)).text()).toBe("new page");
+    release();
+    await vi.advanceTimersByTimeAsync(10);
+    w.caches.match = realMatch;
+    const module = w.request("app.js", { clientId: "tab-1" });
+    expect(await (await (module.response as Promise<Response>)).text()).toBe("new module");
+  });
+});
+
+describe("the shell cache", () => {
+  it("is named by the build, so each deploy replaces the last", () => {
+    // A fixed name kept every build's hashed bundles in one cache forever
+    const src = readFileSync(join(WEB, "public", "sw.js"), "utf8");
+    expect(src).toContain('const CACHE = "family-bike-router-" + /* BUILD_ID */ "dev";');
+    const vite = readFileSync(join(WEB, "vite.config.ts"), "utf8");
+    expect(vite).toContain('/* BUILD_ID */ "dev"');
+  });
+});
+
 describe("map resources", () => {
   const BASEMAP = `${ORIGIN}/basemap.pmtiles`;
   const AERIAL = "https://tiles.arcgis.com/tiles/x/arcgis/rest/services/o/MapServer/tile/14/6057/";

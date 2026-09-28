@@ -574,8 +574,13 @@ test("on a phone the about button survives the sheet hiding the title", async ({
   // exactly where the footer button is unreachable — so the header one has to
   // outlive its own row's title
   await plan(page);
-  // off the screen, though still in the page for a screen reader
-  expect((await page.locator("#panel h1").boundingBox())?.height ?? 0).toBeLessThanOrEqual(1);
+  // off the screen, though still in the page for a screen reader: there, and
+  // not display:none (a missing title read as "0 px tall" and passed)
+  const title = page.locator("#panel h1");
+  await expect(title).toHaveCount(1);
+  const titleBox = await title.boundingBox();
+  expect(titleBox, "the title is display:none, so a screen reader can't find it").not.toBeNull();
+  expect(titleBox?.height ?? Infinity).toBeLessThanOrEqual(1);
   const info = page.locator("#about-top");
   await expect(info).toBeVisible();
   const box = await info.boundingBox();

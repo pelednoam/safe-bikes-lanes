@@ -211,11 +211,26 @@ test("the Android side asks for a real download, not for something to open the l
   // the banner's path: the plugin, not an iframe Capacitor may divert
   const plugin = readFileSync(`${dir}/AppShellPlugin.java`, "utf8");
   expect(plugin).toContain("public void downloadUpdate(PluginCall call)");
+  // A GPX or a backup is a blob: URL. Handed to DownloadManager it throws, and
+  // the ACTION_VIEW fallback on a blob: URL crashed the app. The listener takes
+  // only http(s), only an APK is an update, and the page saves its own files.
+  expect(java).toMatch(/!\(url\.startsWith\("https:\/\/"\) \|\| url\.startsWith\("http:\/\/"\)\)/);
+  expect(java).toContain('name.endsWith(".apk")');
+  expect(java, "a link nothing can open still crashes the app").toContain("catch (ActivityNotFoundException");
+  expect(plugin).toContain("public void saveFile(PluginCall call)");
+  expect(plugin, "saved files must land where the rider looks").toContain("MediaStore.Downloads");
   // ACTION_VIEW survives only as the fallback, inside a catch
-  const listenerBody = java.slice(java.indexOf("setDownloadListener"));
-  const firstView = listenerBody.indexOf("ACTION_VIEW");
+  // (indexOf is -1 for a missing piece, which compared as "before" anything:
+  // with no catch at all, an ACTION_VIEW on the main path passed)
+  const listener = java.indexOf("setDownloadListener");
+  expect(listener, "MainActivity sets no download listener").toBeGreaterThan(-1);
+  const listenerBody = java.slice(listener);
   const firstCatch = listenerBody.indexOf("catch (");
-  expect(firstView, "ACTION_VIEW is back on the main path").toBeGreaterThan(firstCatch);
+  expect(firstCatch, "the download listener has no fallback at all").toBeGreaterThan(-1);
+  const firstView = listenerBody.indexOf("ACTION_VIEW");
+  if (firstView !== -1) {
+    expect(firstView, "ACTION_VIEW is back on the main path").toBeGreaterThan(firstCatch);
+  }
 });
 
 // ── voice ─────────────────────────────────────────────────────────────────

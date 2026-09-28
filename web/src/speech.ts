@@ -147,6 +147,13 @@ export class SpeechQueue {
       this.speakWeb(id, next.text, done);
       return;
     }
+    // A native line that never settles (a TTS engine that hangs, a plugin
+    // call lost across an app switch) used to hold the queue for good: every
+    // turn call and safety warning after it went unsaid. It gets as long as
+    // the web path gives a line with no onend, and then the queue moves on.
+    this.clock.setTimeout(() => {
+      if (this.current === id) done();
+    }, speechDuration(next.text) + FALLBACK_SLACK_MS);
     this.engine
       .speakNative(next.text)
       .then((spoken) => {

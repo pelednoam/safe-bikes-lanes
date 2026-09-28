@@ -13,6 +13,7 @@ import {
   forgetCarto,
   installTileCache,
   parseTileUrl,
+  routeTiles,
   TILE_CACHE,
   TILE_TEMPLATE,
   tileKey,
@@ -120,6 +121,34 @@ describe("reading a tile", () => {
   });
 });
 
+describe("with no cache to be had", () => {
+  it("still draws the map, from the file", async () => {
+    // CacheStorage exists only in secure contexts: the protocol used not to be
+    // installed at all without it, and the page drew no basemap
+    const b = basemap();
+    expect(decode(await cachedTile(14, 3, 4, { caches: null, readTile: b.deps.readTile }))).toBe("14/3/4");
+  });
+
+  it("still draws the map when the cache refuses to open", async () => {
+    // storage blocked, or a quota error: a cache with nothing in it, not a map
+    // with no tiles
+    const b = basemap();
+    const broken = {
+      open: async () => {
+        throw new DOMException("blocked", "SecurityError");
+      },
+    } as unknown as CacheStorage;
+    expect(decode(await cachedTile(14, 5, 6, { caches: broken, readTile: b.deps.readTile }))).toBe("14/5/6");
+  });
+
+  it("can't download a route offline, and says so", async () => {
+    const b = basemap();
+    const deps = { caches: null, readTile: b.deps.readTile };
+    const result = await downloadOffline([[14, 1, 1]], () => undefined, deps);
+    expect(result).toEqual({ stored: 0, failed: 1, persisted: false });
+  });
+});
+
 describe("the offline download", () => {
   const nav = (persist: () => Promise<boolean>): Navigator =>
     ({ storage: { persist } }) as unknown as Navigator;
@@ -190,7 +219,7 @@ describe("what Carto left behind", () => {
     // aerial imagery shares the cache and stays
     await pinned.put("https://tiles.arcgis.com/tiles/x/tile/14/1/1", tileResponse("photo"));
     await (await b.store.open("bike-styles-v1")).put("https://basemaps.cartocdn.com/style.json", tileResponse("{}"));
-    expect(await forgetCarto(b.deps.caches)).toBe(1);
+    expect(await forgetCarto(b.store.asCacheStorage)).toBe(1);
     expect(pinned.urls().sort()).toEqual([tileKey(14, 1, 1), "https://tiles.arcgis.com/tiles/x/tile/14/1/1"].sort());
     expect(await b.store.has("bike-styles-v1")).toBe(false);
   });
@@ -214,5 +243,39 @@ describe("wiring it into MapLibre", () => {
     await expect(handler({ url: "bikecache://elsewhere/1" }, new AbortController())).rejects.toThrow(
       "not a basemap tile",
     );
+  });
+});
+
+describe("which tiles a route needs offline", () => {
+  const tileX = (lon: number, z: number): number => Math.floor(((lon + 180) / 360) * 2 ** z);
+
+  it("covers a long straight stretch between two far-apart points, all of it", () => {
+    // 20 km due east with no vertex in between, like a long path: sampling only
+    // at the vertices left every tile in the middle out of the download
+    const west = -71.35;
+    const east = -71.1; // about 20 km at this latitude
+    const tiles = routeTiles(
+      [
+        [west, 42.4],
+        [east, 42.4],
+      ],
+      [13, 14],
+    );
+    for (const z of [13, 14]) {
+      const xs = new Set(tiles.filter(([tz]) => tz === z).map(([, x]) => x));
+      for (let x = tileX(west, z); x <= tileX(east, z); x++) expect(xs.has(x), `z${z} x${x}`).toBe(true);
+    }
+  });
+
+  it("takes the ring round the line at the deepest zoom only", () => {
+    const tiles = routeTiles([[-71.1, 42.4]], [13, 14]);
+    expect(tiles.filter(([z]) => z === 14)).toHaveLength(9);
+    expect(tiles.filter(([z]) => z === 13)).toHaveLength(1);
+  });
+
+  it("lists each tile once", () => {
+    const line: [number, number][] = Array.from({ length: 200 }, (_v, i) => [-71.1 + i * 0.0001, 42.4]);
+    const tiles = routeTiles(line, [13, 14]);
+    expect(new Set(tiles.map((t) => t.join("/"))).size).toBe(tiles.length);
   });
 });
