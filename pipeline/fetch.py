@@ -365,7 +365,14 @@ def _use_fallback(name: str, error: Exception) -> bool:
     if limit is None:
         return False
     today = datetime.datetime.now(datetime.UTC).date()
-    found = source_archive.fallback(name, limit, today)
+    # Asking the archive can fail too (the network, a rate limit), and it runs
+    # while this source's own failure is being handled: raised from here it
+    # ended fetch_all, and none of the sources after this one were fetched.
+    try:
+        found = source_archive.fallback(name, limit, today)
+    except Exception as e:
+        print(f"  {name}: the archive couldn't be read either ({e})")
+        return False
     if found is None:
         print(f"  {name}: no archived copy within {limit} days to stand in")
         return False

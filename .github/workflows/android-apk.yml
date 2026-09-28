@@ -239,6 +239,11 @@ jobs:
           print(f"summary={m['id']} on Android API {', '.join(map(str, picks))}")
           PY
       - name: Robo test
+        # The ref name through the environment, not spliced into the script: a
+        # ref may carry $( ) and this job holds a GCP credential.
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
         run: |
           set -o pipefail
           gcloud firebase test android run \
@@ -247,7 +252,7 @@ jobs:
             --app family-bike-router.apk \
             ${{ steps.devices.outputs.flags }} \
             --timeout 5m \
-            --client-details matrixLabel="${{ github.ref_name }} ${{ github.sha }}" \
+            --client-details matrixLabel="$REF_NAME $SHA" \
             2>&1 | tee testlab.log
       - name: Fetch screenshots and logs
         # Out of Test Lab's bucket, which only this account can read, and into

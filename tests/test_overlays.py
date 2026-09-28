@@ -383,3 +383,63 @@ def test_the_match_asks_the_spatial_index_once_not_once_per_edge(
     got = build_graph.overlay_match(edges_frame(streets), overlay_frame(facilities), 18.0)
     assert got == list(range(40))
     assert calls["n"] == 1
+
+
+# --- what an official high-stress rating and a person's override do to a price
+
+
+def price(cls: str, road_cls: str, busy: bool) -> float:
+    """What the young-kids profile pays per metre, as the router will."""
+    import weights
+
+    return weights.profile_multiplier("young_kids", cls, road_cls, busy)
+
+
+def test_paint_on_a_street_rated_high_stress_is_priced_as_paint_on_a_busy_road() -> None:
+    # A tertiary street (moderate) that MassDOT rates LTS 3: its road escalates
+    # to busy, and so must the price of the paint on it. Raising road_cls alone
+    # left the lane at 3 and a sharrow at 6, a quiet street's prices.
+    road, busy = build_graph.escalate_road("moderate_street", False)
+    assert (road, busy) == ("busy_street", True)
+    assert price("lane", road, busy) == price("lane", "busy_street", True)
+    assert price("lane", road, busy) > price("lane", "moderate_street", False)
+    assert price("sharrow", road, busy) == price("busy_street", "busy_street", True)
+
+
+def test_a_quiet_street_rated_high_stress_is_moderate_not_busy() -> None:
+    assert build_graph.escalate_road("quiet_street", False) == ("moderate_street", False)
+    # a road that was busy already stays busy, and a path is not a road
+    assert build_graph.escalate_road("busy_street", True) == ("busy_street", True)
+    assert build_graph.escalate_road("path", False) == ("path", False)
+
+
+def test_a_lane_override_on_an_arterial_keeps_the_arterial_under_it() -> None:
+    # An override saying "there is a lane here" said nothing about the road, but
+    # it used to overwrite road_cls too: min(10, 3) = 3 for paint on a primary.
+    cls, road, busy = build_graph.apply_override("lane", "busy_street", True)
+    assert (cls, road, busy) == ("lane", "busy_street", True)
+    assert price(cls, road, busy) == price("lane", "busy_street", True)
+    for facility in build_graph.ON_ROAD_FACILITIES:
+        _, road, busy = build_graph.apply_override(facility, "busy_street", True)
+        assert (road, busy) == ("busy_street", True), facility
+
+
+def test_an_override_naming_the_street_says_what_the_street_is() -> None:
+    # "this is really a quiet street" and "this is a busy road" are about the road
+    assert build_graph.apply_override("quiet_street", "busy_street", True) == (
+        "quiet_street",
+        "quiet_street",
+        False,
+    )
+    assert build_graph.apply_override("busy_street", "quiet_street", False) == (
+        "busy_street",
+        "busy_street",
+        True,
+    )
+    assert build_graph.apply_override("path", "busy_street", True) == ("path", "path", False)
+
+
+def test_the_on_road_facilities_are_classes_the_model_has() -> None:
+    import weights
+
+    assert build_graph.ON_ROAD_FACILITIES <= set(weights.CLASSES)

@@ -34,6 +34,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import urllib.error
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -64,11 +65,28 @@ def _get_json(url: str) -> Any:
         return json.loads(r.read())
 
 
-def list_copies(get_json: Callable[[str], Any] = _get_json) -> list[Copy]:
-    """Every archived copy, or none if the archive doesn't exist yet."""
+class NoArchive(LookupError):
+    """The archive release doesn't exist yet: a first run, not a failure."""
+
+
+def _release(get_json: Callable[[str], Any]) -> Any:
     try:
-        release = get_json(f"https://api.github.com/repos/{REPO}/releases/tags/{TAG}")
-    except OSError:
+        return get_json(f"https://api.github.com/repos/{REPO}/releases/tags/{TAG}")
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            raise NoArchive(TAG) from e
+        raise
+
+
+def list_copies(get_json: Callable[[str], Any] = _get_json) -> list[Copy]:
+    """Every archived copy, or none if the archive doesn't exist yet.
+
+    Only a missing release is "none". Any other failure to ask (a rate limit, the
+    network) is raised: read as "no archive", it made upload() create a release
+    that already exists, which fails, and failed the refresh's archive step."""
+    try:
+        release = _release(get_json)
+    except NoArchive:
         return []
     copies: list[Copy] = []
     page = 1
@@ -152,8 +170,13 @@ def _gh(*args: str) -> None:
 
 def upload(raw_dir: Path) -> None:
     """Archive what this refresh fetched, then keep only the newest KEEP of each."""
-    have = {(c.name, c.retrieved) for c in list_copies()}
-    if not have:
+    try:
+        _release(_get_json)
+        exists = True
+    except NoArchive:
+        exists = False
+    have = {(c.name, c.retrieved) for c in list_copies()} if exists else set()
+    if not exists:
         _gh(
             "release", "create", TAG, "--repo", REPO, "--latest=false", "--prerelease",
             "--title", "Source archive",

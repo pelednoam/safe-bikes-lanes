@@ -687,6 +687,34 @@ LTS_ESCALATION: Final[dict[str, str]] = {
     "moderate_street": "busy_street",
 }
 
+# Facilities painted or built on a road: a class that says what was added to a
+# street, not what the street is (see facility_multiplier).
+ON_ROAD_FACILITIES: Final[frozenset[str]] = frozenset({"lane", "buffered", "sharrow", "separated"})
+
+
+def escalate_road(road_cls: str, road_busy: bool) -> tuple[str, bool]:
+    """The street under an edge MassDOT rates LTS 3 or worse: one step more
+    stressful, and busy once it is a busy street.
+
+    Busy too, not only its class: facility_multiplier prices paint on a busy
+    road by the road being busy, so raising road_cls alone left a painted lane
+    on a street MassDOT calls high-stress at 3, and a sharrow at 6, as if it
+    were quiet; busy, they are 10 and 25."""
+    new = LTS_ESCALATION.get(road_cls, road_cls)
+    return new, road_busy or new == "busy_street"
+
+
+def apply_override(override: str, road_cls: str, road_busy: bool) -> tuple[str, str, bool]:
+    """(cls, road_cls, road_busy) after a person's override of an edge.
+
+    An override naming a facility says what is painted or built there, and the
+    street under it stays what it is: setting road_cls to "lane" as well made a
+    lane override on an arterial cost min(10, 3) = 3, a busy road priced as a
+    quiet one. An override naming anything else says what the street itself is."""
+    if override in ON_ROAD_FACILITIES:
+        return override, road_cls, road_busy
+    return override, override, override == "busy_street"
+
 FOOT_FILTER: Final[str] = (
     '["highway"~"footway|pedestrian|path"]["bicycle"~"yes|designated|permissive"]'
 )
@@ -1014,9 +1042,11 @@ def build() -> None:
                     escalated += 1
                 # and the street under any paint: a painted lane on a street
                 # MassDOT rates LTS 3 must not be priced as a quiet street
-                road = edges.iat[i, edges.columns.get_loc("road_cls")]
-                if road in LTS_ESCALATION:
-                    edges.iat[i, edges.columns.get_loc("road_cls")] = LTS_ESCALATION[road]
+                rc = edges.columns.get_loc("road_cls")
+                rb = edges.columns.get_loc("road_busy")
+                edges.iat[i, rc], edges.iat[i, rb] = escalate_road(
+                    edges.iat[i, rc], bool(edges.iat[i, rb])
+                )
         print(f"  escalated {escalated} edges via LTS>=3")
 
     # manual overrides trump everything (can downgrade too)
@@ -1025,11 +1055,14 @@ def build() -> None:
         print(f"applying {len(ov)} manual overrides ...")
         matches = overlay_match(edges, ov, radius=config.FACILITY_JOIN_RADIUS_M)
         exploded = ov.explode(index_parts=False).reset_index(drop=True)
+        cc = edges.columns.get_loc("cls")
+        rc = edges.columns.get_loc("road_cls")
+        rb = edges.columns.get_loc("road_busy")
         for i, pos in enumerate(matches):
             if pos is not None:
-                edges.iat[i, edges.columns.get_loc("cls")] = exploded.iloc[pos]["cls"]
-                # an override is a person saying what the street is, all of it
-                edges.iat[i, edges.columns.get_loc("road_cls")] = exploded.iloc[pos]["cls"]
+                edges.iat[i, cc], edges.iat[i, rc], edges.iat[i, rb] = apply_override(
+                    exploded.iloc[pos]["cls"], edges.iat[i, rc], bool(edges.iat[i, rb])
+                )
                 edges.iat[i, edges.columns.get_loc("source")] = "override"
 
     # crash density

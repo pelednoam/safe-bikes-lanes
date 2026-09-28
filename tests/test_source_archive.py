@@ -3,10 +3,13 @@
 import datetime
 import gzip
 import json
+import urllib.error
 import urllib.request
+from email.message import Message
 from pathlib import Path
 from typing import Any
 
+import pytest
 import source_archive
 from source_archive import Copy
 
@@ -39,9 +42,23 @@ def test_assets_are_read_by_name_and_date_and_anything_else_is_ignored() -> None
 
 def test_no_archive_yet_is_no_copies_not_a_crash() -> None:
     def missing(url: str) -> Any:
-        raise OSError("404")
+        raise urllib.error.HTTPError(url, 404, "Not Found", Message(), None)
 
     assert source_archive.list_copies(missing) == []
+
+
+def test_failing_to_ask_is_not_the_same_as_no_archive() -> None:
+    # read as "no archive", a rate limit made upload() try to create a release
+    # that exists, and the refresh's archive step failed every week
+    def limited(url: str) -> Any:
+        raise urllib.error.HTTPError(url, 403, "rate limit exceeded", Message(), None)
+
+    def offline(url: str) -> Any:
+        raise urllib.error.URLError("no route to host")
+
+    for broken in (limited, offline):
+        with pytest.raises(OSError):
+            source_archive.list_copies(broken)
 
 
 def test_the_newest_copy_stands_in_only_within_its_limit() -> None:

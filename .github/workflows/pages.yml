@@ -54,16 +54,25 @@ jobs:
         # tile at a time by byte range (web/src/basemap.ts). Checked against the
         # sha256 published beside it, so a truncated download fails here rather
         # than as a map with holes in it.
+        # A mismatch is retried too: a deploy that runs while basemap.yml is
+        # uploading the month's new file can read the new basemap.json and the
+        # old file (or the reverse), and a minute later they agree.
         run: |
           BASE=https://github.com/${{ github.repository }}/releases/download/basemap
-          for i in 1 2 3; do
-            curl -sL --fail -o basemap.json "$BASE/basemap.json" &&
-              curl -sL --fail -o web/basemap.pmtiles "$BASE/basemap.pmtiles" && break
-            echo "basemap download failed (attempt $i), retrying in 15s"; sleep 15
+          matched=""
+          for i in 1 2 3 4; do
+            if curl -sL --fail -o basemap.json "$BASE/basemap.json" &&
+              curl -sL --fail -o web/basemap.pmtiles "$BASE/basemap.pmtiles"; then
+              SHA=$(python3 -c "import json; print(json.load(open('basemap.json'))['sha256'])")
+              if echo "$SHA  web/basemap.pmtiles" | sha256sum -c --status; then matched=1; break; fi
+              echo "basemap.pmtiles doesn't match basemap.json (attempt $i)"
+            else
+              echo "basemap download failed (attempt $i)"
+            fi
+            sleep 30
           done
-          SHA=$(python3 -c "import json; print(json.load(open('basemap.json'))['sha256'])")
-          echo "$SHA  web/basemap.pmtiles" | sha256sum -c --status || {
-            echo "::error::basemap.pmtiles doesn't match basemap.json — run scripts/publish-basemap.sh"; exit 1; }
+          [ -n "$matched" ] || {
+            echo "::error::no basemap.pmtiles matching basemap.json — run scripts/publish-basemap.sh"; exit 1; }
           echo "basemap: $(cat basemap.json)"
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:

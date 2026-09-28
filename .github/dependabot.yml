@@ -3,9 +3,11 @@
 # a moved tag cannot change what runs with this repo's tokens; this is what
 # stops those pins going stale.
 #
-# No pip entry: the pipeline's dependencies in pyproject.toml are unpinned, so
-# there is nothing for Dependabot to bump. Add one when a pinned requirements
-# file lands.
+# No pip entry, though the Python dependencies are pinned now, with hashes
+# (pipeline/requirements.txt, requirements-dev.txt). Both are compiled by
+# `uv pip compile` for CI's platform (see each file's header), which Dependabot's
+# pip support would regenerate without those flags. Refresh them by rerunning
+# the command at the top of each file, then the Python checks.
 version: 2
 updates:
   - package-ecosystem: github-actions

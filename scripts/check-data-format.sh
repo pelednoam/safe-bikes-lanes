@@ -22,15 +22,17 @@ NEED=$(python3 -c "import sys; sys.path.insert(0, 'pipeline'); import config; pr
 # fall through to success, passing a snapshot it had not actually checked.
 # Strictly an integer: int("2") and int(2.9) both succeed, so a string or a
 # fractional stamp used to pass as a whole number it never was.
+# The directory as an argument, not spliced into the Python: a path with a
+# quote in it would otherwise be code.
 HAVE=$(python3 -c "
-import json, pathlib
-p = pathlib.Path('$DATA_DIR/meta.json')
+import json, pathlib, sys
+p = pathlib.Path(sys.argv[1], 'meta.json')
 try:
     v = json.loads(p.read_text()).get('format', 0)
     print(v if type(v) is int else 0)
 except Exception:
     print(0)
-")
+" "$DATA_DIR")
 
 # The city pages carry the same stamp, because they are the files whose fields
 # the number actually promises. A meta.json refreshed without regenerating them
@@ -39,8 +41,8 @@ except Exception:
 # the site serves /somerville and /cambridge from these files, so a snapshot
 # without them is broken however good its meta.json looks.
 CITY=$(python3 -c "
-import json, pathlib
-d = pathlib.Path('$DATA_DIR/cities')
+import json, pathlib, sys
+d = pathlib.Path(sys.argv[1], 'cities')
 stamps = []
 if d.is_dir():
     for p in sorted(d.glob('*.json')):
@@ -52,7 +54,7 @@ if d.is_dir():
         except Exception:
             stamps.append(0)
 print(min(stamps) if stamps else -1)
-")
+" "$DATA_DIR")
 
 if [ "$CITY" -eq -1 ]; then
   echo "::error::this snapshot carries no city pages. The site serves /somerville" \

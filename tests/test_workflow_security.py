@@ -17,8 +17,13 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
-# refresh-data.yml is pinned separately; these are the three this covers.
-PINNED = ["android-apk.yml", "pages.yml", "health.yml"]
+# Every workflow, found rather than listed: a list of three was already two
+# short when basemap.yml (which can write releases) and python.yml were added.
+PINNED = sorted(p.name for p in WORKFLOWS.glob("*.yml"))
+
+
+def test_the_workflows_are_found() -> None:
+    assert {"pages.yml", "refresh-data.yml", "basemap.yml", "android-apk.yml"} <= set(PINNED)
 
 
 def load(name: str) -> dict[str, Any]:

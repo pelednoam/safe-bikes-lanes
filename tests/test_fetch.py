@@ -17,6 +17,17 @@ import fetch
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _no_archive(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test here reaches the real source archive on GitHub. Left to it, a
+    source that failed looked for a stand-in over the network, and whether a
+    test's source failed depended on what the archive held that day. Tests about
+    the archive replace source_archive.fallback themselves."""
+    import source_archive
+
+    monkeypatch.setattr(source_archive, "list_copies", lambda *_a, **_k: [])
+
+
 class _FakeResponse:
     """Just enough of an HTTP response for json.load() in a `with` block."""
 
@@ -516,3 +527,45 @@ def test_every_source_has_a_stated_limit_or_none_on_purpose() -> None:
         assert config.source_max_stale_days(name) is not None, name
     # live closures go stale in days, not months
     assert (config.source_max_stale_days("cambridge_permits.geojson") or 99) <= 7
+
+
+def test_an_archive_that_cant_be_read_fails_that_source_and_no_other(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Asking the archive runs while a source's own failure is being handled.
+    When the archive couldn't be read either, that used to end fetch_all
+    there, and none of the sources after it were fetched."""
+    import source_archive
+
+    monkeypatch.setattr(config, "RAW_DIR", tmp_path)
+
+    def unreadable(name: str, limit: int, today: object) -> object:
+        raise OSError("api.github.com: rate limit exceeded")
+
+    monkeypatch.setattr(source_archive, "fallback", unreadable)
+    empty = {"type": "FeatureCollection", "features": []}
+
+    def down(url: str, *_a: Any, **_k: Any) -> dict[str, Any]:
+        if "somervillema" in url:
+            raise OSError("timed out")
+        return empty
+
+    monkeypatch.setattr(fetch, "arcgis_query", down)
+    monkeypatch.setattr(
+        fetch, "_get", lambda *_a, **_k: b'{"type":"FeatureCollection","features":[]}'
+    )
+    for name in (
+        "fetch_towns",
+        "fetch_population",
+        "fetch_workzones",
+        "fetch_cambridge_permits",
+        "fetch_mapc",
+        "fetch_pois",
+    ):
+        monkeypatch.setattr(fetch, name, lambda: empty)
+
+    failures = fetch.fetch_all(refresh=True)
+    failed = {name for name, _ in failures}
+    assert failed and all("somerville" in name for name in failed)
+    # and every other source was still fetched and saved
+    assert (tmp_path / "pois.geojson").exists()
