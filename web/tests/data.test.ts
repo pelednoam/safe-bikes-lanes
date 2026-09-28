@@ -272,8 +272,8 @@ describe("loading a layer", () => {
     const mod = await import("../src/data.js");
     await mod.initDataSource();
     await expect(mod.loadJson("tiles/12_34.json")).rejects.toThrow(/site's data/);
-    await expect(mod.loadJson("nettiles/12_34.json")).rejects.toThrow(/site's data/);
-    // an ordinary layer still falls back
+    // what is only drawn still falls back: an older street, not a broken graph
+    expect(await mod.loadJson("nettiles/12_34.json")).toEqual({ from: "bundle" });
     expect(await mod.loadJson("pois.geojson")).toEqual({ from: "bundle" });
   });
 });

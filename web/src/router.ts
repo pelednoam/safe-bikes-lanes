@@ -356,12 +356,17 @@ export function facilityMultiplier(
   // priced as the worst street there is. Unpriced it was NaN, and a NaN weight
   // breaks the search; priced as quiet it would be a guess that an unknown
   // street is safe for a child, which is the wrong guess to make.
+  // And the street under it can't lower that: it is the class, not the
+  // street, that nobody here can vouch for.
+  const known = profile.mult as Partial<Record<string, number>>;
   const worst = profile.mult.busy_street;
-  let mult = (profile.mult as Partial<Record<string, number>>)[cls] ?? worst;
+  const own = known[cls];
+  if (own === undefined) return worst;
+  let mult = own;
   if (busy && cls === "lane") mult = profile.busyLane;
   if (busy && cls === "buffered") mult = profile.busyBuffered;
   if (busy && cls === "sharrow") mult = worst;
-  const floor = road === undefined ? undefined : (profile.mult as Partial<Record<string, number>>)[road];
+  const floor = road === undefined ? undefined : known[road];
   if (floor !== undefined) mult = Math.min(mult, floor);
   return mult;
 }

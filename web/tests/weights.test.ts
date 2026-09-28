@@ -70,6 +70,13 @@ describe("a class this build of the app doesn't know", () => {
     }
   });
 
+  it("isn't made cheap by the quiet street it is on", () => {
+    // the floor (paint can only help) would have priced it as the street under it
+    for (const profile of Object.values(PROFILES)) {
+      expect(facilityMultiplier(profile, unknown, "quiet_street", false)).toBe(profile.mult.busy_street);
+    }
+  });
+
   it("doesn't lower a known facility's price when it is the street under it", () => {
     const young = PROFILES["young_kids"];
     expect(facilityMultiplier(young, "lane", unknown, false)).toBe(young.mult.lane);

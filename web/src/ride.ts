@@ -82,6 +82,9 @@ const LOOP_PROGRESS_MAX_STEP_M = 400;
 /** The fastest a rider covers ground, for how far round the loop a fix after a
  * gap may believably be: a fast descent, not a car. */
 const LOOP_FASTEST_MPS = 10;
+/** A loop winds: how much further round it a rider can get than the straight
+ * line they covered. */
+const LOOP_WINDING = 1.6;
 /** Hazards are called this far out, and held on screen until this far past. */
 const HAZARD_CALL_M = 100;
 const HAZARD_HOLD_M = 30;
@@ -209,8 +212,12 @@ export class RideEngine {
   private rerouteSpokenAt = 0;
   /** A reroute has been asked for and the rider hasn't been on a route since. */
   private awaitingReroute = false;
-  /** When the last on-loop fix came: how long a gap in them has lasted. */
-  private lastLoopAt: number | null = null;
+  /** Ground actually covered since the last fix on the loop, each step capped
+   * at what a bicycle can do in the time it took: how far round a fix after a
+   * gap or a detour may believably be. */
+  private movedSinceLoopM = 0;
+  /** Good fixes on the route in a row, for believing the rider is back on it. */
+  private onRouteFixes = 0;
   /** Where a way back rejoins the loop, further round than the rider had got:
    * the one jump in progress that is announced rather than inferred. */
   private rejoinAt: number | null = null;
@@ -233,8 +240,10 @@ export class RideEngine {
     this.rerouteSpokenAt = 0;
     this.alertUntilM = 0;
     this.loopDoneM = 0;
-    this.lastLoopAt = null;
+    this.movedSinceLoopM = 0;
     this.rejoinAt = null;
+    this.awaitingReroute = false;
+    this.onRouteFixes = 0;
     this.bearingTarget = 0;
     this.zoomTarget = NAV_ZOOM_CRUISE;
   }
@@ -266,6 +275,7 @@ export class RideEngine {
     this.nextMilestone = 1;
     this.halfway = false;
     this.awaitingReroute = false;
+    this.onRouteFixes = 0;
     this.rejoinAt = loopLeg !== null && loopLeg.resumeM > this.loopDoneM ? loopLeg.resumeM : null;
   }
 
@@ -331,6 +341,8 @@ export class RideEngine {
     } else {
       this.implausibleFixes = 0;
     }
+    const prev = this.lastPos;
+    const prevAt = this.lastFixAt;
     this.lastPos = here;
     const effects: RideEffect[] = [{ type: "clearGpsAlert" }];
     const say = (text: string, priority: SpeakPriority = "turn"): void => {
@@ -356,6 +368,10 @@ export class RideEngine {
       }
     }
     this.lastFixAt = now;
+    if (prev !== null && prevAt > 0) {
+      const dt = Math.max(0, (now - prevAt) / 1000);
+      this.movedSinceLoopM += Math.min(distM(prev, here), LOOP_FASTEST_MPS * dt);
+    }
     // travel direction: GPS heading when moving, else derived from movement
     const gpsHeading = fix.heading;
     const moving = (fix.speed ?? 0) > 0.7;
@@ -386,6 +402,7 @@ export class RideEngine {
     if (snap.offM > OFF_ROUTE_M) {
       // a poor GPS fix shouldn't count as a deviation
       if (fix.accuracy > MAX_GPS_ACCURACY_M) return step;
+      this.onRouteFixes = 0;
       this.offCount++;
       // instant feedback while we make sure it's a real deviation
       effects.push({ type: "offRoute" });
@@ -423,10 +440,12 @@ export class RideEngine {
     }
     this.offCount = 0;
     this.rerouteTries = 0;
-    if (this.awaitingReroute) {
-      // The rider found the way back before the new one arrived. Switching to
-      // it now would send them off the line they are on, to follow a way back
-      // from a wrong turn they already put right.
+    if (fix.accuracy <= MAX_GPS_ACCURACY_M) this.onRouteFixes++;
+    // The rider found the way back before the new one arrived: switching to it
+    // now would send them off the line they are on, to follow a way back from
+    // a wrong turn they already put right. As sure as a wrong turn has to be,
+    // though: one fix that wanders onto the line mid-deviation isn't a return.
+    if (this.awaitingReroute && this.onRouteFixes >= OFF_ROUTE_STRIKES) {
       this.awaitingReroute = false;
       effects.push({ type: "rejoined" });
     }
@@ -434,25 +453,25 @@ export class RideEngine {
     this.hint = snap.idx;
     step.done = trackSlice(track, snap.alongM);
     // How far round the loop, once this track is on it. Forwards only, and only
-    // by what a bicycle can cover: a loop crosses and runs back along its own
-    // streets, and a snap onto the far side of one of those (a wrong turn's
-    // first metres pass close to them) must not count the stretch in between
-    // as ridden. What a bicycle can cover grows with the time since the last
-    // fix on the loop, so a GPS gap is ridden on from; capped at one step
-    // regardless, progress stopped for good after any gap longer than that.
-    // And a way back that rejoins further round says where, so reaching it
-    // counts.
+    // by what the rider can have covered: a loop crosses and runs back along
+    // its own streets, and a snap onto the far side of one of those (a wrong
+    // turn's first metres pass close to them) must not count the stretch in
+    // between as ridden. What they can have covered is the ground they moved
+    // over since the last fix on the loop, each step capped at a bicycle's
+    // speed: a GPS gap is ridden on from, while a wrong turn beside another
+    // stretch of the loop earns nothing. (Capped at one step whatever
+    // happened, progress stopped for good after any gap.) And a way back that
+    // rejoins further round says where, so reaching it counts.
     if (this.loopLeg !== null && snap.alongM >= this.loopLeg.legM) {
       const round = this.loopLeg.resumeM + snap.alongM - this.loopLeg.legM;
-      const gapS = this.lastLoopAt === null ? 0 : Math.max(0, (now - this.lastLoopAt) / 1000);
-      const reach = LOOP_PROGRESS_MAX_STEP_M + LOOP_FASTEST_MPS * gapS;
+      const reach = LOOP_PROGRESS_MAX_STEP_M + LOOP_WINDING * this.movedSinceLoopM;
       const rejoining =
         this.rejoinAt !== null && round >= this.rejoinAt && round - this.rejoinAt <= LOOP_PROGRESS_MAX_STEP_M;
       if (round > this.loopDoneM && (round - this.loopDoneM <= reach || rejoining)) {
         this.loopDoneM = round;
         if (rejoining) this.rejoinAt = null;
       }
-      this.lastLoopAt = now;
+      this.movedSinceLoopM = 0;
     }
 
     // advance past maneuvers we've already ridden through

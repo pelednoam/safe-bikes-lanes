@@ -1,6 +1,6 @@
 // Handing a file to the rider: a download, or the phone's share sheet.
 
-import { canSaveNative, saveFileNative } from "./native.js";
+import { canSaveNative, type SaveResult, saveFileNative } from "./native.js";
 //
 // Both went wrong in WebKit, which is every browser on an iPhone:
 //
@@ -57,7 +57,7 @@ export function saveBlob(
   filename: string,
   app: { can: () => boolean; save: typeof saveFileNative } = { can: canSaveNative, save: saveFileNative },
   env?: DownloadEnv,
-): Promise<{ saved: true } | { error: string }> {
+): Promise<SaveResult> {
   if (!app.can()) {
     downloadBlob(blob, filename, env);
     return Promise.resolve({ saved: true });

@@ -71,7 +71,9 @@ export class ScreenLock {
       }
       this.sentinel = got;
     } catch {
-      this.sentinel = null; // denied, or asked for while hidden
+      // Denied, or asked for while hidden: nothing to hold. Not a reason to
+      // forget a lock another request did get, which would leave it held with
+      // nothing to release it.
     }
   }
 }

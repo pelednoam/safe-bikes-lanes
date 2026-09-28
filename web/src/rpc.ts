@@ -56,7 +56,12 @@ interface Callback {
   fn: number;
   args: unknown[];
 }
-type Message = Call | Reply | Callback;
+/** Sent once by the worker when it is listening: before this, an error is
+ * a worker that never started. */
+interface Ready {
+  kind: "ready";
+}
+type Message = Call | Reply | Callback | Ready;
 
 export function expose(api: object, ep: Endpoint): void {
   const methods = api as Record<string, (...args: unknown[]) => unknown>;
@@ -84,6 +89,7 @@ export function expose(api: object, ep: Endpoint): void {
       reply(false, errorText(err));
     }
   });
+  ep.postMessage({ kind: "ready" } satisfies Ready);
 }
 
 /** An Error's message, which is what the page shows; an Error itself does
@@ -94,14 +100,20 @@ function errorText(err: unknown): string {
 
 export function wrap<T extends object>(ep: Endpoint | FallibleEndpoint): Remote<T> {
   let nextId = 0;
-  /** Set once the worker has failed: it answers nothing from then on. */
+  /** Set once the worker has failed to start: it answers nothing, ever. */
   let failed: string | null = null;
+  /** Whether it has said it is listening. */
+  let started = false;
   const pending = new Map<
     number,
     { resolve: (v: unknown) => void; reject: (e: Error) => void; fns: ((...a: unknown[]) => void)[] }
   >();
   ep.addEventListener("message", (e: MessageEvent) => {
     const msg = e.data as Message;
+    if (msg.kind === "ready") {
+      started = true;
+      return;
+    }
     const call = pending.get(msg.id);
     if (call === undefined) return;
     if (msg.kind === "callback") {
@@ -112,13 +124,17 @@ export function wrap<T extends object>(ep: Endpoint | FallibleEndpoint): Remote<
       else call.reject(new Error(String(msg.value)));
     }
   });
-  // A worker that fails answers nothing, ever: without this, every call made
-  // to it waited forever — a plan stuck on "Finding the safest way…" and, mid-
-  // ride, a reroute that never came. Everything waiting is told now, and
-  // everything asked later is told at once.
+  // A worker whose script didn't load answers nothing, ever: without this,
+  // every call made to it waited forever — a plan stuck on "Finding the safest
+  // way…" and, mid-ride, a reroute that never came. Everything waiting is told,
+  // and everything asked later is told at once. An error from a worker that
+  // did start (an uncaught one, or a message it couldn't read) may have lost
+  // the calls in flight, which are told so, but the worker lives on to take
+  // the next: a single bad message must not end routing for the ride.
   const fail = (): void => {
-    failed = WORKER_FAILED;
-    for (const call of pending.values()) call.reject(new Error(WORKER_FAILED));
+    if (!started) failed = WORKER_FAILED;
+    const why = started ? "the route finder lost that request — try again" : WORKER_FAILED;
+    for (const call of pending.values()) call.reject(new Error(why));
     pending.clear();
   };
   // (a MessagePort, as in the tests, never fires these; a Worker does)

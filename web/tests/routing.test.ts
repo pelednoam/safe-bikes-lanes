@@ -96,6 +96,24 @@ describe("calling across the channel", () => {
     await expect(dead.plan()).rejects.toThrow(WORKER_FAILED);
   });
 
+  it("lives on after an error once it has started, failing only what was in flight", async () => {
+    class LiveWorker extends EventTarget {
+      postMessage(): void {}
+      say(data: unknown): void {
+        this.dispatchEvent(new MessageEvent("message", { data }));
+      }
+    }
+    const worker = new LiveWorker();
+    const live = wrap<{ plan(): number }>(worker as unknown as FallibleEndpoint);
+    worker.say({ kind: "ready" });
+    const inFlight = live.plan(); // id 0
+    worker.dispatchEvent(new Event("error"));
+    await expect(inFlight).rejects.toThrow(/lost that request/);
+    const next = live.plan(); // id 1, answered
+    worker.say({ kind: "reply", id: 1, ok: true, value: 7 });
+    expect(await next).toBe(7);
+  });
+
   it("isn't mistaken for a promise", async () => {
     // `await remote` would hang forever if the proxy offered a then()
     expect(await Promise.resolve(remote)).toBe(remote);
@@ -184,6 +202,27 @@ describe.skipIf(skipRouting)("routing in the worker, on the pinned data", () => 
     const after = await routing.plan(DAVIS, KENDALL, prefs);
     expect(JSON.stringify(after)).not.toBe(JSON.stringify(before));
     await routing.setSketchyMarks([]);
+  });
+
+  it("routes on the bundle's whole set when the site's newer tiles can't be had", async () => {
+    // offline, with the site's newer build chosen at launch and a tile of it
+    // not yet cached: its tiles can't be mixed with the bundle's, but the
+    // bundle's whole set routes, a little older, instead of not at all
+    const sources: (string | null)[] = [];
+    const offlineSite = async (src: DataSource, name: string): Promise<unknown> => {
+      sources.push(src.remoteId);
+      if (src.remoteId !== null && name.startsWith("tiles/") && name !== "tiles/manifest.json") {
+        throw new Error(`couldn't load ${name} of the site's data`);
+      }
+      return load(src, name);
+    };
+    const phone = channel(createRoutingApi(offlineSite));
+    await phone.configure({ remoteId: "2026-09-27", bundled: `${DATA}/` }, "imperial");
+    await phone.loadManifest();
+    expect(await phone.ensure([DAVIS, KENDALL], 1)).toEqual({ ready: true, rebuilt: true });
+    expect((await phone.plan(DAVIS, KENDALL, prefs)).length).toBeGreaterThan(0);
+    // and every tile it routed on came from the bundle, none from the site
+    expect(sources[sources.length - 1]).toBeNull();
   });
 
   it("says why it can't, in words, when there is nothing to route on", async () => {

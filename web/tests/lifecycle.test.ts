@@ -124,6 +124,28 @@ describe("ScreenLock", () => {
     expect(made.every((m) => m.released)).toBe(true);
   });
 
+  it("keeps a lock it got when an overlapping request is refused", async () => {
+    let n = 0;
+    const got = {
+      released: false,
+      release: async (): Promise<void> => {
+        got.released = true;
+      },
+    };
+    const api: WakeLockApi = {
+      request: async () => {
+        n++;
+        if (n === 2) throw new Error("NotAllowedError");
+        return got;
+      },
+    };
+    const lock = new ScreenLock(() => api, () => true);
+    await Promise.all([lock.acquire(), lock.onVisibilityChange()]);
+    expect(lock.held).toBe(true);
+    lock.release();
+    expect(got.released).toBe(true);
+  });
+
   it("is harmless where the browser has no wake lock", async () => {
     const lock = new ScreenLock(() => undefined, () => true);
     await lock.acquire();

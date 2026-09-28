@@ -107,10 +107,15 @@ export function dataSource(): DataSource {
   return { remoteId, bundled: new URL("data/", document.baseURI).href };
 }
 
-/** Tile sets that only make sense whole, from one build: routing tiles are
- * stitched together by node ids that are consistent within a build and not
- * between two. */
-const ONE_BUILD = /^(tiles|nettiles)\//;
+/** The one tile set that only makes sense whole, from one build: routing tiles
+ * are stitched together by node ids that hold within a build and not between
+ * two. (Network tiles are only drawn, and a bundled one among the site's is a
+ * slightly older street, not a broken graph.) */
+const ONE_BUILD = /^tiles\//;
+
+/** What a routing tile of the site's build that can't be had fails with: the
+ * routing worker then routes on the bundle's whole set instead (routing.ts). */
+export const SITE_TILE_MISSING = "of the site's data";
 
 /** Load a data layer: the site's (cached per version) when it wins, else the bundle's. */
 export async function loadJsonFrom<T>(source: DataSource, name: string): Promise<T> {
@@ -131,7 +136,7 @@ export async function loadJsonFrom<T>(source: DataSource, name: string): Promise
     // One tile of the site's build that didn't arrive, filled in from the
     // bundle's, joined the graph to tiles of another build: a graph that
     // routes, wrongly, and says nothing. Failing is honest, and is retried.
-    if (ONE_BUILD.test(name)) throw new Error(`couldn't load ${name} of the site's data`);
+    if (ONE_BUILD.test(name)) throw new Error(`couldn't load ${name} ${SITE_TILE_MISSING}`);
   }
   return (await (await fetch(source.bundled + name)).json()) as T;
 }

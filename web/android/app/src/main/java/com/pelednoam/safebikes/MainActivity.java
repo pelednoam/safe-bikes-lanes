@@ -50,7 +50,10 @@ public class MainActivity extends BridgeActivity {
                             }
                             String name = URLUtil.guessFileName(url, contentDisposition, mimetype);
                             if (name.endsWith(".apk") || UpdateDownloader.APK_MIME.equals(mimetype)) {
-                                downloadUpdate(url, name);
+                                // an app to install comes over https or not at all
+                                if (url.startsWith("https://")) {
+                                    downloadUpdate(url, name);
+                                }
                             } else {
                                 downloadFile(url, name, mimetype);
                             }

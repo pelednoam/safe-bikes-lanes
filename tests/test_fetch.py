@@ -539,7 +539,10 @@ def test_an_archive_that_cant_be_read_fails_that_source_and_no_other(
 
     monkeypatch.setattr(config, "RAW_DIR", tmp_path)
 
+    asked: list[str] = []
+
     def unreadable(name: str, limit: int, today: object) -> object:
+        asked.append(name)
         raise OSError("api.github.com: rate limit exceeded")
 
     monkeypatch.setattr(source_archive, "fallback", unreadable)
@@ -569,3 +572,5 @@ def test_an_archive_that_cant_be_read_fails_that_source_and_no_other(
     assert failed and all("somerville" in name for name in failed)
     # and every other source was still fetched and saved
     assert (tmp_path / "pois.geojson").exists()
+    # and the archive really was asked, and failed: the case under test
+    assert asked and all("somerville" in name for name in asked)

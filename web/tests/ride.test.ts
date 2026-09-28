@@ -404,6 +404,19 @@ describe("a wrong turn", () => {
     expect(effects.filter((t) => t === "rejoined")).toHaveLength(1);
   });
 
+  it("isn't fooled into dropping the way back by one fix that lands on the line", () => {
+    // GPS wander during a real wrong turn, one fix onto the route and off
+    // again: that used to cancel the reroute being planned
+    const r = new Ride(route(TOWN));
+    r.onReroute = () => null;
+    const off = (m: number): RideFix => offsetFix([LON + m / mPerDegLon(LAT), LAT], 0, OFF_ROUTE_M + 40);
+    for (const m of [200, 205, 210, 215]) r.fix(off(m));
+    expect(r.effects.some((e) => e.type === "reroute")).toBe(true);
+    r.fix(offsetFix([LON + 220 / mPerDegLon(LAT), LAT], 0, 5)); // one stray fix on the line
+    for (const m of [225, 230]) r.fix(off(m));
+    expect(r.effects.some((e) => e.type === "rejoined")).toBe(false);
+  });
+
   it("doesn't say the rider rejoined when no reroute was asked for", () => {
     const r = new Ride(route(TOWN));
     // off the line for two fixes, one short of a wrong turn, and back
@@ -670,6 +683,25 @@ describe("a round trip", () => {
     r.now += 90_000; // a minute and a half without a fix: 600 m at 6.7 m/s
     r.ride({ fromM: 900, untilM: 1100 });
     expect(r.engine.loopDoneM).toBeGreaterThan(1050);
+  });
+
+  it("doesn't let time spent off the loop buy a far-side snap on the way back", () => {
+    // a minute on a wrong turn beside the loop is not a minute of riding round
+    // it: measured by time, it was, and a snap onto the far side counted
+    const r = new Ride(route(LOOP));
+    r.engine.setRoute(r.payload, { legM: 0, resumeM: 0 });
+    r.onReroute = () => null;
+    r.ride({ untilM: 300 });
+    const done = r.engine.loopDoneM;
+    const start = pointAlong(pathOf(r.payload), 300).at;
+    for (let i = 0; i < 60; i++) {
+      // pottering about 60-100 m off the loop, at walking pace
+      r.fix({ ...offsetFix(start, 180, 60 + (i % 10) * 4), speed: 1.2 });
+    }
+    const far = pointAlong(pathOf(r.payload), 1300).at;
+    const step = r.fix({ lon: far[0], lat: far[1], accuracy: 8, speed: 4, heading: 270 });
+    expect(step?.alongM ?? 0).toBeGreaterThan(1200);
+    expect(r.engine.loopDoneM).toBeLessThan(done + 100);
   });
 
   it("counts from where a way back rejoins the loop further round", () => {

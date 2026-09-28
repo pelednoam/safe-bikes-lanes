@@ -1029,6 +1029,8 @@ def build() -> None:
         matches = overlay_match(edges, lts, radius=15)
         ex_lts = lts.explode(index_parts=False)["lts"].tolist()
         escalated = 0
+        rc = edges.columns.get_loc("road_cls")
+        rb = edges.columns.get_loc("road_busy")
         for i, pos in enumerate(matches):
             if pos is None:
                 continue
@@ -1042,8 +1044,6 @@ def build() -> None:
                     escalated += 1
                 # and the street under any paint: a painted lane on a street
                 # MassDOT rates LTS 3 must not be priced as a quiet street
-                rc = edges.columns.get_loc("road_cls")
-                rb = edges.columns.get_loc("road_busy")
                 edges.iat[i, rc], edges.iat[i, rb] = escalate_road(
                     edges.iat[i, rc], bool(edges.iat[i, rb])
                 )

@@ -63,7 +63,8 @@ jobs:
           for i in 1 2 3 4; do
             if curl -sL --fail -o basemap.json "$BASE/basemap.json" &&
               curl -sL --fail -o web/basemap.pmtiles "$BASE/basemap.pmtiles"; then
-              SHA=$(python3 -c "import json; print(json.load(open('basemap.json'))['sha256'])")
+              # an unreadable basemap.json is another reason to try again
+              SHA=$(python3 -c "import json; print(json.load(open('basemap.json')).get('sha256', ''))" || true)
               if echo "$SHA  web/basemap.pmtiles" | sha256sum -c --status; then matched=1; break; fi
               echo "basemap.pmtiles doesn't match basemap.json (attempt $i)"
             else

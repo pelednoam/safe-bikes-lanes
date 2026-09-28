@@ -36,6 +36,7 @@ import {
   nativeStopSpeech,
   onAndroidBack,
   rideLocationState,
+  type SaveResult,
   setSystemBarsDark,
   startDownload,
   startBackgroundWatcher,
@@ -123,7 +124,7 @@ import { NetworkTiles } from "./tiles.js";
 import { withRetry } from "./retry.js";
 import { Lane, type Ticket } from "./planner.js";
 import type { RoutingApi, WirePrefs } from "./routing.js";
-import { wrap } from "./rpc.js";
+import { WORKER_FAILED, wrap } from "./rpc.js";
 import { type SpeakPriority, SpeechQueue } from "./speech.js";
 import { loopRejoinPoint, payloadLength, rejoinOption } from "./rejoin.js";
 import { decodePlan, encodePlan } from "./permalink.js";
@@ -696,7 +697,18 @@ const manifestReady: Promise<void> = dataReady
   .then(() => routing.configure(dataSource(), getUnits()))
   .then(() =>
     withRetry(() => routing.loadManifest(), {
-      onRetry: (_err, _attempt, delayMs) => dataLoadTrouble("the map data", delayMs),
+      onRetry: (err, _attempt, delayMs) => {
+        // a route finder that never started is not a slow network: waiting
+        // and retrying won't bring it back, and the rider should know
+        if (err instanceof Error && err.message === WORKER_FAILED) {
+          const errBox = el<HTMLDivElement>("error");
+          errBox.textContent = `Can't plan routes: ${WORKER_FAILED}.`;
+          errBox.dataset["from"] = "dataload";
+          errBox.style.display = "block";
+          return;
+        }
+        dataLoadTrouble("the map data", delayMs);
+      },
     }),
   )
   .then(() => {
@@ -1761,9 +1773,10 @@ async function showMapillaryPreview(lon: number, lat: number): Promise<void> {
 // ---------------------------------------------------------------------------
 
 /** Say on the button what became of a file it saved, for a moment. */
-function toldSaved(btn: HTMLElement, result: { saved: true } | { error: string }): void {
+function toldSaved(btn: HTMLElement, result: SaveResult): void {
   const prev = btn.textContent;
-  btn.textContent = "saved" in result ? "✓ saved to Downloads" : `⚠ not saved: ${result.error}`;
+  btn.textContent =
+    "saved" in result ? `✓ saved to ${result.where ?? "Downloads"}` : `⚠ not saved: ${result.error}`;
   window.setTimeout(() => {
     btn.textContent = prev;
   }, 3000);
@@ -3793,7 +3806,8 @@ el<HTMLButtonElement>("backup-save").addEventListener("click", () => {
   void saveBlob(blob, `family-bike-router-backup-${new Date().toISOString().slice(0, 10)}.json`).then((r) => {
     note.textContent =
       "saved" in r
-        ? `Backed up ${places} saved place${places === 1 ? "" : "s"} and your marks.`
+        ? `Backed up ${places} saved place${places === 1 ? "" : "s"} and your marks` +
+          (r.where === undefined ? "." : `, in ${r.where}.`)
         : `The backup was not saved: ${r.error}`;
   });
 });
@@ -4466,7 +4480,12 @@ function shareCard(text: string, image: PreparedImage, filename: string, btn: HT
     canShare: typeof navigator.canShare === "function" ? (d) => navigator.canShare(d) : undefined,
     share: typeof navigator.share === "function" ? (d) => navigator.share(d) : undefined,
     copy: (t) => navigator.clipboard.writeText(t),
-    download: (b, f) => void saveBlob(b, f),
+    // the share sheet's fallback: in the app a save can fail, and saying "saved"
+    // over a refusal is how a rider finds out later that it never was
+    download: (b, f) =>
+      void saveBlob(b, f).then((r) => {
+        if ("error" in r) toldSaved(btn, r);
+      }),
     tell: (message) => {
       const prev = btn.textContent;
       btn.textContent = `✓ ${message}`;
@@ -5396,6 +5415,11 @@ function showArrival(atStop: boolean, totalM: number): void {
   finishAndSaveRide();
 }
 
+/** Which ride this is: a ride's startup waits (the wake lock, a permission
+ * dialog), and one ended and followed by another in the meantime must not
+ * carry on inside the new one. */
+let rideGen = 0;
+
 async function startNav(): Promise<void> {
   // a ride follows the streets as they are, never a what-if's proposed lane
   clearWhatIf();
@@ -5415,6 +5439,7 @@ async function startNav(): Promise<void> {
   navOriginalDest = null;
   el<HTMLButtonElement>("nav-resume").style.display = "none";
   navActive = true;
+  const ride = ++rideGen;
   navFollowing = true;
   navUserZoom = false;
   voiceWarned = false;
@@ -5437,13 +5462,14 @@ async function startNav(): Promise<void> {
   // page comes back into view (see lifecycle.ts)
   await screenLock.acquire();
   // Each wait is a moment the ride can end in (exit, or Back, pressed while a
-  // permission dialog is up). Starting a GPS watch or pushing a Back guard for
-  // a ride already over left the phone tracking, and a Back that did nothing.
-  if (!navActive) return;
+  // permission dialog is up), and another begin. Starting a GPS watch or
+  // pushing a Back guard for a ride already over left the phone tracking, and
+  // a Back that did nothing; doing it inside the next ride pushed two.
+  if (!navActive || ride !== rideGen) return;
   // Location last, permission first: on Android 14+ the background watcher's
   // foreground service cannot start without it (see navStartLocation).
   await navStartLocation(true);
-  if (!navActive) return;
+  if (!navActive || ride !== rideGen) return;
   // absorb one Back press: on Android the hardware button is a thumb-brush from
   // ending the ride, and there was no guard of any kind
   history.pushState({ navigating: true }, "");

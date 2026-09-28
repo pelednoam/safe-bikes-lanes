@@ -91,6 +91,12 @@ function precache(): Plugin {
         const path = join(out, f);
         hash.update(f).update(existsSync(path) ? readFileSync(path) : "");
       }
+      // And the data this site is deployed with: routing tiles are cached in
+      // this same cache as they are fetched, and a weekly data deploy with the
+      // same code kept last week's there beside this week's manifest, whose
+      // tiles don't join them. pages.yml fetches the data before it builds.
+      const meta = join(WEB, "data", "meta.json");
+      hash.update(existsSync(meta) ? readFileSync(meta) : "no data");
       const id = hash.digest("hex").slice(0, 12);
       writeFileSync(swPath, sw.replace(marker, `${list},`).replace(idMarker, JSON.stringify(id)));
       // the manifest was for this; it isn't part of the site

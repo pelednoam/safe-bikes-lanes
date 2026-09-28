@@ -235,23 +235,39 @@ public class AppShellPlugin extends Plugin {
         }
         try {
             byte[] bytes = Base64.decode(data, Base64.DEFAULT);
+            String where;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 ContentResolver resolver = getContext().getContentResolver();
                 ContentValues values = new ContentValues();
                 values.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
                 values.put(MediaStore.MediaColumns.MIME_TYPE, mime);
                 values.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
+                // hidden while it is written, so a half-written file is never
+                // what the rider opens; removed again if the write fails
+                values.put(MediaStore.MediaColumns.IS_PENDING, 1);
                 Uri uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
                 if (uri == null) {
                     throw new IOException("Downloads refused the file");
                 }
-                try (OutputStream out = resolver.openOutputStream(uri)) {
-                    if (out == null) {
-                        throw new IOException("Downloads gave nothing to write to");
+                try {
+                    try (OutputStream out = resolver.openOutputStream(uri)) {
+                        if (out == null) {
+                            throw new IOException("Downloads gave nothing to write to");
+                        }
+                        out.write(bytes);
                     }
-                    out.write(bytes);
+                    ContentValues done = new ContentValues();
+                    done.put(MediaStore.MediaColumns.IS_PENDING, 0);
+                    resolver.update(uri, done, null, null);
+                } catch (IOException | RuntimeException e) {
+                    resolver.delete(uri, null, null);
+                    throw e;
                 }
+                where = "Downloads";
             } else {
+                // Before Android 10 public Downloads needs a storage permission the
+                // app doesn't hold, so the file goes in the app's own folder, and
+                // the rider is told so rather than told "Downloads".
                 File dir = getContext().getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
                 if (dir == null) {
                     throw new IOException("no Downloads folder on this phone");
@@ -259,9 +275,11 @@ public class AppShellPlugin extends Plugin {
                 try (FileOutputStream out = new FileOutputStream(new File(dir, name))) {
                     out.write(bytes);
                 }
+                where = "the app's files (Android/data/com.pelednoam.safebikes)";
             }
             JSObject result = new JSObject();
             result.put("name", name);
+            result.put("where", where);
             call.resolve(result);
         } catch (IOException | RuntimeException e) {
             call.reject(e.getMessage() == null ? "the file was not saved" : e.getMessage());

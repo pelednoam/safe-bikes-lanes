@@ -367,6 +367,19 @@ describe("saving a file in the app", () => {
     expect(Buffer.from(got.data ?? "", "base64").toString("utf8")).toBe(text);
   });
 
+  it("says where the file went, when that isn't Downloads", async () => {
+    // before Android 10 it can't be public Downloads, and saying so is the
+    // difference between a backup found and one lost with the app
+    withShell({
+      saveFile: async (o: { name: string }) => ({ name: o.name, where: "the app's files" }),
+    });
+    const mod = await import("../src/native.js");
+    expect(await mod.saveFileNative(new Blob(["x"]), "backup.json")).toEqual({
+      saved: true,
+      where: "the app's files",
+    });
+  });
+
   it("reports a refusal in AppShell's own words", async () => {
     withShell({
       saveFile: async () => {
