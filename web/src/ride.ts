@@ -79,12 +79,15 @@ const ARRIVED_M = 15;
 /** The most loop progress one fix can add: a minute of fast riding, which
  * also covers a short GPS gap. */
 const LOOP_PROGRESS_MAX_STEP_M = 400;
-/** The fastest a rider covers ground, for how far round the loop a fix after a
- * gap may believably be: a fast descent, not a car. */
+/** The fastest a rider covers ground: a fast descent, not a car. */
 const LOOP_FASTEST_MPS = 10;
 /** A loop winds: how much further round it a rider can get than the straight
- * line they covered. */
-const LOOP_WINDING = 1.6;
+ * line they covered while no fix came. Generous, because a gap it doesn't
+ * cover leaves progress behind for good, and the one thing that can't be
+ * allowed is the other way round (see below). */
+const LOOP_WINDING = 2;
+/** Longer than this between fixes is a gap: ground covered in it was unseen. */
+const LOOP_GAP_S = 5;
 /** Hazards are called this far out, and held on screen until this far past. */
 const HAZARD_CALL_M = 100;
 const HAZARD_HOLD_M = 30;
@@ -212,10 +215,10 @@ export class RideEngine {
   private rerouteSpokenAt = 0;
   /** A reroute has been asked for and the rider hasn't been on a route since. */
   private awaitingReroute = false;
-  /** Ground actually covered since the last fix on the loop, each step capped
-   * at what a bicycle can do in the time it took: how far round a fix after a
-   * gap or a detour may believably be. */
-  private movedSinceLoopM = 0;
+  /** Ground covered unseen, in gaps between fixes, since the last fix on the
+   * loop: each gap's straight line, capped at a bicycle's speed. */
+  private unseenM = 0;
+
   /** Good fixes on the route in a row, for believing the rider is back on it. */
   private onRouteFixes = 0;
   /** Where a way back rejoins the loop, further round than the rider had got:
@@ -240,7 +243,7 @@ export class RideEngine {
     this.rerouteSpokenAt = 0;
     this.alertUntilM = 0;
     this.loopDoneM = 0;
-    this.movedSinceLoopM = 0;
+    this.unseenM = 0;
     this.rejoinAt = null;
     this.awaitingReroute = false;
     this.onRouteFixes = 0;
@@ -368,10 +371,11 @@ export class RideEngine {
       }
     }
     this.lastFixAt = now;
-    if (prev !== null && prevAt > 0) {
-      const dt = Math.max(0, (now - prevAt) / 1000);
-      this.movedSinceLoopM += Math.min(distM(prev, here), LOOP_FASTEST_MPS * dt);
-    }
+    // Only what no fix saw can have been ridden round the loop unseen: a
+    // wrong turn is fixes a second apart, all off the loop, and earns nothing.
+    const stepM = prev === null ? 0 : distM(prev, here);
+    const stepS = prev !== null && prevAt > 0 ? Math.max(0, (now - prevAt) / 1000) : 0;
+    if (stepS > LOOP_GAP_S) this.unseenM += Math.min(stepM, LOOP_FASTEST_MPS * stepS);
     // travel direction: GPS heading when moving, else derived from movement
     const gpsHeading = fix.heading;
     const moving = (fix.speed ?? 0) > 0.7;
@@ -438,9 +442,14 @@ export class RideEngine {
       }
       return step;
     }
-    this.offCount = 0;
-    this.rerouteTries = 0;
-    if (fix.accuracy <= MAX_GPS_ACCURACY_M) this.onRouteFixes++;
+    // A poor fix is no evidence either way: it neither ends a deviation being
+    // made sure of (the strikes stand) nor counts towards rejoining.
+    const good = fix.accuracy <= MAX_GPS_ACCURACY_M;
+    if (good) {
+      this.offCount = 0;
+      this.rerouteTries = 0;
+      this.onRouteFixes++;
+    }
     // The rider found the way back before the new one arrived: switching to it
     // now would send them off the line they are on, to follow a way back from
     // a wrong turn they already put right. As sure as a wrong turn has to be,
@@ -453,25 +462,27 @@ export class RideEngine {
     this.hint = snap.idx;
     step.done = trackSlice(track, snap.alongM);
     // How far round the loop, once this track is on it. Forwards only, and only
-    // by what the rider can have covered: a loop crosses and runs back along
-    // its own streets, and a snap onto the far side of one of those (a wrong
-    // turn's first metres pass close to them) must not count the stretch in
-    // between as ridden. What they can have covered is the ground they moved
-    // over since the last fix on the loop, each step capped at a bicycle's
-    // speed: a GPS gap is ridden on from, while a wrong turn beside another
-    // stretch of the loop earns nothing. (Capped at one step whatever
-    // happened, progress stopped for good after any gap.) And a way back that
-    // rejoins further round says where, so reaching it counts.
+    // by what the rider can have ridden: a loop crosses and runs back along its
+    // own streets, and a snap onto the far side of one of those must not count
+    // the stretch in between. Believed: a step from the furthest point; a jump
+    // no further than the ground covered unseen, in GPS gaps, allows; and the
+    // point a way back said it would rejoin at. Riding that is seen earns
+    // nothing, however it goes: a wrong turn can run right alongside another
+    // stretch of the loop, within a snap of it, and there the fixes advance
+    // round the loop exactly as a rider's would. Counting them rejoined the
+    // loop a kilometre ahead of the rider. What is lost the other way (a gap
+    // on a loop that winds more than LOOP_WINDING reckons) is progress left
+    // behind, which a later way back only rides again.
     if (this.loopLeg !== null && snap.alongM >= this.loopLeg.legM) {
       const round = this.loopLeg.resumeM + snap.alongM - this.loopLeg.legM;
-      const reach = LOOP_PROGRESS_MAX_STEP_M + LOOP_WINDING * this.movedSinceLoopM;
+      const reach = LOOP_PROGRESS_MAX_STEP_M + LOOP_WINDING * this.unseenM;
       const rejoining =
         this.rejoinAt !== null && round >= this.rejoinAt && round - this.rejoinAt <= LOOP_PROGRESS_MAX_STEP_M;
       if (round > this.loopDoneM && (round - this.loopDoneM <= reach || rejoining)) {
         this.loopDoneM = round;
         if (rejoining) this.rejoinAt = null;
       }
-      this.movedSinceLoopM = 0;
+      this.unseenM = 0;
     }
 
     // advance past maneuvers we've already ridden through

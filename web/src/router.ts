@@ -358,15 +358,19 @@ export function facilityMultiplier(
   // street is safe for a child, which is the wrong guess to make.
   // And the street under it can't lower that: it is the class, not the
   // street, that nobody here can vouch for.
-  const known = profile.mult as Partial<Record<string, number>>;
+  // Own properties only: "constructor" or "toString" is not a class this
+  // build knows, whatever an object's prototype says.
+  const table = profile.mult as Record<string, number>;
+  const price = (c: string): number | undefined =>
+    Object.prototype.hasOwnProperty.call(table, c) ? table[c] : undefined;
   const worst = profile.mult.busy_street;
-  const own = known[cls];
+  const own = price(cls);
   if (own === undefined) return worst;
   let mult = own;
   if (busy && cls === "lane") mult = profile.busyLane;
   if (busy && cls === "buffered") mult = profile.busyBuffered;
   if (busy && cls === "sharrow") mult = worst;
-  const floor = road === undefined ? undefined : known[road];
+  const floor = road === undefined ? undefined : price(road);
   if (floor !== undefined) mult = Math.min(mult, floor);
   return mult;
 }

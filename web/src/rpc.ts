@@ -98,7 +98,18 @@ function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-export function wrap<T extends object>(ep: Endpoint | FallibleEndpoint): Remote<T> {
+/** How long a worker with calls waiting may say nothing at all before they
+ * are given up on. Measured as silence, not per call: tile loading reports
+ * progress tile by tile, and a search queued behind it is waiting its turn. */
+export const SILENT_WORKER_MS = 90_000;
+
+export function wrap<T extends object>(
+  ep: Endpoint | FallibleEndpoint,
+  timers: { setTimeout: (fn: () => void, ms: number) => unknown; clearTimeout: (id: unknown) => void } = {
+    setTimeout: (fn, ms) => globalThis.setTimeout(fn, ms),
+    clearTimeout: (id) => globalThis.clearTimeout(id as ReturnType<typeof setTimeout>),
+  },
+): Remote<T> {
   let nextId = 0;
   /** Set once the worker has failed to start: it answers nothing, ever. */
   let failed: string | null = null;
@@ -108,6 +119,22 @@ export function wrap<T extends object>(ep: Endpoint | FallibleEndpoint): Remote<
     number,
     { resolve: (v: unknown) => void; reject: (e: Error) => void; fns: ((...a: unknown[]) => void)[] }
   >();
+  // A worker that dies after starting (out of memory, or killed with the
+  // renderer) fires nothing at all: without this, what was waiting on it
+  // waited for ever, a mid-ride reroute included.
+  let watchdog: unknown = null;
+  const listen = (): void => {
+    if (watchdog !== null) timers.clearTimeout(watchdog);
+    watchdog =
+      pending.size === 0
+        ? null
+        : timers.setTimeout(() => {
+            watchdog = null;
+            const silent = new Error("the route finder didn't answer — try again");
+            for (const call of pending.values()) call.reject(silent);
+            pending.clear();
+          }, SILENT_WORKER_MS);
+  };
   ep.addEventListener("message", (e: MessageEvent) => {
     const msg = e.data as Message;
     if (msg.kind === "ready") {
@@ -123,6 +150,7 @@ export function wrap<T extends object>(ep: Endpoint | FallibleEndpoint): Remote<
       if (msg.ok) call.resolve(msg.value);
       else call.reject(new Error(String(msg.value)));
     }
+    listen(); // it spoke: the silence starts again
   });
   // A worker whose script didn't load answers nothing, ever: without this,
   // every call made to it waited forever — a plan stuck on "Finding the safest
@@ -159,6 +187,7 @@ export function wrap<T extends object>(ep: Endpoint | FallibleEndpoint): Remote<
             return { fn: fns.length - 1 };
           });
           pending.set(id, { resolve, reject, fns });
+          if (pending.size === 1) listen();
           ep.postMessage({ kind: "call", id, method, args: wire } satisfies Call);
         });
     },

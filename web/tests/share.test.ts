@@ -41,7 +41,9 @@ function env(over: Partial<ShareEnv> = {}): ShareEnv & { log: string[] } {
     copy: async (t) => {
       log.push(`copy ${t}`);
     },
-    download: (_b, f) => log.push(`download ${f}`),
+    download: (_b, f) => {
+      log.push(`download ${f}`);
+    },
     tell: (m) => log.push(`tell ${m}`),
     ...over,
   };
@@ -94,6 +96,22 @@ describe("shareImage", () => {
     await img.ready;
     await shareImage("x", img, "ride.png", e);
     expect(e.log).toEqual(["copy x", "tell Text copied"]);
+  });
+});
+
+describe("sharing when the save is refused", () => {
+  it("says the picture wasn't saved, and only that", async () => {
+    // in the app a save can fail; "Picture saved" over it, then an error
+    // flashed on top, left the button saying whichever came last
+    const told: string[] = [];
+    const image = new PreparedImage(Promise.resolve(new Blob(["png"])));
+    await image.ready;
+    await shareImage("12 km!", image, "card.png", {
+      copy: async () => undefined,
+      download: async () => ({ error: "Downloads refused the file" }),
+      tell: (m) => told.push(m),
+    });
+    expect(told).toEqual(["Picture not saved (Downloads refused the file); text copied"]);
   });
 });
 

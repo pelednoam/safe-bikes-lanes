@@ -258,9 +258,17 @@ public class AppShellPlugin extends Plugin {
                     }
                     ContentValues done = new ContentValues();
                     done.put(MediaStore.MediaColumns.IS_PENDING, 0);
-                    resolver.update(uri, done, null, null);
+                    // left pending, the file stays hidden and is purged later:
+                    // not a file saved to Downloads
+                    if (resolver.update(uri, done, null, null) != 1) {
+                        throw new IOException("Downloads didn't publish the file");
+                    }
                 } catch (IOException | RuntimeException e) {
-                    resolver.delete(uri, null, null);
+                    try {
+                        resolver.delete(uri, null, null);
+                    } catch (RuntimeException cleanup) {
+                        // the rider needs the first failure, not this one
+                    }
                     throw e;
                 }
                 where = "Downloads";
@@ -275,7 +283,8 @@ public class AppShellPlugin extends Plugin {
                 try (FileOutputStream out = new FileOutputStream(new File(dir, name))) {
                     out.write(bytes);
                 }
-                where = "the app's files (Android/data/com.pelednoam.safebikes)";
+                where = "the app's own folder (Android/data/" + getContext().getPackageName()
+                        + "/files/" + Environment.DIRECTORY_DOWNLOADS + ")";
             }
             JSObject result = new JSObject();
             result.put("name", name);

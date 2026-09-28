@@ -70,6 +70,15 @@ describe("a class this build of the app doesn't know", () => {
     }
   });
 
+  it("is unknown even when its name is something every object has", () => {
+    // "constructor" looked up on the price table found Object's, not a price
+    for (const odd of ["constructor", "toString", "__proto__"]) {
+      const young = PROFILES["young_kids"];
+      const price = facilityMultiplier(young, odd as ProtectionClass, "quiet_street", false);
+      expect(price).toBe(young.mult.busy_street);
+    }
+  });
+
   it("isn't made cheap by the quiet street it is on", () => {
     // the floor (paint can only help) would have priced it as the street under it
     for (const profile of Object.values(PROFILES)) {

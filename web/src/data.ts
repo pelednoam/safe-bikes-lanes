@@ -113,9 +113,15 @@ export function dataSource(): DataSource {
  * slightly older street, not a broken graph.) */
 const ONE_BUILD = /^tiles\//;
 
-/** What a routing tile of the site's build that can't be had fails with: the
- * routing worker then routes on the bundle's whole set instead (routing.ts). */
-export const SITE_TILE_MISSING = "of the site's data";
+/** What a routing tile (or their manifest) of the site's build that can't be
+ * had fails with: the routing worker then routes on the bundle's whole set
+ * instead (routing.ts). */
+export class SiteTileMissing extends Error {
+  constructor(name: string) {
+    super(`couldn't load ${name} of the site's data`);
+    this.name = "SiteTileMissing";
+  }
+}
 
 /** Load a data layer: the site's (cached per version) when it wins, else the bundle's. */
 export async function loadJsonFrom<T>(source: DataSource, name: string): Promise<T> {
@@ -136,7 +142,7 @@ export async function loadJsonFrom<T>(source: DataSource, name: string): Promise
     // One tile of the site's build that didn't arrive, filled in from the
     // bundle's, joined the graph to tiles of another build: a graph that
     // routes, wrongly, and says nothing. Failing is honest, and is retried.
-    if (ONE_BUILD.test(name)) throw new Error(`couldn't load ${name} ${SITE_TILE_MISSING}`);
+    if (ONE_BUILD.test(name)) throw new SiteTileMissing(name);
   }
   return (await (await fetch(source.bundled + name)).json()) as T;
 }

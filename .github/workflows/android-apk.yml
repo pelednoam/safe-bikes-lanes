@@ -56,7 +56,10 @@ jobs:
         run: npm ci
         working-directory: web
       - name: Check + test
-        run: npm run check && npm test
+        # The pinned test data first: the unit tests that route through the
+        # worker (tests/routing.test.ts) fail in CI without it rather than skip,
+        # and the native E2E below needs it anyway.
+        run: npm run test-data && npm run check && npm test
         working-directory: web
       - name: Install Playwright browser
         run: npx playwright install --with-deps chromium

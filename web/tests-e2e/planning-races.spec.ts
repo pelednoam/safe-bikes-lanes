@@ -162,7 +162,10 @@ test("the loading line goes away after a route, and stays away", async ({ page }
 });
 
 test("Reset while the map is loading means reset", async ({ page }) => {
-  const slow = await slowTiles(page, 2500);
+  // Held long enough to outlast boot(), which waits for the map to load: on a
+  // loaded machine that took longer than a shorter hold, and the plan was past
+  // its loading stage before the test looked.
+  const slow = await slowTiles(page, 8000);
   await boot(page, DAVIS_KENDALL);
   await expect(page.locator("#loading")).toContainText(/Loading the map/, {
     timeout: budget(20_000),

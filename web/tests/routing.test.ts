@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 
 import { beforeAll, describe, expect, it } from "vitest";
 
-import type { DataSource } from "../src/data.js";
+import { type DataSource, SiteTileMissing } from "../src/data.js";
 import { createRoutingApi, type RoutingApi, type WirePrefs } from "../src/routing.js";
 import {
   type Endpoint,
@@ -114,6 +114,41 @@ describe("calling across the channel", () => {
     expect(await next).toBe(7);
   });
 
+  it("gives up on a worker that goes silent, but not on one that is busy", async () => {
+    // a worker that dies after starting fires nothing: what waited on it
+    // waited for ever. One that is loading tiles says so tile by tile.
+    let fire: (() => void) | null = null;
+    const timers = {
+      setTimeout: (fn: () => void): unknown => {
+        fire = fn;
+        return 1;
+      },
+      clearTimeout: (): void => {
+        fire = null;
+      },
+    };
+    class Worker extends EventTarget {
+      postMessage(): void {}
+      say(data: unknown): void {
+        this.dispatchEvent(new MessageEvent("message", { data }));
+      }
+    }
+    const worker = new Worker();
+    const r = wrap<{ ensure(onProgress: (n: number) => void): boolean }>(
+      worker as unknown as FallibleEndpoint,
+      timers,
+    );
+    worker.say({ kind: "ready" });
+    const busy = r.ensure(() => undefined);
+    worker.say({ kind: "callback", id: 0, fn: 0, args: [1] }); // progress: alive
+    worker.say({ kind: "reply", id: 0, ok: true, value: true });
+    expect(await busy).toBe(true);
+    const lost = r.ensure(() => undefined);
+    expect(fire).not.toBeNull();
+    (fire as unknown as () => void)(); // ninety seconds of nothing
+    await expect(lost).rejects.toThrow(/didn't answer/);
+  });
+
   it("isn't mistaken for a promise", async () => {
     // `await remote` would hang forever if the proxy offered a then()
     expect(await Promise.resolve(remote)).toBe(remote);
@@ -208,12 +243,12 @@ describe.skipIf(skipRouting)("routing in the worker, on the pinned data", () => 
     // offline, with the site's newer build chosen at launch and a tile of it
     // not yet cached: its tiles can't be mixed with the bundle's, but the
     // bundle's whole set routes, a little older, instead of not at all
-    const sources: (string | null)[] = [];
+    const served: { name: string; from: string | null }[] = [];
     const offlineSite = async (src: DataSource, name: string): Promise<unknown> => {
-      sources.push(src.remoteId);
       if (src.remoteId !== null && name.startsWith("tiles/") && name !== "tiles/manifest.json") {
-        throw new Error(`couldn't load ${name} of the site's data`);
+        throw new SiteTileMissing(name);
       }
+      served.push({ name, from: src.remoteId });
       return load(src, name);
     };
     const phone = channel(createRoutingApi(offlineSite));
@@ -222,7 +257,24 @@ describe.skipIf(skipRouting)("routing in the worker, on the pinned data", () => 
     expect(await phone.ensure([DAVIS, KENDALL], 1)).toEqual({ ready: true, rebuilt: true });
     expect((await phone.plan(DAVIS, KENDALL, prefs)).length).toBeGreaterThan(0);
     // and every tile it routed on came from the bundle, none from the site
-    expect(sources[sources.length - 1]).toBeNull();
+    const tiles = served.filter((l) => l.name !== "tiles/manifest.json");
+    expect(tiles.length).toBeGreaterThan(4);
+    expect(tiles.every((l) => l.from === null)).toBe(true);
+    // ...and stays there when the page configures again (a change of units)
+    await phone.configure({ remoteId: "2026-09-27", bundled: `${DATA}/` }, "metric");
+    await phone.ensure([DAVIS, [-71.2, 42.42]], 1);
+    expect(served.filter((l) => l.name !== "tiles/manifest.json").every((l) => l.from === null)).toBe(true);
+  });
+
+  it("falls back to the bundle when the site's tile manifest itself can't be had", async () => {
+    const noManifest = async (src: DataSource, name: string): Promise<unknown> => {
+      if (src.remoteId !== null && name.startsWith("tiles/")) throw new SiteTileMissing(name);
+      return load(src, name);
+    };
+    const phone = channel(createRoutingApi(noManifest));
+    await phone.configure({ remoteId: "2026-09-27", bundled: `${DATA}/` }, "imperial");
+    await phone.loadManifest();
+    expect((await phone.ensure([DAVIS, KENDALL], 1)).ready).toBe(true);
   });
 
   it("says why it can't, in words, when there is nothing to route on", async () => {

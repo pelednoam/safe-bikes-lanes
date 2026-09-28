@@ -417,6 +417,18 @@ describe("a wrong turn", () => {
     expect(r.effects.some((e) => e.type === "rejoined")).toBe(false);
   });
 
+  it("isn't talked out of a wrong turn by a poor fix that lands on the line", () => {
+    // a useless fix is no evidence the rider is back: it used to wipe the
+    // strikes, and a wrong turn with poor GPS in it never became a reroute
+    const r = new Ride(route(TOWN));
+    const off = (m: number): RideFix => offsetFix([LON + m / mPerDegLon(LAT), LAT], 0, OFF_ROUTE_M + 40);
+    r.fix(off(200));
+    r.fix(off(205));
+    r.fix({ ...offsetFix([LON + 208 / mPerDegLon(LAT), LAT], 0, 5), accuracy: 120 });
+    r.fix(off(211));
+    expect(r.effects.some((e) => e.type === "reroute")).toBe(true);
+  });
+
   it("doesn't say the rider rejoined when no reroute was asked for", () => {
     const r = new Ride(route(TOWN));
     // off the line for two fixes, one short of a wrong turn, and back
@@ -702,6 +714,37 @@ describe("a round trip", () => {
     const step = r.fix({ lon: far[0], lat: far[1], accuracy: 8, speed: 4, heading: 270 });
     expect(step?.alongM ?? 0).toBeGreaterThan(1200);
     expect(r.engine.loopDoneM).toBeLessThan(done + 100);
+  });
+
+  it("gives riding off the loop, seen fix by fix, no allowance at all", () => {
+    // a real wrong turn at cycling speed for a minute: every metre of it was
+    // seen, and none of it was round the loop
+    const r = new Ride(route(LOOP));
+    r.engine.setRoute(r.payload, { legM: 0, resumeM: 0 });
+    r.onReroute = () => null;
+    r.ride({ untilM: 300 });
+    const done = r.engine.loopDoneM;
+    const start = pointAlong(pathOf(r.payload), 300).at;
+    // 360 m of riding seen, 60 m south of the loop and alongside it; measured
+    // as ground covered, it bought 976 m
+    for (let i = 1; i <= 60; i++) {
+      r.fix({ ...offsetFix(offset(start, 90, i * 6), 180, 60), speed: 6 });
+    }
+    const far = pointAlong(pathOf(r.payload), 1100).at; // 800 m round
+    const step = r.fix({ lon: far[0], lat: far[1], accuracy: 8, speed: 6, heading: 270 });
+    expect(step?.alongM ?? 0).toBeGreaterThan(1050);
+    expect(r.engine.loopDoneM).toBeLessThan(done + 100);
+  });
+
+  it("rides on after a gap round a corner of the loop", () => {
+    // the straight line across a gap is shorter than the way round: here
+    // 450 m of it for 1200 m round, which the winding allowance covers
+    const r = new Ride(route(LOOP));
+    r.engine.setRoute(r.payload, { legM: 0, resumeM: 0 });
+    r.ride({ untilM: 300 });
+    r.now += 60_000;
+    r.ride({ fromM: 1500, untilM: 1600, speedKmh: 12 });
+    expect(r.engine.loopDoneM).toBeGreaterThan(1550);
   });
 
   it("counts from where a way back rejoins the loop further round", () => {

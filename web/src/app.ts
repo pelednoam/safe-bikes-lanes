@@ -4480,12 +4480,8 @@ function shareCard(text: string, image: PreparedImage, filename: string, btn: HT
     canShare: typeof navigator.canShare === "function" ? (d) => navigator.canShare(d) : undefined,
     share: typeof navigator.share === "function" ? (d) => navigator.share(d) : undefined,
     copy: (t) => navigator.clipboard.writeText(t),
-    // the share sheet's fallback: in the app a save can fail, and saying "saved"
-    // over a refusal is how a rider finds out later that it never was
-    download: (b, f) =>
-      void saveBlob(b, f).then((r) => {
-        if ("error" in r) toldSaved(btn, r);
-      }),
+    // in the app a save can fail, and shareImage says so
+    download: (b, f) => saveBlob(b, f),
     tell: (message) => {
       const prev = btn.textContent;
       btn.textContent = `✓ ${message}`;

@@ -96,6 +96,11 @@ function precache(): Plugin {
       // same code kept last week's there beside this week's manifest, whose
       // tiles don't join them. pages.yml fetches the data before it builds.
       const meta = join(WEB, "data", "meta.json");
+      if (!existsSync(meta) && process.env["CI"] !== undefined) {
+        // without it the id is fixed across data deploys, and stale routing
+        // tiles come back quietly
+        throw new Error("precache: no web/data/meta.json to name the cache by; fetch the data first");
+      }
       hash.update(existsSync(meta) ? readFileSync(meta) : "no data");
       const id = hash.digest("hex").slice(0, 12);
       writeFileSync(swPath, sw.replace(marker, `${list},`).replace(idMarker, JSON.stringify(id)));

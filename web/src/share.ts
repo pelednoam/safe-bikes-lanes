@@ -1,6 +1,4 @@
 // Handing a file to the rider: a download, or the phone's share sheet.
-
-import { canSaveNative, type SaveResult, saveFileNative } from "./native.js";
 //
 // Both went wrong in WebKit, which is every browser on an iPhone:
 //
@@ -11,6 +9,8 @@ import { canSaveNative, type SaveResult, saveFileNative } from "./native.js";
 //   tap, and navigator.share was called once it was ready. WebKit only allows
 //   share() inside the tap; afterwards it rejects with NotAllowedError, which
 //   was caught and dropped — the button did nothing at all.
+
+import { canSaveNative, type SaveResult, saveFileNative } from "./native.js";
 
 /** How long a blob URL outlives the click that downloads it. */
 export const REVOKE_AFTER_MS = 60_000;
@@ -86,7 +86,8 @@ export interface ShareEnv {
   canShare?: ((data: ShareData) => boolean) | undefined;
   share?: ((data: ShareData) => Promise<void>) | undefined;
   copy(text: string): Promise<void>;
-  download(blob: Blob, filename: string): void;
+  /** Save the picture; a result, where saving can fail (in the app). */
+  download(blob: Blob, filename: string): void | Promise<SaveResult>;
   /** Say, visibly, what happened instead of the share sheet. */
   tell(message: string): void;
 }
@@ -108,9 +109,15 @@ export function shareImage(
 ): Promise<void> {
   const fallBack = async (): Promise<void> => {
     const blob = image.blob ?? (await image.ready);
-    if (blob !== null) env.download(blob, filename);
+    const saved = blob !== null ? await env.download(blob, filename) : undefined;
     await env.copy(text).catch(() => undefined);
-    env.tell(blob !== null ? "Picture saved, text copied" : "Text copied");
+    // one message, and a true one: "saved" over a refused save is how a rider
+    // finds out later that it never was
+    if (blob === null) env.tell("Text copied");
+    else if (typeof saved === "object" && "error" in saved) {
+      env.tell(`Picture not saved (${saved.error}); text copied`);
+    }
+    else env.tell("Picture saved, text copied");
   };
   const blob = image.blob;
   if (blob !== null && env.share !== undefined) {

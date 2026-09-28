@@ -12,7 +12,7 @@
 // itself so tests can call it directly.
 // ---------------------------------------------------------------------------
 
-import { type DataSource, loadJsonFrom, SITE_TILE_MISSING } from "./data.js";
+import { type DataSource, loadJsonFrom, SiteTileMissing } from "./data.js";
 import { type OptionsRouter, planOptions, type RoutePrefs, withUpgraded } from "./planner.js";
 import { Router } from "./router.js";
 import { TileStore } from "./tiles.js";
@@ -90,6 +90,9 @@ export function createRoutingApi(
   load: (source: DataSource, name: string) => Promise<unknown> = loadJsonFrom,
 ): RoutingApi {
   let source: DataSource = { remoteId: null, bundled: "data/" };
+  /** Routing has gone to the bundle's tiles for the rest of this session. */
+  let onBundle = false;
+  let switching: Promise<void> | null = null;
   const store = (): TileStore => new TileStore(<T>(name: string) => load(source, name) as Promise<T>);
   let tiles = store();
   let router: Router | null = null;
@@ -110,30 +113,41 @@ export function createRoutingApi(
     bias?: Map<number, number>,
   ): RouteOption[] => planOptions(r, from, to, prefsOf(prefs), bias);
 
-  return {
-    configure(src, units) {
-      source = src;
-      setUnits(units);
-    },
-    loadManifest: () => tiles.loadManifest(),
-    async ensure(points, marginCells, onProgress) {
-      try {
-        await tiles.ensureCorridor(points, marginCells, onProgress);
-      } catch (err) {
-        // A tile of the site's newer build that can't be had (offline, and not
-        // cached yet) can't be filled in from the bundle's: the two builds'
-        // tiles don't join. The bundle's whole set does, so routing goes on
-        // there, a little older, rather than stopping.
-        if (source.remoteId === null || !(err instanceof Error) || !err.message.includes(SITE_TILE_MISSING)) {
-          throw err;
-        }
+  /** Run `work` on the site's tiles, and if one of them (or their manifest)
+   * can't be had, on the bundle's instead. A tile of the site's newer build
+   * that can't be had (offline, and not cached yet) can't be filled in from
+   * the bundle's: the two builds' tiles don't join. The bundle's whole set
+   * does, so routing goes on there, a little older, rather than stopping. */
+  const onSite = async <T>(work: () => Promise<T>): Promise<T> => {
+    try {
+      return await work();
+    } catch (err) {
+      if (!(err instanceof SiteTileMissing) || onBundle) throw err;
+      // one switch, however many loads failed together
+      switching ??= (async () => {
+        onBundle = true;
         source = { ...source, remoteId: null };
         tiles = store();
         router = null;
         builtTileCount = -1;
         await tiles.loadManifest();
-        await tiles.ensureCorridor(points, marginCells, onProgress);
-      }
+      })();
+      await switching;
+      return work();
+    }
+  };
+
+  return {
+    configure(src, units) {
+      // once on the bundle's tiles, staying there: switching back mid-session
+      // (the page configures again whenever the units change) would join the
+      // site's tiles to the bundle's again
+      source = onBundle ? { ...src, remoteId: null } : src;
+      setUnits(units);
+    },
+    loadManifest: () => onSite(() => tiles.loadManifest()),
+    async ensure(points, marginCells, onProgress) {
+      await onSite(() => tiles.ensureCorridor(points, marginCells, onProgress));
       if (tiles.loadedCount === 0) return { ready: false, rebuilt: false };
       if (router !== null && builtTileCount === tiles.loadedCount) return { ready: true, rebuilt: false };
       router = new Router(tiles.assemble());

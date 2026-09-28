@@ -409,8 +409,11 @@ export async function saveFileNative(blob: Blob, name: string): Promise<SaveResu
   if (shell === null || typeof shell.saveFile !== "function") return null;
   try {
     const mime = blob.type || "application/octet-stream";
-    const got = await shell.saveFile({ name, mime, data: await base64Of(blob) });
-    return got.where === undefined ? { saved: true } : { saved: true, where: got.where };
+    const got = (await shell.saveFile({ name, mime, data: await base64Of(blob) })) as
+      | { where?: string }
+      | undefined;
+    // an older bridge may answer with nothing: the file was still saved
+    return got?.where === undefined ? { saved: true } : { saved: true, where: got.where };
   } catch (err) {
     return { error: err instanceof Error ? err.message : String(err) };
   }
