@@ -65,18 +65,9 @@ import {
   GRADE_TEXT,
   segmentHtml,
 } from "./segment.js";
-import type { Maneuver, RideAlert, Track } from "./nav.js";
-import {
-  bearingDeg,
-  buildAlerts,
-  buildManeuvers,
-  buildTrack,
-  distM,
-  snapToTrack,
-  sunsetTime,
-  trackBearingAhead,
-  trackSlice,
-} from "./nav.js";
+import type { Maneuver, Track } from "./nav.js";
+import { buildTrack, distM, sunsetTime } from "./nav.js";
+import { type LoopLeg, navDistText, RideEngine, type RideEffect } from "./ride.js";
 import type { HazardCategory, HazardReport } from "./hazards.js";
 import {
   addHazard,
@@ -123,9 +114,6 @@ import {
   fromMeters,
   getUnits,
   lengthVoice,
-  milestoneM,
-  milestoneVoice,
-  navRound,
   setUnits,
   toMeters,
   unitName,
@@ -374,20 +362,6 @@ function el<T extends HTMLElement>(id: string): T {
   return node as T;
 }
 
-/** Distance to the next turn, bucketed. The banner rounded to 10 m while the
- * voice rounded to 50, so riders heard "in three hundred metres" against a
- * banner reading 280 m and reported it as a bug. Both read this now, so the
- * buckets have to be coarse enough to say out loud. */
-// Distances live in metres everywhere inside the app; units.ts is the last step
-// before one is shown or spoken, so a rider in Massachusetts reads miles.
-const navDistM = navRound;
-
-function navDistText(m: number): string {
-  const r = navRound(m);
-  return r === 0 ? "now" : fmtDistTight(r);
-}
-
-const navDistVoice = distVoice;
 
 function emptyFC(): GeoJSON.FeatureCollection {
   return { type: "FeatureCollection", features: [] };
@@ -4691,64 +4665,18 @@ el<HTMLDialogElement>("about").addEventListener("click", (e: MouseEvent) => {
 // banner, voice instructions, wake lock, and automatic rerouting
 // ---------------------------------------------------------------------------
 
-const OFF_ROUTE_M = 40;
-const OFF_ROUTE_STRIKES = 3;
-/** Ignore fixes with worse GPS accuracy than this for off-route decisions. */
-const MAX_GPS_ACCURACY_M = 50;
-/** Minimum time between automatic reroutes. */
-const REROUTE_COOLDOWN_MS = 10_000;
-// Turn calls are timed, not fixed-distance: 90 m is 40 s of warning at a kid's
-// pace but only 13 s on a fast descent. Announce N seconds out, clamped so the
-// call is never absurdly early or too late to act on.
-const ANNOUNCE_FAR_S = 25;
-const ANNOUNCE_NEAR_S = 10;
-const ANNOUNCE_NOW_S = 4;
-const ANNOUNCE_FAR_CLAMP: [number, number] = [60, 200];
-const ANNOUNCE_NEAR_CLAMP: [number, number] = [30, 80];
-const ANNOUNCE_NOW_CLAMP: [number, number] = [12, 30];
-/** Chain the following turn into the call when it lands right after. */
-const THEN_CHAIN_M = 45;
-/** Snap the dot to the route while within this of it (beyond = show real GPS,
- * so being genuinely off-route is visible rather than hidden). */
-const SNAP_DISPLAY_M = 25;
-/** Follow-camera zooms: cruising, and tightened near a maneuver. */
-// Both land in the same raster-tile zoom bucket on purpose: cruising at 16.4
-// fetched z16 tiles and every one of ~150 turns then fetched a fresh z17 set
-// and back again, which measured out at roughly 120 MB of basemap over a 42 km
-// ride. Staying inside one bucket removes that churn.
-const NAV_ZOOM_CRUISE = 16.6;
-const NAV_ZOOM_TURN = 17.3;
-const NAV_ZOOM_TURN_M = 90;
 const NAV_PITCH = 50;
 /** After the rider stops touching the map, the camera takes itself back —
  * otherwise one bump on the handlebars leaves the ride permanently off-centre
  * and you have to keep hunting for the recenter button. */
 const REFOLLOW_MS = 10_000;
-/** A single fix this far from the last one is a re-acquisition artefact, not a
- * bicycle. Accepting one near the destination used to latch "arrived!" — voice
- * and banner dead for the rest of the ride. Several in a row are believed (the
- * rider really did move, e.g. after a signal gap). */
-const MAX_FIX_JUMP_M = 500;
-const IMPLAUSIBLE_FIXES_BEFORE_TRUSTED = 3;
-/** Past this far from the end, we are plainly not at the destination any more,
- * so a stale arrival state must clear (also covers starting a new ride while
- * still standing at the old destination). */
-const ARRIVAL_CLEAR_M = 80;
 
 let navActive = false;
 let navWatchId: number | null = null;
-let navTrack: Track | null = null;
-let navManeuvers: Maneuver[] = [];
-let navNext = 0;
-/** 0 = nothing announced for navNext, 1 = "in X m" said, 2 = "now" said */
-let navAnnounceStage = 0;
-let navHint = -1;
 let navMuted = false;
 let navFollowing = true;
 let navDest: [number, number] | null = null;
-let navOffCount = 0;
 let navDot: Marker | null = null;
-let navArrived = false;
 /** The screen stays on for the whole ride, taken back after every app switch
  * (see lifecycle.ts). */
 const screenLock = new ScreenLock(
@@ -4767,18 +4695,11 @@ const swReload = new DeferredReload(
 /** How long after a ride ends a held-back reload waits: long enough for the
  * "ride saved" line to be heard. */
 const RELOAD_AFTER_RIDE_MS = 5000;
-let navAlerts: RideAlert[] = [];
-let navAlertNext = 0;
 let navLastPos: [number, number] | null = null;
 /** Set while detouring to a kid stop: where the ride was originally headed. */
 let navOriginalDest: [number, number] | null = null;
-let navNextKm = 1;
-let navHalfway = false;
-let navLastRerouteAt = 0;
 /** "go with my street choice": reroutes respect the rider's direction. */
 let navMyWay = readItem("navMyWay") === "1";
-let navPrevPos: [number, number] | null = null;
-let navHeading: number | null = null;
 // --- smooth motion (the "feels like Google Maps" layer) -------------------
 // GPS fixes land ~1/s. Rather than teleporting the dot and firing a competing
 // easeTo per fix, every fix sets a TARGET and one rAF loop eases the dot and
@@ -4788,31 +4709,15 @@ let navRaf: number | null = null;
 let navPosShown: [number, number] | null = null;
 let navPosTarget: [number, number] | null = null;
 let navBearingShown = 0;
-let navBearingTarget = 0;
-let navZoomTarget = NAV_ZOOM_CRUISE;
 /** Rider's own zoom wins until they hit recenter — no yanking back mid-glance. */
 let navUserZoom = false;
 /** True mid-gesture: the follow camera keeps its hands off so it can't cut
  * the rider's own pinch/scroll inertia short. */
 let navInteracting = false;
 let navRefollowTimer: number | undefined;
-let navImplausibleFixes = 0;
-/** Smoothed pace actually being ridden, held through stops. */
-let navPaceKmh: number | null = null;
-/** Consecutive reroute attempts, for backing off between them. */
-let navRerouteTries = 0;
-/** Wall clock of the last spoken reroute, so one wrong turn says it once. */
-let navRerouteSpokenAt = 0;
-/** A persistent wrong turn is mentioned occasionally, not nagged: the riders'
- * logs had "rerouting." nine times in one deviation, with the ETA strobing
- * between the routed and straight-line estimates. */
-const REROUTE_ANNOUNCE_MIN_MS = 45_000;
 /** Persist the in-progress ride every N fixes (cheap; finish() only reads). */
 const STASH_EVERY_FIXES = 20;
 let navFixesSinceStash = 0;
-/** Smoothed speed (m/s) used to time the turn calls. */
-let navSpeed = 0;
-let navLastFixAt = 0;
 let recorder: RideRecorder | null = null;
 /** Background (native) watcher id — used instead of a web watch in the app. */
 let navBgWatcherId: string | null = null;
@@ -4975,17 +4880,18 @@ function clearSpeech(): void {
 
 /** The round trip being ridden, as planned; null on an A-to-B ride. */
 let navLoop: RouteOption | null = null;
-/** Furthest the rider has got round navLoop, in metres along it. */
-let navLoopDoneM = 0;
-/** How the track being followed maps onto the loop: its first `legM` metres
- * get back to the loop, which it then follows from `resumeM` metres round.
- * Null while following something else — a detour to a stop. */
-let navLoopLeg: { legM: number; resumeM: number } | null = null;
-/** The most loop progress one fix can add: a minute of fast riding, which
- * also covers a short GPS gap. */
-const LOOP_PROGRESS_MAX_STEP_M = 400;
 /** The loop legs of the ways back planned so far, by option. */
-const loopLegs = new WeakMap<RouteOption, { legM: number; resumeM: number }>();
+const loopLegs = new WeakMap<RouteOption, LoopLeg>();
+
+/** The ride itself: where the rider is on the route, and what to tell them
+ * (ride.ts). What follows here applies what it decides to the page. */
+const rideEngine = new RideEngine({
+  dest: () => navDest,
+  atStop: () => navOriginalDest !== null,
+  myWay: () => navMyWay,
+  paceKmh: () => PROFILES[profileId].paceKmh,
+  solo: () => profileId === "solo",
+});
 
 /** Route options from where the rider is to where the ride is going: back onto
  * what is left of a loop, or to the destination. Null when there is nowhere
@@ -4996,7 +4902,7 @@ function rideOptionsFrom(
   bias?: Map<number, number>,
 ): RouteOption[] | null {
   if (navLoop !== null && navOriginalDest === null) {
-    const target = loopRejoinPoint(navLoop.payload, navLoopDoneM);
+    const target = loopRejoinPoint(navLoop.payload, rideEngine.loopDoneM);
     if (target !== null) {
       const lead = planOptions(r, from, target.at, routePrefs(), bias)[0];
       if (!lead) return [];
@@ -5029,61 +4935,28 @@ function replanRide(): void {
 function rebuildNavFromSelected(): boolean {
   const sel = options.find((o) => o.id === selectedId);
   if (!sel) return false;
-  navLoopLeg =
-    loopLegs.get(sel) ?? (navLoop !== null && sel === navLoop ? { legM: 0, resumeM: 0 } : null);
-  navTrack = buildTrack(sel.payload);
-  navManeuvers = buildManeuvers(sel.payload);
-  navAlerts = buildAlerts(sel.payload);
-  navNext = 0;
-  navAlertNext = 0;
-  navAnnounceStage = 0;
-  // A new track is ridden from its beginning, so look for the rider there
-  // first (snapToTrack falls back to the whole track if they are not). With no
-  // hint at all, a round trip — which ends where it starts — snapped its very
-  // first fix to the finish: "you have arrived" at the start of every loop, the
-  // ride recorder closed, and the loop counted as already ridden.
-  navHint = 0;
-  navArrived = false;
-  navNextKm = 1;
-  navHalfway = false;
+  // a detour to a stop is off the loop; the loop itself is on it from the start
+  const leg = loopLegs.get(sel) ?? (navLoop !== null && sel === navLoop ? { legM: 0, resumeM: 0 } : null);
+  rideEngine.setRoute(sel.payload, leg);
   return true;
 }
 
 /** Distance / ETA line. `straight` marks an off-route estimate (as the crow
  * flies) so the number is honest rather than frozen at its last on-route value. */
-function navUpdateTrip(remainingM: number, straight = false): void {
-  // ETA off measured pace when we have it, profile pace before then
-  // Hold the last measured pace through a stop. Flipping to the profile's pace
-  // whenever navSpeed dropped below 1 m/s swung the arrival time by ~6 minutes
-  // at every red light, which is useless if you're asking "do we make the 3
-  // o'clock thing?".
-  if (navSpeed > 1.0) {
-    const measured = (navSpeed * 3600) / 1000;
-    navPaceKmh = navPaceKmh === null ? measured : navPaceKmh * 0.7 + measured * 0.3;
-  }
-  const kmh = navPaceKmh ?? PROFILES[profileId].paceKmh;
-  const mins = Math.round((remainingM / 1000 / kmh) * 60);
-  const eta = new Date(Date.now() + mins * 60_000);
+function showTrip(t: Extract<RideEffect, { type: "trip" }>): void {
+  const eta = new Date(Date.now() + t.minutes * 60_000);
   const clock = eta.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   // "arrive" spelled out pushed this past the banner width, so it wrapped with
   // "PM" alone on a second line and the banner's height twitched all ride
   el<HTMLElement>("nav-remaining").textContent =
-    `${straight ? "~" : ""}${fmtDist(remainingM)} · ${mins} min · eta ${clock}`;
-  el<HTMLElement>("nav-speed").textContent =
-    navSpeed > 0.8 ? fmtSpeedRound(navSpeed) : "";
+    `${t.straight ? "~" : ""}${fmtDist(t.remainingM)} · ${t.minutes} min · eta ${clock}`;
+  el<HTMLElement>("nav-speed").textContent = t.speedMps > 0.8 ? fmtSpeedRound(t.speedMps) : "";
 }
 
-function navUpdateBanner(distToNext: number, remainingM: number): void {
-  // Once arrived, leave the arrival message up: the next fix a second later
-  // used to overwrite it with the last turn instruction, so the rider never
-  // actually saw that they'd got there. (Cleared on reroute/resume, which
-  // resets navArrived.)
-  if (navArrived) return;
-  const m = navManeuvers[navNext];
+function showBanner(m: Maneuver | undefined, distToNextM: number): void {
   el<HTMLElement>("nav-icon").textContent = m?.icon ?? "⬆";
-  el<HTMLElement>("nav-dist").textContent = navDistText(distToNext);
+  el<HTMLElement>("nav-dist").textContent = navDistText(distToNextM);
   el<HTMLElement>("nav-street").textContent = m?.text ?? "";
-  navUpdateTrip(remainingM);
 }
 
 function toFix(pos: GeolocationPosition): NativeFix {
@@ -5201,7 +5074,6 @@ document.addEventListener("visibilitychange", () => {
 /** A warning the rider can SEE. The spoken version is the primary channel, but
  * it is useless muted or over kids' chatter, and a safety app must not depend on
  * audio alone. Cleared automatically once it's behind us. */
-let navAlertUntilM = 0;
 function showRideAlert(text: string, kind: "hazard" | "gps" = "hazard"): void {
   if (kind === "hazard") window.__navAlertsSeen = (window.__navAlertsSeen ?? 0) + 1;
   const box = el<HTMLDivElement>("nav-alert");
@@ -5211,7 +5083,7 @@ function showRideAlert(text: string, kind: "hazard" | "gps" = "hazard"): void {
 }
 function hideRideAlert(): void {
   el<HTMLDivElement>("nav-alert").style.display = "none";
-  navAlertUntilM = 0;
+  rideEngine.alertHidden();
 }
 
 /** Ask the rider something without stopping the ride. window.confirm blocks
@@ -5229,13 +5101,6 @@ let navAskYes: (() => void) | null = null;
 function closeAsk(): void {
   el<HTMLDivElement>("nav-ask").style.display = "none";
   navAskYes = null;
-}
-
-/** "in 50 meters, you have arrived" is not English. The destination maneuver's
- * wording is written for the moment of arrival, so the staged calls need their
- * own phrasing. Returns null for ordinary turns. */
-function arrivalPhrase(voice: string, metres: number): string | null {
-  return /have arrived/i.test(voice) ? `in ${navDistVoice(metres)}, your destination` : null;
 }
 
 /** Where we're going, for the arrival line. */
@@ -5292,12 +5157,6 @@ function hereLabel(lon: number, lat: number): string {
   return cls ? `on a ${cls.replace(/_/g, " ")}` : "at this spot";
 }
 
-/** "gather up" is what you say to children. A solo rider heard it 32 times on
- * one ride, which is both odd and easy to stop listening to. */
-function ridePhrasing(voice: string): string {
-  return profileId === "solo" ? voice.replace(/\bgather up\b/gi, "take care") : voice;
-}
-
 /** A bearing as something sayable ("north-east"), for telling an off-route
  * rider which way the new route runs. */
 function compassPoint(deg: number): string {
@@ -5328,9 +5187,9 @@ function navAnimate(): void {
   }
   if (navFollowing && navPosShown && !navInteracting) {
     navBearingShown =
-      (navBearingShown + angleDelta(navBearingShown, navBearingTarget) * 0.12 + 360) % 360;
+      (navBearingShown + angleDelta(navBearingShown, rideEngine.bearingTarget) * 0.12 + 360) % 360;
     const curZoom = map.getZoom();
-    const zoom = navUserZoom ? curZoom : curZoom + (navZoomTarget - curZoom) * 0.06;
+    const zoom = navUserZoom ? curZoom : curZoom + (rideEngine.zoomTarget - curZoom) * 0.06;
     // Only touch the camera when something actually moved. jumpTo fires a full
     // movestart/zoomstart/moveend cycle, so writing every frame spams events
     // (and burns battery) even when the rider is sitting still at a light.
@@ -5366,69 +5225,18 @@ function navStopAnimation(): void {
   navPosTarget = null;
 }
 
-/** Metres of warning for a turn call: `secs` of riding at the current pace,
- * clamped so it's neither absurdly early nor too late to react. */
-function announceDist(secs: number, [lo, hi]: [number, number]): number {
-  const speed = navSpeed > 0.8 ? navSpeed : (PROFILES[profileId].paceKmh * 1000) / 3600;
-  return Math.max(lo, Math.min(hi, speed * secs));
-}
-
 function navOnFix(fix: NativeFix): void {
-  if (!navActive || !navTrack || !router) return;
-  const lon = fix.lon;
-  const lat = fix.lat;
-  // A lone huge jump is the phone re-acquiring off a tower, not the rider.
-  // Trust it only if it repeats, so we resync after a real signal gap.
-  if (navLastPos && distM(navLastPos, [lon, lat]) > MAX_FIX_JUMP_M) {
-    navImplausibleFixes++;
-    if (navImplausibleFixes < IMPLAUSIBLE_FIXES_BEFORE_TRUSTED) return;
-  } else {
-    navImplausibleFixes = 0;
-  }
-  navLastPos = [lon, lat];
-  if (el<HTMLDivElement>("nav-alert").classList.contains("gps")) hideRideAlert();
-  // smoothed ground speed, for timing the turn calls
-  const now = Date.now();
-  if (fix.speed !== null && fix.speed !== undefined && fix.speed >= 0) {
-    navSpeed = navSpeed === 0 ? fix.speed : navSpeed * 0.6 + fix.speed * 0.4;
-  } else if (navPrevPos && navLastFixAt) {
-    const dt = (now - navLastFixAt) / 1000;
-    if (dt > 0.2) {
-      const v = distM(navPrevPos, [lon, lat]) / dt;
-      if (v < 25) navSpeed = navSpeed === 0 ? v : navSpeed * 0.7 + v * 0.3;
-    }
-  }
-  navLastFixAt = now;
-  // travel direction: GPS heading when moving, else derived from movement
-  const gpsHeading = fix.heading;
-  if (gpsHeading !== null && !Number.isNaN(gpsHeading) && (fix.speed ?? 0) > 0.7) {
-    navHeading = gpsHeading;
-  } else if (navPrevPos && distM(navPrevPos, [lon, lat]) > 5) {
-    navHeading = (bearingDeg(navPrevPos, [lon, lat]) + 360) % 360;
-  }
-  if (!navPrevPos || distM(navPrevPos, [lon, lat]) > 3) navPrevPos = [lon, lat];
-
+  if (!navActive || !router) return;
+  const step = rideEngine.onFix(fix, Date.now());
+  if (step === null) return;
+  navLastPos = [fix.lon, fix.lat];
   // keep the ride recoverable: Back, a reload or a crash used to lose it all
   if (recorder && ++navFixesSinceStash >= STASH_EVERY_FIXES) {
     navFixesSinceStash = 0;
     stashInProgress(recorder.finish(profileId));
   }
-  const snap = snapToTrack(navTrack, lon, lat, navHint);
-  // record against along-route progress rather than raw fix-to-fix distance,
-  // which counted GPS wander as forward motion
-  recorder?.addPoint(
-    Date.now(),
-    lon,
-    lat,
-    router.edgeClassAt(lon, lat),
-    snap.offM <= OFF_ROUTE_M ? snap.alongM : undefined,
-  );
-
-  // Draw the dot ON the route while we're plausibly on it — raw bike GPS
-  // wanders 5-15 m, which visibly drifts the dot into buildings and across
-  // the street. Beyond SNAP_DISPLAY_M show the true position, so actually
-  // being off-route reads as off-route instead of being hidden by snapping.
-  navPosTarget = snap.offM <= SNAP_DISPLAY_M ? snap.pos : [lon, lat];
+  recorder?.addPoint(Date.now(), fix.lon, fix.lat, router.edgeClassAt(fix.lon, fix.lat), step.alongM);
+  navPosTarget = step.dot;
   if (!navDot) {
     const dot = document.createElement("div");
     dot.className = "nav-dot";
@@ -5436,217 +5244,93 @@ function navOnFix(fix: NativeFix): void {
     navPosShown = navPosTarget;
   }
   navStartAnimation();
+  for (const effect of step.effects) applyRideEffect(effect);
+  // dim the ridden part of the route so progress reads at a glance
+  if (step.done !== null) {
+    getSource("route-done").setData({
+      type: "Feature",
+      properties: {},
+      geometry: { type: "LineString", coordinates: step.done },
+    } as GeoJSON.GeoJSON);
+  }
+}
 
-  // off-route: a few good fixes in a row trigger a reroute to the destination
-  // (like Google Maps — ride wherever you like, the route follows you)
-  if (snap.offM > OFF_ROUTE_M) {
-    // a poor GPS fix shouldn't count as a deviation
-    if (fix.accuracy > MAX_GPS_ACCURACY_M) return;
-    navOffCount++;
-    // instant feedback while we make sure it's a real deviation
-    el<HTMLElement>("nav-icon").textContent = "↩";
-    el<HTMLElement>("nav-dist").textContent = "off route";
-    el<HTMLElement>("nav-street").textContent = "adjusting…";
-    // keep the trip line live instead of freezing on the last on-route value:
-    // straight-line to the destination is the honest estimate while off-route
-    if (navDest) navUpdateTrip(distM([lon, lat], navDest), true);
-    // follow the rider's own direction while they're off the line
-    if (navHeading !== null) navBearingTarget = navHeading;
-    // and say so on screen for as long as it's true — the riders' logs showed
-    // "adjusting…" sitting there with no other indication
-    showRideAlert("⚠ off route", "gps");
-    const now = Date.now();
-    // Back off between attempts. A rider standing in a car park can sit >40 m
-    // from every routable way, so the old fixed 10 s cooldown re-routed forever
-    // and said "rerouting." on every attempt while the banner stayed stuck on
-    // "adjusting…" — a loop at exactly the moment you most need a sentence.
-    const wait = REROUTE_COOLDOWN_MS * Math.min(2 ** navRerouteTries, 6);
-    if (navOffCount >= OFF_ROUTE_STRIKES && navDest && now - navLastRerouteAt > wait) {
-      navOffCount = 0;
-      navLastRerouteAt = now;
-      const useMyWay = navMyWay && navHeading !== null;
-      // Rate-limit the announcement by wall time, not by attempt count: a
-      // successful reroute puts the rider "on" the new line for a fix, which
-      // reset the counter, so continuing the same wrong turn kept re-announcing.
-      if (now - navRerouteSpokenAt > REROUTE_ANNOUNCE_MIN_MS) {
-        navRerouteSpokenAt = now;
-        speak(useMyWay ? "okay, going your way." : "rerouting.", "turn");
-        vibrate([80, 60, 80]);
-      }
-      navRerouteTries++;
-      try {
-        const bias =
-          useMyWay && navHeading !== null
-            ? router.headingBias([lon, lat], navHeading)
-            : undefined;
-        const found = rideOptionsFrom(router, [lon, lat], bias);
-        if (found !== null) options = found;
-        const first = found?.[0];
-        if (first) {
-          selectOption(first.id);
-          rebuildNavFromSelected();
-          // tell the rider a new way exists and which way it goes, instead of
-          // leaving "adjusting…" up while a fresh route sits undrawn-to
-          const back = navTrack ? trackBearingAhead(navTrack, 0, 0) : null;
-          showRideAlert(
-            back === null
-              ? "⚠ off route — new route ready"
-              : `⚠ off route — head ${compassPoint(back)} to rejoin`,
-            "gps",
-          );
-        }
-      } catch {
-        showRideAlert("⚠ off route — no way back from here", "gps");
-      }
+function applyRideEffect(e: RideEffect): void {
+  switch (e.type) {
+    case "speak":
+      speak(e.text, e.priority);
+      return;
+    case "vibrate":
+      vibrate(e.pattern);
+      return;
+    case "alert":
+      showRideAlert(e.text, e.kind);
+      return;
+    case "clearGpsAlert":
+      if (el<HTMLDivElement>("nav-alert").classList.contains("gps")) hideRideAlert();
+      return;
+    case "hideAlert":
+      hideRideAlert();
+      return;
+    case "offRoute":
+      el<HTMLElement>("nav-icon").textContent = "↩";
+      el<HTMLElement>("nav-dist").textContent = "off route";
+      el<HTMLElement>("nav-street").textContent = "adjusting…";
+      return;
+    case "banner":
+      showBanner(e.maneuver, e.distToNextM);
+      return;
+    case "trip":
+      showTrip(e);
+      return;
+    case "reroute":
+      rerouteFrom(e.from, e.heading);
+      return;
+    case "arrived":
+      showArrival(e.atStop, e.totalM);
+      return;
+  }
+}
+
+/** A wrong turn: plan the way on from here, and say which way it goes. */
+function rerouteFrom(from: [number, number], heading: number | null): void {
+  if (!router) return;
+  try {
+    const bias = heading !== null ? router.headingBias(from, heading) : undefined;
+    const found = rideOptionsFrom(router, from, bias);
+    if (found !== null) options = found;
+    const first = found?.[0];
+    if (first) {
+      selectOption(first.id);
+      rebuildNavFromSelected();
+      // tell the rider a new way exists and which way it goes, instead of
+      // leaving "adjusting…" up while a fresh route sits undrawn-to
+      const back = rideEngine.rejoinBearing();
+      showRideAlert(
+        back === null ? "⚠ off route — new route ready" : `⚠ off route — head ${compassPoint(back)} to rejoin`,
+        "gps",
+      );
     }
+  } catch {
+    showRideAlert("⚠ off route — no way back from here", "gps");
+  }
+}
+
+function showArrival(atStop: boolean, totalM: number): void {
+  if (atStop) {
+    el<HTMLElement>("nav-icon").textContent = "🛑";
+    el<HTMLElement>("nav-dist").textContent = "At the stop";
+    el<HTMLElement>("nav-street").textContent = "tap ▶ resume to ride on";
+    el<HTMLButtonElement>("nav-resume").style.display = "inline-block";
     return;
   }
-  navOffCount = 0;
-  navRerouteTries = 0;
-  if (el<HTMLDivElement>("nav-alert").classList.contains("gps")) hideRideAlert();
-  navHint = snap.idx;
-  // How far round the loop, once this track is on it. Forwards only, and only
-  // by what a bicycle can cover between fixes: a loop crosses and runs back
-  // along its own streets, and a snap onto the far side of one of those must
-  // not count the stretch in between as ridden.
-  if (navLoopLeg !== null && snap.alongM >= navLoopLeg.legM) {
-    const round = navLoopLeg.resumeM + snap.alongM - navLoopLeg.legM;
-    if (round > navLoopDoneM && round - navLoopDoneM <= LOOP_PROGRESS_MAX_STEP_M) {
-      navLoopDoneM = round;
-    }
-  }
-
-  // advance past maneuvers we've already ridden through
-  while (navNext < navManeuvers.length - 1 && (navManeuvers[navNext]?.atM ?? 0) < snap.alongM - 20) {
-    navNext++;
-    navAnnounceStage = 0;
-  }
-  // ...and go back if the rider overshot and doubled back. navNext only ever
-  // advanced, so a turn you missed and returned to was never called again.
-  while (navNext > 0 && (navManeuvers[navNext - 1]?.atM ?? 0) > snap.alongM + 20) {
-    navNext--;
-    navAnnounceStage = 0;
-  }
-  const next = navManeuvers[navNext];
-  const distToNext = Math.max(0, (next?.atM ?? 0) - snap.alongM);
-  const remaining = Math.max(0, navTrack.totalM - snap.alongM);
-  // un-latch a stale arrival (bad fix, or a new ride begun at the old
-  // destination) so the banner and voice come back
-  if (navArrived && remaining > ARRIVAL_CLEAR_M) navArrived = false;
-  // A useless fix still drove the headline distance, which read "now" three
-  // times inside 20 m and then jumped back to 100 m. Hold the last good
-  // reading and say the signal is poor instead of inventing precision.
-  const poorFix = fix.accuracy > MAX_GPS_ACCURACY_M;
-  if (poorFix) {
-    showRideAlert("⚠ GPS signal poor", "gps");
-  } else {
-    if (el<HTMLDivElement>("nav-alert").classList.contains("gps")) hideRideAlert();
-    navUpdateBanner(distToNext, remaining);
-  }
-
-  if (next && !poorFix) {
-    // chain a turn that lands right after this one ("left, then right") so a
-    // quick pair isn't two calls on top of each other
-    const after = navManeuvers[navNext + 1];
-    const chain =
-      after && after.atM - next.atM <= THEN_CHAIN_M ? `, then ${after.voice}` : "";
-    if (navAnnounceStage < 3 && distToNext <= announceDist(ANNOUNCE_NOW_S, ANNOUNCE_NOW_CLAMP)) {
-      speak(`${next.voice}${chain}`);
-      vibrate([200]);
-      navAnnounceStage = 3;
-    } else if (
-      navAnnounceStage < 2 &&
-      distToNext <= announceDist(ANNOUNCE_NEAR_S, ANNOUNCE_NEAR_CLAMP)
-    ) {
-      speak(
-        arrivalPhrase(next.voice, navDistM(distToNext)) ??
-          `in ${navDistVoice(distToNext)}, ${next.voice}${chain}`,
-      );
-      vibrate([100]);
-      navAnnounceStage = 2;
-    } else if (
-      navAnnounceStage < 1 &&
-      distToNext <= announceDist(ANNOUNCE_FAR_S, ANNOUNCE_FAR_CLAMP)
-    ) {
-      speak(
-        arrivalPhrase(next.voice, navDistM(distToNext)) ??
-          `in ${navDistVoice(distToNext)}, ${next.voice}`,
-      );
-      navAnnounceStage = 1;
-    }
-  }
-
-  // hazard alerts (voice + distinct buzz), announced ~100 m out
-  while (navAlertNext < navAlerts.length && (navAlerts[navAlertNext]?.atM ?? 0) < snap.alongM - 10) {
-    navAlertNext++;
-  }
-  const alert = navAlerts[navAlertNext];
-  if (alert && alert.atM - snap.alongM <= 100) {
-    speak(ridePhrasing(alert.voice), "safety");
-    vibrate([100, 80, 100]);
-    // and put it on screen, held until we're past the hazard
-    showRideAlert(`⚠ ${ridePhrasing(alert.voice)}`);
-    navAlertUntilM = alert.atM + 30;
-    navAlertNext++;
-  } else if (navAlertUntilM > 0 && snap.alongM > navAlertUntilM) {
-    hideRideAlert();
-  }
-
-  // kid morale: a milestone every mile (or kilometre) and the halfway mark
-  // Catch up silently on the first fix: joining a route part-way (a train leg,
-  // a cold GPS, a replan) fired "1 kilometer done… 20 kilometers done" one per
-  // second before any guidance.
-  if (navNextKm === 1 && snap.alongM > 1.5 * milestoneM()) {
-    navNextKm = Math.floor(snap.alongM / milestoneM()) + 1;
-    navHalfway = snap.alongM >= navTrack.totalM / 2;
-  }
-  if (snap.alongM >= navNextKm * milestoneM()) {
-    speak(`${milestoneVoice(navNextKm)}. nice riding!`, "chat");
-    navNextKm++;
-  }
-  if (!navHalfway && navTrack.totalM > 1500 && snap.alongM >= navTrack.totalM / 2) {
-    navHalfway = true;
-    speak("halfway there!", "chat");
-  }
-
-  if (remaining < 15 && !navArrived) {
-    navArrived = true;
-    vibrate([200, 100, 200]);
-    if (navOriginalDest) {
-      speak("arrived at your stop. tap resume when you're ready to ride on.");
-      el<HTMLElement>("nav-icon").textContent = "🛑";
-      el<HTMLElement>("nav-dist").textContent = "At the stop";
-      el<HTMLElement>("nav-street").textContent = "tap ▶ resume to ride on";
-      el<HTMLButtonElement>("nav-resume").style.display = "inline-block";
-    } else {
-      speak(
-        `you have arrived. ${lengthVoice(navTrack.totalM)} — nicely done!`,
-      );
-      el<HTMLElement>("nav-icon").textContent = "🏁";
-      el<HTMLElement>("nav-dist").textContent = "Arrived";
-      el<HTMLElement>("nav-street").textContent = navDestLabel ?? "you're there";
-      el<HTMLElement>("nav-remaining").textContent =
-        `${fmtDist(navTrack.totalM)} ridden`;
-      el<HTMLElement>("nav-speed").textContent = "";
-      hideRideAlert();
-      finishAndSaveRide();
-    }
-  }
-
-  // dim the ridden part of the route so progress reads at a glance
-  getSource("route-done").setData({
-    type: "Feature",
-    properties: {},
-    geometry: { type: "LineString", coordinates: trackSlice(navTrack, snap.alongM) },
-  } as GeoJSON.GeoJSON);
-
-  // Camera targets — the rAF loop eases toward these. Bearing is averaged over
-  // the track ahead (a per-segment bearing swings wildly on twisty paths), and
-  // held steady when stopped so the map doesn't spin in place.
-  if (navSpeed > 0.8 || navBearingTarget === 0) {
-    navBearingTarget = trackBearingAhead(navTrack, snap.idx, snap.alongM);
-  }
-  navZoomTarget = distToNext <= NAV_ZOOM_TURN_M ? NAV_ZOOM_TURN : NAV_ZOOM_CRUISE;
+  el<HTMLElement>("nav-icon").textContent = "🏁";
+  el<HTMLElement>("nav-dist").textContent = "Arrived";
+  el<HTMLElement>("nav-street").textContent = navDestLabel ?? "you're there";
+  el<HTMLElement>("nav-remaining").textContent = `${fmtDist(totalM)} ridden`;
+  el<HTMLElement>("nav-speed").textContent = "";
+  hideRideAlert();
+  finishAndSaveRide();
 }
 
 async function startNav(): Promise<void> {
@@ -5654,7 +5338,7 @@ async function startNav(): Promise<void> {
   clearWhatIf();
   const chosen = options.find((o) => o.id === selectedId);
   navLoop = chosen !== undefined && chosen.id.startsWith("loop") ? chosen : null;
-  navLoopDoneM = 0;
+  rideEngine.start();
   if (!rebuildNavFromSelected()) return;
   const destLngLat = end?.getLngLat() ?? start?.getLngLat();
   if (!destLngLat) return;
@@ -5670,16 +5354,8 @@ async function startNav(): Promise<void> {
   navActive = true;
   navFollowing = true;
   navUserZoom = false;
-  navSpeed = 0;
-  navLastFixAt = 0;
-  navRerouteTries = 0;
-  navRerouteSpokenAt = 0;
-  navPaceKmh = null;
-  navImplausibleFixes = 0;
   voiceWarned = false;
   navBearingShown = map.getBearing();
-  navBearingTarget = 0;
-  navZoomTarget = NAV_ZOOM_CRUISE;
   recorder = new RideRecorder();
   document.body.classList.add("navigating");
   el<HTMLDivElement>("nav-banner").style.display = "block";

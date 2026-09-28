@@ -2,6 +2,11 @@
 // navigation path gets exercised the way it is used rather than as a series of
 // isolated interactions. See rider.ts for what the simulation does and does not
 // reproduce faithfully.
+//
+// What guidance a ride gives — turn calls, reroutes, milestones, arrival, what
+// a bad fix is allowed to change — is decided by the ride engine and tested
+// there, fix by fix and much faster (tests/ride.test.ts). These are for what
+// only a browser shows: that the page, the map and the recorder follow it.
 import { expect, test } from "@playwright/test";
 import type { Map as MLMap } from "maplibre-gl";
 
@@ -96,23 +101,6 @@ test("a wrong turn is noticed and rerouted, not ignored", async ({ page }) => {
   await expect(page.locator("#nav-banner")).toBeVisible();
 });
 
-test("a bad GPS stretch doesn't trigger a phantom reroute", async ({ page }) => {
-  test.slow();
-  const path = await startRide(page);
-  // accuracy goes to 90 m for a stretch — worse than MAX_GPS_ACCURACY_M, so
-  // those fixes must not be trusted to declare the rider off-route
-  await ride(page, path, {
-    speedKmh: 12,
-    timeScale: 1,
-    fixHz: 2,
-    untilM: 300,
-    degradeFromM: 80,
-    degradeToM: 260,
-  });
-  const spoken = await page.evaluate(() => window.__rider.spoken);
-  expect(spoken.filter((s) => /rerouting/i.test(s))).toHaveLength(0);
-});
-
 test("stopped at a light: the view stays put and the ETA holds", async ({ page }) => {
   test.slow();
   const path = await startRide(page);
@@ -137,27 +125,6 @@ test("stopped at a light: the view stays put and the ETA holds", async ({ page }
   const spin = Math.abs(((after.bearing - before.bearing + 540) % 360) - 180);
   expect(spin).toBeLessThan(25);
   expect(after.trip).toMatch(/min/);
-});
-
-test("a single teleporting fix can't end the ride", async ({ page }) => {
-  test.slow();
-  // A phone re-acquiring off a cell tower emits one fix far from the rider. It
-  // used to latch "arrived!" — banner frozen and voice dead for the rest of the
-  // ride, plus a fabricated distance written to history.
-  const path = await startRide(page);
-  await ride(page, path, { speedKmh: 12, timeScale: 30, untilM: 300 });
-  const end = path[path.length - 1] as [number, number];
-  await page.evaluate(
-    (p) => window.__rider.setFix({ lon: p[0], lat: p[1], speed: 3, heading: 0, accuracy: 8 }),
-    end,
-  );
-  await page.waitForTimeout(400);
-  // ride on from where we actually were
-  const log = await ride(page, path, { speedKmh: 12, timeScale: 30, untilM: 600 });
-  await expect(page.locator("#nav-street")).not.toContainText(/arrived/i);
-  expect(log.spoken.join(" | ")).not.toMatch(/you have arrived/i);
-  // guidance is still live
-  await expect(page.locator("#nav-remaining")).toContainText(/min/);
 });
 
 test("Escape doesn't wipe the trip mid-ride", async ({ page }) => {
@@ -218,47 +185,6 @@ test("safety warnings are shown, not just spoken, and survive muting", async ({ 
   // the ride passes busy crossings on this route; at least one was displayed
   const seen = await page.evaluate(() => window.__navAlertsSeen ?? 0);
   expect(seen).toBeGreaterThan(0);
-});
-
-test("a wrong turn says 'rerouting' once, not on every attempt", async ({ page }) => {
-  test.slow();
-  const path = await startRide(page);
-  // stand off-route: the old fixed cooldown re-announced every 10 s forever
-  let sawOffRouteAlert = false;
-  await ride(page, path, {
-    speedKmh: 12,
-    timeScale: 1,
-    fixHz: 2,
-    untilM: 420,
-    divertAtM: 200,
-    divertM: 220,
-    onFix: async () => {
-      // sample while we're actually off the line — it correctly clears again
-      // once the rider rejoins, which is where this ride ends
-      if (!sawOffRouteAlert) {
-        sawOffRouteAlert = await page.locator("#nav-alert").isVisible();
-      }
-    },
-  });
-  const spoken = await page.evaluate(() => window.__rider.spoken);
-  const reroutes = spoken.filter((s) => /rerouting|going your way/i.test(s));
-  expect(reroutes.length).toBeLessThanOrEqual(2);
-  // the rider was told they were off route rather than left on "adjusting…"
-  expect(sawOffRouteAlert).toBe(true);
-});
-
-test("joining a route part-way doesn't machine-gun the milestones", async ({ page }) => {
-  const path = await startRide(page);
-  // first fix lands ~4 km along, as after a car/train leg
-  const at = path[Math.floor(path.length * 0.45)] as [number, number];
-  await page.evaluate(
-    (p) => window.__rider.setFix({ lon: p[0], lat: p[1], speed: 3, heading: 0, accuracy: 8 }),
-    at,
-  );
-  await page.waitForTimeout(600);
-  const spoken = await page.evaluate(() => window.__rider.spoken);
-  const chimes = spoken.filter((s) => /(miles?|kilometers?) done/i.test(s));
-  expect(chimes.length).toBeLessThanOrEqual(1);
 });
 
 test("the saved ride distance matches the route, not GPS wander", async ({ page }) => {
@@ -361,9 +287,3 @@ test("guidance names what an unnamed way actually is", async ({ page }) => {
   expect(log.spoken.filter((s) => (s.match(/, then /g) ?? []).length > 1)).toHaveLength(0);
 });
 
-test("a solo rider isn't told to gather up the kids", async ({ page }) => {
-  test.slow();
-  const path = await startRide(page, "#s=-71.122258,42.396748&e=-71.086705,42.362552&m=solo");
-  const log = await ride(page, path, { speedKmh: 16, timeScale: 60, untilM: 4000 });
-  expect(log.spoken.filter((s) => /gather up/i.test(s))).toHaveLength(0);
-});

@@ -235,30 +235,6 @@ test("the trip line stays on one line and the banner keeps its height", async ({
   expect(Math.max(...heights)).toBeLessThan(30);
 });
 
-test("the arrival ETA doesn't jump when you stop at a light", async ({ page }) => {
-  const path = await startNav(page);
-  // one continuous ride with a stop in it: ride() always starts from the top of
-  // the path, so two calls would replay the route and move the ETA honestly
-  let rolling = "";
-  let stopped = "";
-  await ride(page, path, {
-    speedKmh: 11,
-    timeScale: 20,
-    untilM: 460,
-    pauseAtM: 400,
-    pauseSeconds: 30,
-    onFix: async ({ alongM }) => {
-      const txt = (await page.locator("#nav-remaining").textContent()) ?? "";
-      if (alongM < 400) rolling = txt;
-      else if (stopped === "") stopped = txt;
-    },
-  });
-  const mins = (s: string): number => Number(/(\d+) min/.exec(s)?.[1] ?? 0);
-  // it used to swing ~6 min at every stop, flipping between measured and
-  // profile pace
-  expect(Math.abs(mins(stopped) - mins(rolling))).toBeLessThanOrEqual(3);
-});
-
 test("the selected route still shows its protected share", async ({ page }) => {
   await plan(page);
   // the safety-first card was the one card with no safety number, because the
@@ -281,58 +257,7 @@ test("losing GPS is announced, and blames the signal rather than permissions", a
   await expect(page.locator("#nav-street")).not.toContainText(/unavailable/i);
 });
 
-test("a useless fix doesn't garble the distance to the turn", async ({ page }) => {
-  const path = await startNav(page);
-  await ride(page, path, { speedKmh: 12, timeScale: 20, untilM: 250 });
-  const good = (await page.locator("#nav-dist").textContent()) ?? "";
-  // 120 m accuracy: the readout used to bounce 40 -> now -> 100 m
-  const seen = new Set<string>([good]);
-  for (let i = 0; i < 8; i++) {
-    await page.evaluate(
-      (p) => window.__rider.setFix({ lon: p[0], lat: p[1], accuracy: 120, speed: 3, heading: 90 }),
-      [(path[20] as [number, number])[0] + i * 0.0004, (path[20] as [number, number])[1]] as [
-        number,
-        number,
-      ],
-    );
-    await page.waitForTimeout(80);
-    seen.add((await page.locator("#nav-dist").textContent()) ?? "");
-  }
-  // the reading is held, and the rider is told the signal is poor
-  expect(seen.size).toBe(1);
-  await expect(page.locator("#nav-alert")).toContainText(/poor/i);
-});
-
 // ── recovery ──────────────────────────────────────────────────────────────
-
-test("starting a second ride from the old destination still guides", async ({ page }) => {
-  const path = await startNav(page);
-  // arrive, end, then set off again while standing at the destination
-  await ride(page, path, { speedKmh: 20, timeScale: 90 });
-  await page.locator("#nav-banner").click({ position: { x: 40, y: 60 } });
-  await page.locator("#nav-exit").click();
-  await page.locator("#nav-ask-yes").click();
-  await expect(page.locator("#nav-banner")).not.toBeVisible();
-
-  await page.locator("#nav-btn").click();
-  await expect(page.locator("#nav-banner")).toBeVisible();
-  await ride(page, path, { speedKmh: 14, timeScale: 40, untilM: 400 });
-  // it used to latch "arrived!" on the first fix and never update again
-  await expect(page.locator("#nav-dist")).not.toContainText(/arrived/i);
-  await expect(page.locator("#nav-remaining")).toContainText(/min/);
-});
-
-test("a turn you overshoot and come back to is called again", async ({ page }) => {
-  const path = await startNav(page);
-  await ride(page, path, { speedKmh: 12, timeScale: 20, untilM: 320 });
-  const before = await page.evaluate(() => window.__rider.spoken.length);
-  // double back past the turn, then approach it again
-  await ride(page, path, { speedKmh: 12, timeScale: 20, untilM: 200 });
-  await ride(page, path, { speedKmh: 12, timeScale: 20, untilM: 340 });
-  const after = await page.evaluate(() => window.__rider.spoken);
-  // navNext only ever advanced, so the missed turn was never announced again
-  expect(after.length).toBeGreaterThan(before);
-});
 
 // ── nothing may cover the guidance ────────────────────────────────────────
 
@@ -614,44 +539,6 @@ test("reporting a hazard mid-ride is one tap, and the question comes after", asy
   await page.locator('#nav-classify button[data-cat="surface"]').click();
   await expect(page.locator("#nav-alert")).toContainText(/broken surface/i);
   await expect(page.locator("#nav-classify")).toBeHidden();
-});
-
-test("the voice and the banner say the same distance", async ({ page }) => {
-  const path = await startNav(page);
-  const shown = new Set<string>();
-  await ride(page, path, {
-    speedKmh: 13,
-    timeScale: 25,
-    untilM: 1400,
-    onFix: async () => {
-      const t = (await page.locator("#nav-dist").textContent()) ?? "";
-      if (t !== "") shown.add(t.trim());
-    },
-  });
-  const spoken = await page.evaluate(() => window.__rider.spoken);
-  // Unit-aware: the app speaks and shows miles and feet by default now, and the
-  // point of this test is that the two agree — not which system they agree in.
-  const said = spoken.flatMap((p) =>
-    [...p.matchAll(/in ([\d.]+) (feet|meters|miles?|kilometers?)/g)].map((m) => ({
-      n: m[1] ?? "",
-      unit: m[2] ?? "",
-    })),
-  );
-  expect(said.length, `nothing spoken with a distance in it: ${spoken.join(" | ")}`).toBeGreaterThan(
-    0,
-  );
-  const abbrev: Record<string, string> = {
-    feet: "ft",
-    meters: "m",
-    mile: "mi",
-    miles: "mi",
-    kilometer: "km",
-    kilometers: "km",
-  };
-  // riders heard "in three hundred metres" against a banner reading 280 m
-  for (const { n, unit } of said) {
-    expect([...shown]).toContain(`${n} ${abbrev[unit] ?? unit}`);
-  }
 });
 
 test("a phone that can't speak says so instead of just going quiet", async ({ page }) => {
