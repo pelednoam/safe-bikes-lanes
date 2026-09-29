@@ -122,6 +122,7 @@ import {
 } from "./units.js";
 import { NetworkTiles } from "./tiles.js";
 import { withRetry } from "./retry.js";
+import { COVERAGE, HOME, outsideCoverage } from "./coverage.js";
 import { Lane, type Ticket } from "./planner.js";
 import type { RoutingApi, WirePrefs } from "./routing.js";
 import { WORKER_FAILED, wrap } from "./rpc.js";
@@ -351,7 +352,7 @@ const POI_META: Record<string, { emoji: string; label: string; color: string }> 
   restroom: { emoji: "🚻", label: "restroom", color: "#7f8c8d" },
 };
 
-const BBOX = { west: -71.60, south: 42.00, east: -70.78, north: 42.63 } as const;
+const BBOX = COVERAGE;
 const SKETCHY_KEY = "sketchyMarks";
 const DARK_KEY = "darkMode";
 
@@ -413,8 +414,8 @@ const map: MLMap = new maplibregl.Map({
     // bottom of the stack; the fetched layers land on top of it.
     layers: [{ id: "ground", type: "background", paint: { "background-color": "#e9e6e1" } }],
   },
-  center: [-71.105, 42.383],
-  zoom: 13,
+  center: HOME.center,
+  zoom: HOME.zoom,
 });
 map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
 map.addControl(
@@ -767,6 +768,27 @@ async function refreshNetworkTiles(): Promise<void> {
 // navigating, and each move fires moveend — without this the whole network
 // layer would be re-queried and re-rendered ~60x/second mid-ride.
 let netRefreshTimer: number | undefined;
+/** Outside the mapped area there is nothing to draw: no streets, no basemap
+ * (it is this area's too), no safety network. A phone located elsewhere
+ * opened on a blank grey map with nothing to say why; now the map says what
+ * it covers, and takes the rider there. */
+function showCoverage(): void {
+  const b = map.getBounds();
+  const out = !navActive && outsideCoverage({
+    west: b.getWest(),
+    south: b.getSouth(),
+    east: b.getEast(),
+    north: b.getNorth(),
+  });
+  el<HTMLDivElement>("outside").style.display = out ? "flex" : "none";
+}
+// a jump, not a flight: animating across a continent of empty map is a long
+// wait with nothing to look at
+el<HTMLButtonElement>("outside-go").addEventListener("click", () => {
+  map.jumpTo({ center: HOME.center, zoom: HOME.zoom });
+});
+map.on("load", showCoverage);
+map.on("moveend", showCoverage);
 map.on("moveend", () => {
   window.clearTimeout(netRefreshTimer);
   netRefreshTimer = window.setTimeout(() => void refreshNetworkTiles(), 300);

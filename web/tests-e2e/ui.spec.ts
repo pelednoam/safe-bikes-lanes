@@ -671,3 +671,29 @@ test.describe("at a desk", () => {
     await expect(page.locator("#error")).toHaveAttribute("role", "alert");
   });
 });
+
+test("a map opened outside the area says what it covers, and goes there", async ({ page }) => {
+  // Android's emulators, and anyone opening the app away from home, put the
+  // map somewhere this app has nothing to draw: it was a blank grey map
+  await page.goto("/");
+  await page.waitForFunction(() => window._map?.isStyleLoaded() === true, null, { timeout: budget(60_000) });
+  // where the app's own locate puts a phone in Mountain View
+  await page.evaluate(() => window._map?.jumpTo({ center: [-122.08, 37.39], zoom: 14 }));
+  const notice = page.locator("#outside");
+  await expect(notice).toBeVisible({ timeout: budget(20_000) });
+  await expect(notice).toContainText("eastern Massachusetts");
+  await page.locator("#outside-go").click();
+  await expect(notice).toBeHidden({ timeout: budget(20_000) });
+  const lng = await page.evaluate(() => window._map?.getCenter().lng ?? 0);
+  expect(lng).toBeGreaterThan(-71.6);
+  expect(lng).toBeLessThan(-70.78);
+});
+
+test("the notice about the area stays away inside it", async ({ page }) => {
+  await page.goto("/");
+  await page.waitForFunction(() => window._map?.isStyleLoaded() === true, null, { timeout: budget(60_000) });
+  // and at the edge of it, where half the view is outside
+  await page.evaluate(() => window._map?.jumpTo({ center: [-71.62, 42.3], zoom: 13 }));
+  await page.waitForTimeout(500);
+  await expect(page.locator("#outside")).toBeHidden();
+});
