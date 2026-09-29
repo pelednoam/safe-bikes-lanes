@@ -127,7 +127,7 @@ import { h, render } from "preact";
 import { type Headline, NavHeadline, NavTripLine, type TripLine } from "./ui/NavBanner.js";
 import { OptionCards } from "./ui/OptionCards.js";
 import { type GradeView, SearchResults, type SearchRowView } from "./ui/SearchResults.js";
-import { Cautions, ClassBar, ClassKey, WhyList } from "./ui/RouteSummary.js";
+import { Cautions, ClassBar, ClassKey, Ribbon, WhyList } from "./ui/RouteSummary.js";
 import { RecentRoutes, SavedPlaces } from "./ui/PlacesAndRecent.js";
 import type { RoutingApi, WirePrefs } from "./routing.js";
 import { WORKER_FAILED, wrap } from "./rpc.js";
@@ -1538,60 +1538,21 @@ function renderOptions(): void {
 // summary + ribbon + cautions
 // ---------------------------------------------------------------------------
 
+/** The kinds whose map mark the ribbon repeats (see CLASS_MARKS). */
+const RIBBON_MARKED: ReadonlySet<string> = new Set(CLASS_MARKS.map((m) => m.cls));
+
 function renderRibbon(option: RouteOption): void {
-  const holder = el<HTMLDivElement>("ribbon");
-  const ribbon = option.payload.ribbon ?? [];
-  if (ribbon.length === 0) {
-    holder.innerHTML = "";
-    return;
-  }
-  const W = 280;
-  const total = ribbon.reduce((a, r) => a + r.m, 0);
-  if (total <= 0) {
-    holder.innerHTML = "";
-    return;
-  }
-  const elevs = ribbon.flatMap((r) => [r.e0, r.e1]);
-  const eMin = Math.min(...elevs);
-  const eMax = Math.max(...elevs, eMin + 5);
-  const ey = (v: number): number => 62 - ((v - eMin) / (eMax - eMin)) * 24;
-  let x = 0;
-  const rects: string[] = [];
-  const crossings: string[] = [];
-  const linePts: string[] = [];
-  for (const seg of ribbon) {
-    const wpx = (seg.m / total) * W;
-    const fill = seg.walk === true ? "#8aa4b8" : CLASS_COLORS[seg.cls];
-    const segLabel = seg.walk === true ? "walk the bike" : CLASS_LABELS[seg.cls];
-    rects.push(
-      `<rect x="${x.toFixed(2)}" y="0" width="${Math.max(wpx, 0.4).toFixed(2)}" height="12"` +
-        ` fill="${fill}"><title>${segLabel}: ${fmtDist(seg.m)}</title></rect>`,
-    );
-    // the class's map mark over its colour (see CLASS_MARKS)
-    if (seg.walk !== true && CLASS_MARKS.some((m) => m.cls === seg.cls)) {
-      rects.push(
-        `<rect x="${x.toFixed(2)}" y="0" width="${Math.max(wpx, 0.4).toFixed(2)}" height="12"` +
-          ` fill="url(#rp-${seg.cls})" pointer-events="none"/>`,
-      );
-    }
-    if (seg.crossing) {
-      crossings.push(
-        `<text x="${x.toFixed(2)}" y="23" font-size="11" fill="#a33">▲<title>busy crossing</title></text>`,
-      );
-    }
-    linePts.push(`${x.toFixed(2)},${ey(seg.e0).toFixed(1)}`);
-    x += wpx;
-    linePts.push(`${x.toFixed(2)},${ey(seg.e1).toFixed(1)}`);
-  }
-  holder.innerHTML =
-    `<svg width="${W}" height="70" xmlns="http://www.w3.org/2000/svg">` +
-    RIBBON_PATTERNS +
-    rects.join("") +
-    crossings.join("") +
-    `<polyline points="${linePts.join(" ")}" fill="none" stroke="#666" stroke-width="1.4"/>` +
-    `<text x="0" y="41" font-size="11" fill="currentColor" opacity=".7">${fmtClimb(eMax)}</text>` +
-    `<text x="0" y="69" font-size="11" fill="currentColor" opacity=".7">${fmtClimb(eMin)}</text>` +
-    `</svg>`;
+  render(
+    h(Ribbon, {
+      segs: option.payload.ribbon ?? [],
+      colors: CLASS_COLORS,
+      labels: CLASS_LABELS,
+      marked: RIBBON_MARKED,
+      patterns: RIBBON_PATTERNS,
+      climb: fmtClimb,
+    }),
+    el<HTMLDivElement>("ribbon"),
+  );
 }
 
 function showSummary(option: RouteOption): void {

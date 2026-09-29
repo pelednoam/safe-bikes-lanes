@@ -1,7 +1,7 @@
-// The chosen route's summary: how it divides into kinds of street, what on it
-// to watch for, and why it was chosen. Drawn from the route (showSummary in
+// The chosen route's summary: how it divides into kinds of street, the ribbon
+// along it, what on it to watch for, and why it was chosen. Drawn from the route (showSummary in
 // app.ts), with the markup and classes the page and its tests have always had.
-import type { Caution, ProtectionClass } from "../types.js";
+import type { Caution, ProtectionClass, RibbonSeg } from "../types.js";
 import { fmtDist } from "../units.js";
 
 export interface ClassPart {
@@ -112,5 +112,84 @@ export function WhyList({ reasons }: { reasons: string[] }) {
         <li>{r}</li>
       ))}
     </>
+  );
+}
+
+export interface RibbonProps {
+  segs: RibbonSeg[];
+  colors: Record<string, string>;
+  labels: Record<string, string>;
+  /** The kinds that carry a mark on the map, drawn over their colour here too. */
+  marked: ReadonlySet<string>;
+  /** The marks as SVG patterns (a <defs>, this app's own markup), ids rp-<kind>. */
+  patterns: string;
+  climb(meters: number): string;
+}
+
+/** The ribbon's width, in px: the route from start to end, left to right. */
+export const RIBBON_W = 280;
+const WALK_FILL = "#8aa4b8";
+
+/** The route as a strip: the kind of street along it, the busy crossings, and
+ * the climb, with the highest and lowest points named. */
+export function Ribbon({ segs, colors, labels, marked, patterns, climb }: RibbonProps) {
+  const total = segs.reduce((a, r) => a + r.m, 0);
+  if (segs.length === 0 || total <= 0) return null;
+  const elevs = segs.flatMap((r) => [r.e0, r.e1]);
+  const eMin = Math.min(...elevs);
+  const eMax = Math.max(...elevs, eMin + 5);
+  const ey = (v: number): string => (62 - ((v - eMin) / (eMax - eMin)) * 24).toFixed(1);
+  const strip = [];
+  const crossings = [];
+  const line: string[] = [];
+  let x = 0;
+  for (const [i, seg] of segs.entries()) {
+    const wpx = (seg.m / total) * RIBBON_W;
+    const at = x.toFixed(2);
+    const width = Math.max(wpx, 0.4).toFixed(2);
+    const walk = seg.walk === true;
+    strip.push(
+      <rect key={`c${i}`} x={at} y="0" width={width} height="12" fill={walk ? WALK_FILL : colors[seg.cls]}>
+        <title>{`${walk ? "walk the bike" : labels[seg.cls]}: ${fmtDist(seg.m)}`}</title>
+      </rect>,
+    );
+    // the kind's map mark over its colour
+    if (!walk && marked.has(seg.cls)) {
+      strip.push(
+        <rect
+          key={`m${i}`}
+          x={at}
+          y="0"
+          width={width}
+          height="12"
+          fill={`url(#rp-${seg.cls})`}
+          pointer-events="none"
+        />,
+      );
+    }
+    if (seg.crossing) {
+      crossings.push(
+        <text key={`x${i}`} x={at} y="23" font-size="11" fill="#a33">
+          ▲<title>busy crossing</title>
+        </text>,
+      );
+    }
+    line.push(`${at},${ey(seg.e0)}`);
+    x += wpx;
+    line.push(`${x.toFixed(2)},${ey(seg.e1)}`);
+  }
+  return (
+    <svg width={RIBBON_W} height="70" xmlns="http://www.w3.org/2000/svg">
+      <g dangerouslySetInnerHTML={{ __html: patterns }} />
+      {strip}
+      {crossings}
+      <polyline points={line.join(" ")} fill="none" stroke="#666" stroke-width="1.4" />
+      <text x="0" y="41" font-size="11" fill="currentColor" opacity=".7">
+        {climb(eMax)}
+      </text>
+      <text x="0" y="69" font-size="11" fill="currentColor" opacity=".7">
+        {climb(eMin)}
+      </text>
+    </svg>
   );
 }

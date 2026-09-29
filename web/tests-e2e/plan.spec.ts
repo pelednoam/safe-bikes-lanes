@@ -142,6 +142,10 @@ test("plan a ride entirely with the mouse: pick a start, then a destination", { 
   // the fingerprint and the reasoning are the point of this app
   await expect(page.locator("#fingerprint")).toBeVisible();
   await expect(page.locator("#classbar")).toBeVisible();
+  // the ribbon: the route's stretches, and the climb drawn along them
+  await expect(page.locator("#ribbon svg")).toBeVisible();
+  expect(await page.locator("#ribbon svg > rect").count()).toBeGreaterThan(1);
+  await expect(page.locator("#ribbon polyline")).toHaveAttribute("points", /\d/);
   await expect(page.locator("#why-list")).toContainText(/\w/);
   // both ends are on the map and the trip is shareable
   // :not(.opt-chip) — the on-map option badges are markers too

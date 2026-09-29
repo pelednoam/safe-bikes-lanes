@@ -2,8 +2,8 @@
 import { renderToString } from "preact-render-to-string";
 import { describe, expect, it } from "vitest";
 
-import type { Caution } from "../src/types.js";
-import { Cautions, ClassBar, ClassKey, WhyList } from "../src/ui/RouteSummary.js";
+import type { Caution, RibbonSeg } from "../src/types.js";
+import { Cautions, ClassBar, ClassKey, Ribbon, RIBBON_W, WhyList } from "../src/ui/RouteSummary.js";
 
 const colors = { path: "#1a9850", busy_street: "#d73027" };
 const labels = { path: "path", busy_street: "busy street" };
@@ -64,5 +64,64 @@ describe("why this route", () => {
   it("is the router's reasons, one per line, as text", () => {
     const html = renderToString(<WhyList reasons={["Avoids Mass Ave.", "<b>not markup</b>"]} />);
     expect(html).toBe("<li>Avoids Mass Ave.</li><li>&lt;b>not markup&lt;/b></li>");
+  });
+});
+
+describe("the ribbon", () => {
+  const segs: RibbonSeg[] = [
+    { m: 300, cls: "path", e0: 10, e1: 14, crossing: false },
+    { m: 100, cls: "lane", e0: 14, e1: 30, crossing: true },
+    { m: 100, cls: "busy_street", e0: 30, e1: 28, crossing: false, walk: true },
+  ];
+  const ribbonColors = { ...colors, lane: "#91cf60" };
+  const ribbonLabels = { ...labels, lane: "painted lane" };
+  const draw = (s: RibbonSeg[]): string =>
+    renderToString(
+      <Ribbon
+        segs={s}
+        colors={ribbonColors}
+        labels={ribbonLabels}
+        marked={new Set(["lane", "busy_street"])}
+        patterns='<defs><pattern id="rp-lane"></pattern></defs>'
+        climb={(m) => `${Math.round(m)} m`}
+      />,
+    );
+
+  it("lays the route out left to right, each stretch in proportion and named", () => {
+    const html = draw(segs);
+    expect(html).toContain(`<svg width="${RIBBON_W}" height="70"`);
+    expect(html).toContain('<rect x="0.00" y="0" width="168.00" height="12" fill="#1a9850"><title>path: ');
+    expect(html).toContain('<rect x="168.00" y="0" width="56.00" height="12" fill="#91cf60"><title>painted lane: ');
+    // the marks come with the page's own patterns
+    expect(html).toContain('<g><defs><pattern id="rp-lane"></pattern></defs></g>');
+    expect(html).toContain('fill="url(#rp-lane)" pointer-events="none"');
+  });
+
+  it("draws a walked stretch as walking, with no street mark", () => {
+    const html = draw(segs);
+    expect(html).toContain('fill="#8aa4b8"><title>walk the bike: ');
+    expect(html).not.toContain("url(#rp-busy_street)");
+  });
+
+  it("flags the busy crossings where they start", () => {
+    expect(draw(segs)).toContain('<text x="168.00" y="23" font-size="11" fill="#a33">▲<title>busy crossing</title></text>');
+  });
+
+  it("draws the climb between its lowest and highest points, and names them", () => {
+    const html = draw(segs);
+    expect(html).toContain('points="0.00,62.0 168.00,57.2 168.00,57.2 224.00,38.0 224.00,38.0 280.00,40.4"');
+    expect(html).toContain('opacity=".7">30 m</text>');
+    expect(html).toContain('opacity=".7">10 m</text>');
+  });
+
+  it("a flat route still gets a scale, not a division by zero", () => {
+    const html = draw([{ m: 100, cls: "path", e0: 12, e1: 12, crossing: false }]);
+    expect(html).toContain('points="0.00,62.0 280.00,62.0"');
+    expect(html).toContain('opacity=".7">17 m</text>');
+  });
+
+  it("draws nothing for a route without one", () => {
+    expect(draw([])).toBe("");
+    expect(draw([{ m: 0, cls: "path", e0: 1, e1: 1, crossing: false }])).toBe("");
   });
 });
