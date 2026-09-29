@@ -160,5 +160,8 @@ export default defineConfig({
       },
     },
   },
+  // the parts of the page drawn from state are Preact components (src/ui/);
+  // said here as well as in tsconfig.json, so the build and the tests agree
+  oxc: { jsx: { runtime: "automatic", importSource: "preact" } },
   plugins: [noMapLibreTags(), precache()],
 });

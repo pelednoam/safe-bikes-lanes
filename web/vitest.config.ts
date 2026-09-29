@@ -1,8 +1,10 @@
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
+  // Preact's JSX, as in vite.config.ts
+  oxc: { jsx: { runtime: "automatic", importSource: "preact" } },
   test: {
-    include: ["tests/**/*.test.ts"],
+    include: ["tests/**/*.test.ts", "tests/**/*.test.tsx"],
     exclude: ["tests-e2e/**", "node_modules/**"],
     coverage: {
       // src/app.ts is deliberately absent: it is the DOM and map wiring, has no
@@ -10,7 +12,7 @@ export default defineConfig({
       // it here would report a number that means nothing either way. What a
       // representative browser session executes of it is measurable with
       // page.coverage (about half; the full suites exercise more).
-      include: ["src/**/*.ts"],
+      include: ["src/**/*.ts", "src/**/*.tsx"],
       // Page entry points, not modules: each runs on import (they build a map and
       // fetch data), so a unit test cannot import one without a browser. app.ts is
       // covered by the browser/ride/native suites, city.ts by

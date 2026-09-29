@@ -16,12 +16,15 @@
     "rootDir": "src",
     // Vite builds; tsc only checks types (npm run check)
     "noEmit": true,
+    // Preact's JSX, for the parts of the page drawn from state (src/ui/)
+    "jsx": "react-jsx",
+    "jsxImportSource": "preact",
     // The GeoJSON namespace the app types its map data with. It used to arrive
     // by accident, referenced from MapLibre 4's own types; 6's don't, and since
     // TypeScript 6 nothing is loaded that isn't asked for.
     "types": ["geojson"],
     "outDir": "."
   },
-  "include": ["src/**/*.ts"],
+  "include": ["src/**/*.ts", "src/**/*.tsx"],
   "exclude": ["node_modules"]
 }

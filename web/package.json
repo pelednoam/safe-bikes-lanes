@@ -27,6 +27,7 @@
     "fake-indexeddb": "^6.2.5",
     "maplibre-gl": "^6.11.2",
     "playwright": "^1.61.1",
+    "preact-render-to-string": "6.7.0",
     "typescript": "^7.0.2",
     "vite": "^8.3.1",
     "vitest": "^5.0.1"
@@ -38,6 +39,7 @@
     "@capacitor/app": "^8.1.1",
     "@capacitor/core": "^8.4.3",
     "@protomaps/basemaps": "^5.7.2",
-    "pmtiles": "^4.5.0"
+    "pmtiles": "^4.5.0",
+    "preact": "10.29.8"
   }
 }

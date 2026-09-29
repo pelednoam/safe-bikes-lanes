@@ -125,6 +125,8 @@ import { withRetry } from "./retry.js";
 import { COVERAGE, HOME, outsideCoverage } from "./coverage.js";
 import { Lane, type Ticket } from "./planner.js";
 import { Trip, type TripSnapshot } from "./trip.js";
+import { h, render } from "preact";
+import { OptionCards } from "./ui/OptionCards.js";
 import type { RoutingApi, WirePrefs } from "./routing.js";
 import { WORKER_FAILED, wrap } from "./rpc.js";
 import { type SpeakPriority, SpeechQueue } from "./speech.js";
@@ -1498,94 +1500,36 @@ let optionToFocus: RouteOption["id"] | null = null;
 
 function renderOptions(): void {
   const box = el<HTMLDivElement>("options");
-  box.innerHTML = "";
-  if (trip.options.length === 0) {
-    box.style.display = "none";
-    return;
-  }
-  box.style.display = "block";
+  box.style.display = trip.options.length === 0 ? "none" : "block";
   // One choice among several: a radio group to assistive tech, and walked with
   // the arrow keys. They were click-only divs, so a keyboard could not pick
   // Balanced or Direct at all.
   box.setAttribute("role", "radiogroup");
   box.setAttribute("aria-label", "Route options");
-  const refocus = optionToFocus;
+  const focusId = optionToFocus;
   optionToFocus = null;
-  if (trip.options.length > 1) {
-    const head = document.createElement("div");
-    head.className = "options-head";
-    head.textContent = `${trip.options.length} route options`;
-    box.appendChild(head);
-  }
-  for (const o of trip.options) {
-    const card = document.createElement("div");
-    card.className = "option-card" + (o.id === trip.selectedId ? " selected" : "");
-    card.title = o.gradeReason;
-    const s = o.payload.summary;
-    const badge = document.createElement("b");
-    badge.className = "grade";
-    badge.style.background = GRADE_COLORS[o.grade];
-    badge.style.color = GRADE_TEXT[o.grade];
-    badge.textContent = o.grade;
-    card.appendChild(badge);
-    // name on its own line, the numbers on a second — a single run-on string
-    // of "·" separators is unreadable at a glance
-    const body = document.createElement("span");
-    body.className = "opt-body";
-    const name = document.createElement("span");
-    name.className = "opt-name";
-    name.textContent = o.label;
-    const stats = document.createElement("span");
-    stats.className = "opt-stats";
-    // the selected card is the hero: just the headline numbers, since the
-    // breakdown below it already spells out protected/quiet/climb
-    stats.textContent =
-      o.id === trip.selectedId
-        ? `${fmtDist(s.meters)} · ${s.minutes} min · ${s.pct_protected}% protected`
-        : `${fmtDist(s.meters)} · ${s.minutes} min · ${s.pct_protected}% protected` +
-          ` · ↗ ${fmtClimb(s.climb_m ?? 0)}`;
-    body.append(name, stats);
-    card.appendChild(body);
-    card.addEventListener("click", () => {
-      selectOption(o.id);
-    });
-    const selected = o.id === trip.selectedId;
-    card.setAttribute("role", "radio");
-    card.setAttribute("aria-checked", String(selected));
-    // one tab stop for the group, on the chosen one — the radio pattern
-    card.tabIndex = selected ? 0 : -1;
-    card.addEventListener("keydown", (ev: KeyboardEvent) => {
-      const i = trip.options.findIndex((x) => x.id === o.id);
-      const step =
-        ev.key === "ArrowDown" || ev.key === "ArrowRight"
-          ? 1
-          : ev.key === "ArrowUp" || ev.key === "ArrowLeft"
-            ? -1
-            : 0;
-      const target =
-        step !== 0
-          ? trip.options[(i + step + trip.options.length) % trip.options.length]
-          : ev.key === "Enter" || ev.key === " "
-            ? o
-            : undefined;
-      if (target === undefined) return;
-      ev.preventDefault();
-      // the cards are rebuilt when the panel repaints; keep the focus with the
-      // choice rather than dropping it on the page
-      optionToFocus = target.id;
-      selectOption(target.id);
-    });
-    if (refocus === o.id) window.setTimeout(() => card.focus(), 0);
-    // hovering a card previews that route on the map
-    card.addEventListener("mouseenter", () => {
-      getSource("route").setData(o.payload.geojson as GeoJSON.GeoJSON);
-    });
-    card.addEventListener("mouseleave", () => {
-      const sel = trip.selected;
-      if (sel) getSource("route").setData(sel.payload.geojson as GeoJSON.GeoJSON);
-    });
-    box.appendChild(card);
-  }
+  render(
+    h(OptionCards, {
+      options: trip.options,
+      selectedId: trip.selectedId,
+      focusId,
+      gradeColors: GRADE_COLORS,
+      gradeText: GRADE_TEXT,
+      onSelect: (id, keepFocus) => {
+        // the cards are redrawn when the panel repaints; keep the focus with
+        // the choice rather than dropping it on the page
+        if (keepFocus) optionToFocus = id;
+        selectOption(id);
+      },
+      // hovering a card previews that route on the map; leaving puts the
+      // chosen one back
+      onPreview: (o) => {
+        const shown = o ?? trip.selected;
+        if (shown) getSource("route").setData(shown.payload.geojson as GeoJSON.GeoJSON);
+      },
+    }),
+    box,
+  );
 }
 
 // ---------------------------------------------------------------------------
