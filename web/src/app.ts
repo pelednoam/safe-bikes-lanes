@@ -128,6 +128,7 @@ import { Trip, type TripSnapshot } from "./trip.js";
 import { h, render } from "preact";
 import { type Headline, NavHeadline, NavTripLine, type TripLine } from "./ui/NavBanner.js";
 import { OptionCards } from "./ui/OptionCards.js";
+import { type GradeView, SearchResults, type SearchRowView } from "./ui/SearchResults.js";
 import { Cautions, ClassBar, ClassKey, WhyList } from "./ui/RouteSummary.js";
 import type { RoutingApi, WirePrefs } from "./routing.js";
 import { WORKER_FAILED, wrap } from "./rpc.js";
@@ -2078,7 +2079,7 @@ async function searchAddress(query: string): Promise<NominatimResult[]> {
 let avoidRevision = 0;
 /** The rows currently on screen, so their letters can be withdrawn and redone
  * when the answer they state stops being true. */
-let gradedRows: { lngLat: [number, number]; badge: HTMLElement; sub: HTMLElement }[] = [];
+let gradedRows: { key: string; lngLat: [number, number] }[] = [];
 
 /** The letters on screen describe routes from a particular start under
  * particular settings. When either changes they are answers to a question
@@ -2090,17 +2091,13 @@ function regradeVisible(): void {
   // — a stall in guidance while someone is riding, to refresh a search list
   // that isn't even on screen.
   if (navActive) return;
+  // the list is gone, or is another list: nothing to redo
+  const listed = new Set(searchView.rows.map((r) => r.key));
+  if (!gradedRows.every((r) => listed.has(r.key))) return;
   window.__regradesStarted = (window.__regradesStarted ?? 0) + 1;
-  for (const row of gradedRows) {
-    if (!row.badge.isConnected) return; // the list is gone; nothing to redo
-    row.badge.textContent = "·";
-    row.badge.style.background = "";
-    // the old letter goes from the tooltip and the label too, not just the pixel
-    row.badge.removeAttribute("title");
-    row.badge.removeAttribute("aria-label");
-    showGrading(row);
-    row.sub.textContent = "checking the safest way…";
-  }
+  // the old letters go, from the tooltip and the label too, not just the pixel
+  for (const row of gradedRows) searchView.grades.set(row.key, { state: "pending" });
+  paintSearch();
   void gradeSearchResults(gradedRows);
 }
 
@@ -2109,28 +2106,19 @@ function regradeVisible(): void {
  * The badge went but the subtitle kept saying "checking the safest way…", so a
  * result the router couldn't reach sat there claiming a computation was still
  * running. Nothing is a better answer than a promise that never resolves. */
-function clearGrading(row: { badge: HTMLElement; sub: HTMLElement }): void {
-  // Hidden, not removed. Grading resolves after the list is already on screen
-  // and being tapped; removing elements re-flowed the rows under the finger
-  // that was reaching for one.
-  row.badge.style.visibility = "hidden";
-  // What the place is and how far stays, when the row knows it: a row that
-  // cannot be graded yet is still a useful row, and blanking the only line under
-  // the name left it looking broken rather than ungraded.
-  const where = row.sub.dataset["where"] ?? "";
-  row.sub.style.visibility = where === "" ? "hidden" : "visible";
-  row.sub.textContent = where;
-  // the letter is withdrawn from assistive technology too, not just from view
-  row.badge.removeAttribute("title");
-  row.badge.removeAttribute("aria-label");
+function clearGrading(row: { key: string }): void {
+  searchView.grades.set(row.key, { state: "hidden" });
+  paintSearch();
 }
 
 /** Put a row back in play. Without this, hiding was permanent: search with no
  * start, then set one, and the rows stayed blank for ever because nothing ever
  * undid the visibility. */
-function showGrading(row: { badge: HTMLElement; sub: HTMLElement }): void {
-  row.badge.style.visibility = "";
-  row.sub.style.visibility = "";
+function showGrading(row: { key: string }): void {
+  if (searchView.grades.get(row.key)?.state === "hidden") {
+    searchView.grades.set(row.key, { state: "pending" });
+    paintSearch();
+  }
 }
 
 /** Cancels grading when a new search lands: five routes take a moment, and the
@@ -2149,9 +2137,7 @@ const gradeCache = new Map<string, { grade: SafetyGrade; meters: number; minutes
  * a corridor's worth of tiles and the rest are close to free, where five in
  * parallel would fetch five times over.
  */
-async function gradeSearchResults(
-  rows: { lngLat: [number, number]; badge: HTMLElement; sub: HTMLElement }[],
-): Promise<void> {
+async function gradeSearchResults(rows: { key: string; lngLat: [number, number] }[]): Promise<void> {
   const ticket = gradeLane.begin();
   gradedRows = rows;
   // One snapshot of every routing input, taken before the first await. Reading
@@ -2229,12 +2215,8 @@ async function gradeSearchResults(
       }
     }
     if (ticket.stale()) return;
-    row.badge.textContent = hit.grade;
-    row.badge.style.background = GRADE_COLORS[hit.grade];
-    row.badge.style.color = GRADE_TEXT[hit.grade];
-    row.badge.title = `Safest route here grades ${hit.grade}`;
-    row.badge.setAttribute("aria-label", `safest route grades ${hit.grade}`);
-    row.sub.textContent = `${fmtDist(hit.meters)} · ${hit.minutes} min by the safest way`;
+    searchView.grades.set(row.key, { state: "graded", grade: hit.grade, meters: hit.meters, minutes: hit.minutes });
+    paintSearch();
   }
 }
 
@@ -2263,94 +2245,114 @@ function geocoderCandidates(results: NominatimResult[]): Candidate[] {
   return out;
 }
 
+/** The search list, which is all the list is: drawn from here
+ * (src/ui/SearchResults.tsx). Grading, the arrow keys and every way of
+ * closing the list change this and redraw it, instead of reaching into rows
+ * that a keystroke or the geocoder may already have replaced. */
+const searchView: {
+  rows: SearchRowView[];
+  target: "start" | "end";
+  active: string | null;
+  grades: Map<string, GradeView>;
+  message: string | null;
+} = { rows: [], target: "end", active: null, grades: new Map(), message: null };
+
+function paintSearch(): void {
+  render(
+    h(SearchResults, {
+      rows: searchView.rows,
+      target: searchView.target,
+      active: searchView.active,
+      grades: searchView.grades,
+      message: searchView.message,
+      gradeColors: GRADE_COLORS,
+      gradeText: GRADE_TEXT,
+      onChoose: chooseSearchRow,
+      onSave: (row) => {
+        promptSavePlace(row.lngLat[0], row.lngLat[1]);
+        clearSearchResults();
+      },
+    }),
+    el<HTMLDivElement>("search-results"),
+  );
+}
+
+/** Nothing listed: the list is going away. */
+function clearSearchResults(): void {
+  gradeLane.cancel(); // stop routing for a list that is gone
+  searchView.rows = [];
+  searchView.message = null;
+  searchView.active = null;
+  searchView.grades = new Map();
+  paintSearch();
+}
+
+/** Whether there is anything in the list at all, rows or a message. */
+function searchListShown(): boolean {
+  return searchView.rows.length > 0 || searchView.message !== null;
+}
+
 function renderSearchResults(rows: Ranked[], target: "start" | "end" = "end"): void {
-  const box = el<HTMLDivElement>("search-results");
-  box.innerHTML = "";
   gradeLane.cancel(); // abandon grading for whatever list was here before
+  searchView.target = target;
   if (rows.length === 0) {
-    box.textContent = "no results in this area";
+    searchView.rows = [];
+    searchView.grades = new Map();
+    searchView.message = "no results in this area";
+    paintSearch();
     announce("no results in this area", 700);
     return;
   }
   announce(`${rows.length} place${rows.length === 1 ? "" : "s"} found`, 700);
-  const grading: { lngLat: [number, number]; badge: HTMLElement; sub: HTMLElement }[] = [];
-  for (const r of rows) {
-    const row = document.createElement("div");
-    row.className = "search-row";
-    // Identity, so an arrow-key selection survives the list being rebuilt when
-    // the geocoder answers: without it the highlight was destroyed with the DOM
-    // and Enter silently took the first row instead of the chosen one.
-    row.dataset["key"] = `${r.name}|${r.lon.toFixed(5)},${r.lat.toFixed(5)}`;
-    const short = r.name;
-    const text = document.createElement("span");
-    text.className = "search-text";
-    const name = document.createElement("span");
-    name.textContent = short;
-    name.title = [r.name, r.context].filter((p) => p !== undefined && p !== "").join(" — ");
-    const sub = document.createElement("small");
-    sub.className = "search-sub";
-    // What this place is and how far, until the grade replaces it. The old row
-    // said "checking the safest way…" and nothing else, so a list of five said
-    // the same thing five times while you waited.
-    const where = describeRow(r, (m) => fmtDist(m));
-    sub.textContent = where === "" ? "checking the safest way…" : where;
-    sub.dataset["where"] = where;
-    text.appendChild(name);
-    text.appendChild(sub);
-    row.appendChild(text);
+  const grades = new Map<string, GradeView>();
+  const grading: { key: string; lngLat: [number, number] }[] = [];
+  searchView.rows = rows.map((r) => {
+    // Identity, so an arrow-key selection survives the list being redrawn when
+    // the geocoder answers: without it Enter took the first row, not the chosen.
+    const key = `${r.name}|${r.lon.toFixed(5)},${r.lat.toFixed(5)}`;
     const lngLat: [number, number] = [r.lon, r.lat];
     // Still checked, for every source. Saved places and recent trips come from
-    // localStorage, which is editable and survives across app versions, and a NaN
-    // here reaches the router and the route cache key as a coordinate. I had
-    // replaced this with `true` on the grounds that the geocoder path filters
-    // already, which left the other four sources unguarded.
+    // localStorage, which is editable and survives across app versions, and a
+    // NaN here reaches the router and the route cache key as a coordinate.
     const usable = Number.isFinite(lngLat[0]) && Number.isFinite(lngLat[1]);
-    const badge = document.createElement("span");
-    badge.className = "search-grade";
-    badge.textContent = "·";
-    row.appendChild(badge);
-    // a malformed answer becomes NaN, which would reach the router and the
-    // cache key as a coordinate
-    if (usable) grading.push({ lngLat, badge, sub });
-    else clearGrading({ badge, sub });
-    // the whole row picks the field you searched from — no aiming at a tiny
-    // button, which matters on a phone
-    const choose = (): void => {
-      setPoint(target, lngLat);
-      const field = el<HTMLInputElement>(target === "start" ? "from-field" : "search");
-      field.value = short;
-      field.classList.remove("picking");
-      gradeLane.cancel(); // the list is going away; stop routing for it
-      if (target === "start") activeField = "end";
-      syncOD();
-      map.flyTo({ center: lngLat, zoom: 15 });
-      box.innerHTML = "";
-      // Close the keyboard and give the map back: the place just chosen, and the
-      // route about to be drawn to it, are what the rider wants to see now.
-      field.blur();
-      leaveSearchMode(true);
+    // Only for destinations. A grade on the start-picker list would describe the
+    // route from the CURRENT start to a candidate start: a journey nobody is
+    // taking, labelled as if they were.
+    const graded = usable && target === "end";
+    grades.set(key, { state: graded ? "pending" : "hidden" });
+    if (graded) grading.push({ key, lngLat });
+    return {
+      key,
+      name: r.name,
+      title: [r.name, r.context].filter((p) => p !== undefined && p !== "").join(" — "),
+      // What this place is and how far, until the grade replaces it. The old
+      // row said "checking the safest way…" and nothing else, so a list of five
+      // said the same thing five times while you waited.
+      where: describeRow(r, (m) => fmtDist(m)),
+      lngLat,
     };
-    text.style.cursor = "pointer";
-    text.addEventListener("click", choose);
-    const use = document.createElement("button");
-    use.textContent = target === "start" ? "start" : "go";
-    use.addEventListener("click", choose);
-    row.appendChild(use);
-    const star = document.createElement("button");
-    star.textContent = "☆";
-    star.title = "save as a place (Home, Work, …)";
-    star.addEventListener("click", () => {
-      promptSavePlace(lngLat[0], lngLat[1]);
-      box.innerHTML = "";
-    });
-    row.appendChild(star);
-    box.appendChild(row);
-  }
-  // Only for destinations. A grade on the start-picker list would describe the
-  // route from the CURRENT start to a candidate start — a journey nobody is
-  // taking, labelled as if they were.
-  if (target === "end") scheduleGrading(grading);
-  else for (const r of grading) clearGrading(r);
+  });
+  searchView.grades = grades;
+  searchView.message = null;
+  paintSearch();
+  if (grading.length > 0) scheduleGrading(grading);
+}
+
+/** A row picked: its place fills the field the list was searched from. */
+function chooseSearchRow(row: SearchRowView): void {
+  const target = searchView.target;
+  setPoint(target, row.lngLat);
+  const field = el<HTMLInputElement>(target === "start" ? "from-field" : "search");
+  field.value = row.name;
+  field.classList.remove("picking");
+  if (target === "start") activeField = "end";
+  syncOD();
+  map.flyTo({ center: row.lngLat, zoom: 15 });
+  clearSearchResults();
+  // Close the keyboard and give the map back: the place just chosen, and the
+  // route about to be drawn to it, are what the rider wants to see now.
+  field.blur();
+  leaveSearchMode(true);
 }
 
 let gradeTimer: number | undefined;
@@ -2363,9 +2365,7 @@ let gradeTimer: number | undefined;
  * that also fetches routing tiles. The rows appear instantly; their letters arrive
  * a moment after the typing stops, which is when they can be read anyway.
  */
-function scheduleGrading(
-  rows: { lngLat: [number, number]; badge: HTMLElement; sub: HTMLElement }[],
-): void {
+function scheduleGrading(rows: { key: string; lngLat: [number, number] }[]): void {
   window.clearTimeout(gradeTimer);
   gradeTimer = window.setTimeout(() => {
     void gradeSearchResults(rows);
@@ -3707,7 +3707,7 @@ el<HTMLButtonElement>("from-locate").addEventListener("click", () => {
   const f = el<HTMLInputElement>("from-field");
   f.classList.remove("picking");
   f.value = "";
-  el<HTMLDivElement>("search-results").innerHTML = "";
+  clearSearchResults();
   syncOD();
   void requestRoute();
 });
@@ -3782,7 +3782,7 @@ function resetPlan(clearLink = true): void {
   activeField = "end";
   el<HTMLInputElement>("from-field").classList.remove("picking");
   el<HTMLInputElement>("from-field").value = "";
-  el<HTMLDivElement>("search-results").innerHTML = "";
+  clearSearchResults();
   syncOD();
   trip.clear();
   renderOptions();
@@ -3968,15 +3968,10 @@ function attachSearch(input: HTMLInputElement, target: "start" | "end"): void {
   /** The row the arrow keys are on, by identity rather than by position. */
   let activeKey: string | null = null;
 
-  const rowsNow = (): HTMLElement[] => [
-    ...el<HTMLDivElement>("search-results").querySelectorAll<HTMLElement>(".search-row"),
-  ];
-
   const highlight = (key: string | null): void => {
     activeKey = key;
-    for (const row of rowsNow()) {
-      row.classList.toggle("active", key !== null && row.dataset["key"] === key);
-    }
+    searchView.active = key;
+    paintSearch();
   };
 
   const show = (q: string): void => {
@@ -3990,7 +3985,7 @@ function attachSearch(input: HTMLInputElement, target: "start" | "end"): void {
     renderSearchResults(rankSearch(q, candidates, { origin, limit: SEARCH_ROWS }), target);
     // put the selection back where it was, or drop it if that place is gone —
     // never leave it pointing at whatever row inherited the position
-    highlight(rowsNow().some((r) => r.dataset["key"] === activeKey) ? activeKey : null);
+    highlight(searchView.rows.some((r) => r.key === activeKey) ? activeKey : null);
   };
 
   input.addEventListener("focus", () => enterSearchMode(input));
@@ -4003,7 +3998,7 @@ function attachSearch(input: HTMLInputElement, target: "start" | "end"): void {
     window.setTimeout(() => {
       const active = document.activeElement;
       if (active === el("search") || active === el("from-field")) return;
-      if (el<HTMLDivElement>("search-results").childElementCount === 0) leaveSearchMode(false);
+      if (!searchListShown()) leaveSearchMode(false);
     }, 0);
   });
 
@@ -4012,7 +4007,7 @@ function attachSearch(input: HTMLInputElement, target: "start" | "end"): void {
     searchOwner = input;
     const q = input.value.trim();
     if (q === "") {
-      el<HTMLDivElement>("search-results").innerHTML = "";
+      clearSearchResults();
       return;
     }
     // Local first, on every keystroke, from the first letter. This is the part
@@ -4024,7 +4019,7 @@ function attachSearch(input: HTMLInputElement, target: "start" | "end"): void {
 
     // Then the geocoder, for house numbers and businesses we do not have — as a
     // fallback, and on its terms. See worthGeocoding and GEOCODE_MIN_GAP_MS.
-    const localHits = el<HTMLDivElement>("search-results").querySelectorAll(".search-row").length;
+    const localHits = searchView.rows.length;
     if (!worthGeocoding(q, localHits)) return;
     timer = window.setTimeout(() => {
       const wait = geocodeDelayMs(Date.now(), lastGeocodeAt);
@@ -4060,9 +4055,9 @@ function attachSearch(input: HTMLInputElement, target: "start" | "end"): void {
           // field it was asked for: a slow failure used to be able to write over a
           // list the reader had since moved on from.
           if (input.value.trim() !== q || searchOwner !== input) return;
-          const box = el<HTMLDivElement>("search-results");
-          if (box.querySelector(".search-row") === null) {
-            box.textContent = "search unavailable";
+          if (searchView.rows.length === 0) {
+            searchView.message = "search unavailable";
+            paintSearch();
           }
         });
     }, GEOCODE_DEBOUNCE_MS);
@@ -4071,22 +4066,28 @@ function attachSearch(input: HTMLInputElement, target: "start" | "end"): void {
   // Arrow keys and Enter, because a list you can only reach with a mouse is a
   // list you cannot use one-handed.
   input.addEventListener("keydown", (e: KeyboardEvent) => {
-    const rows = rowsNow();
+    // The keys walk the list as the search's state has it, not as it was drawn.
+    const rows = searchView.rows;
     if (rows.length === 0) return;
-    const current = rows.findIndex((r) => r.classList.contains("active"));
+    const current = rows.findIndex((r) => r.key === searchView.active);
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
       const next =
         e.key === "ArrowDown" ? Math.min(current + 1, rows.length - 1) : Math.max(current - 1, 0);
       const chosen = rows[next === -1 ? 0 : next];
-      highlight(chosen?.dataset["key"] ?? null);
-      chosen?.scrollIntoView({ block: "nearest" });
+      highlight(chosen?.key ?? null);
+      if (chosen !== undefined) {
+        const drawn = el<HTMLDivElement>("search-results").querySelector<HTMLElement>(
+          `.search-row[data-key="${CSS.escape(chosen.key)}"]`,
+        );
+        drawn?.scrollIntoView({ block: "nearest" });
+      }
     } else if (e.key === "Enter") {
       e.preventDefault();
       // Enter with nothing highlighted takes the first row, which is what the
       // ranking is for: the best answer should need no aiming at all.
       const chosen = rows[current === -1 ? 0 : current];
-      chosen?.querySelector<HTMLElement>(".search-text")?.click();
+      if (chosen !== undefined) chooseSearchRow(chosen);
     } else if (e.key === "Escape" && activeKey !== null) {
       // Step back out of the list without wiping the query — and show whatever the
       // geocoder answered while a row was selected, which was deliberately held

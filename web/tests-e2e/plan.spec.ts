@@ -851,6 +851,13 @@ test("changing a routing setting withdraws the letters it invalidated", async ({
   const prefs = page.locator("details.section", { has: page.locator("#prefer-flat") });
   await prefs.locator("summary").click();
   await page.locator("#avoid-lane").check();
+  // That change withdrew the letter too, and under load its regrade can still be
+  // running. Watching from here would then see only the letter arriving: the
+  // withdrawal the next change makes puts up a "·" that is already there, and
+  // the list, drawn from state, doesn't redraw what hasn't changed.
+  await expect.poll(async () => (await badge.innerText()).trim(), { timeout: budget(60_000) }).toMatch(
+    /^[ABCDF]$/,
+  );
 
   // Recorded rather than polled: with the corridor tiles already loaded the
   // recomputation takes milliseconds, so a poll can miss the withdrawal
