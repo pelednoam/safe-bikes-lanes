@@ -130,6 +130,7 @@ import { type GradeView, SearchResults, type SearchRowView } from "./ui/SearchRe
 import { Cautions, ClassBar, ClassKey, Ribbon, WhyList } from "./ui/RouteSummary.js";
 import { RecentRoutes, SavedPlaces } from "./ui/PlacesAndRecent.js";
 import type { RoutingApi, WirePrefs } from "./routing.js";
+import { reportCaught, startReporting } from "./report.js";
 import { WORKER_FAILED, wrap } from "./rpc.js";
 import { type SpeakPriority, SpeechQueue } from "./speech.js";
 import { loopRejoinPoint, payloadLength, rejoinOption } from "./rejoin.js";
@@ -160,6 +161,9 @@ interface NominatimResult {
 // compat.js checks for it at DOMContentLoaded, and without it tells the rider
 // their browser can't run the app, rather than leaving a blank map.
 window.__appStarted = true;
+// and then report what goes wrong from here on (src/report.ts: off unless the
+// build names an endpoint)
+startReporting("planner");
 
 // ---------------------------------------------------------------------------
 // constants
@@ -708,6 +712,7 @@ const manifestReady: Promise<void> = dataReady
         // a route finder that never started is not a slow network: waiting
         // and retrying won't bring it back, and the rider should know
         if (err instanceof Error && err.message === WORKER_FAILED) {
+          reportCaught("worker", err);
           const errBox = el<HTMLDivElement>("error");
           errBox.textContent = `Can't plan routes: ${WORKER_FAILED}.`;
           errBox.dataset["from"] = "dataload";

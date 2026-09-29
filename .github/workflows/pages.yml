@@ -25,6 +25,10 @@ jobs:
     env:
       # the site's build stamp (vite.config.ts); the app's is its release tag
       APP_VERSION: web
+      # where the pages send error reports (reports/, src/report.ts): a
+      # repository variable, empty until the endpoint is deployed, and then the
+      # pages send none. Under the browser tests they send none either way.
+      REPORT_URL: ${{ vars.REPORT_URL }}
     permissions:
       contents: read
     steps:

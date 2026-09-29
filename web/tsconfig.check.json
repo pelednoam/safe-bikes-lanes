@@ -2,7 +2,9 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": true,
-    "rootDir": ".",
+    // the repository, not web/: tests/report.test.ts holds the app's reports to
+    // the endpoint's own check (reports/src/report.ts). Nothing is emitted.
+    "rootDir": "..",
     // The tests run in Node (fs, path, process, Buffer). TypeScript 6 stopped
     // loading every installed @types package by default, so this says so.
     // Only here: src/ runs in a browser, and tsconfig.json leaving Node's types

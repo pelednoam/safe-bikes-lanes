@@ -1,0 +1,32 @@
+# The error-report endpoint (src/worker.ts). Deployed by
+# .github/workflows/reports.yml, which also creates the KV namespace the first
+# time and writes its id in below: KV_ID is replaced there, never committed.
+name = "safe-bikes-reports"
+main = "src/worker.ts"
+compatibility_date = "2026-09-01"
+workers_dev = true
+
+[vars]
+REPO = "pelednoam/safe-bikes-lanes"
+# The site, and the Android app (Capacitor serves it from https://localhost).
+ALLOWED_ORIGINS = "https://pelednoam.github.io,https://localhost"
+# Reports filed a day, across everyone: enough for any real day, and a ceiling
+# for a loop in the app. Also well inside KV's free 1,000 writes a day.
+DAILY_CAP = "200"
+# New issues a day: real new bugs arrive a few at a time, and the Origin check
+# can't stop a script that claims to be the site.
+DAILY_NEW_CAP = "20"
+
+[[kv_namespaces]]
+binding = "REPORTS"
+id = "KV_ID"
+
+# Per sender: a page reports at most five errors a load (web/src/report.ts),
+# so ten a minute from one address is a loop, or not the app.
+[[ratelimits]]
+name = "LIMITER"
+namespace_id = "1001"
+
+  [ratelimits.simple]
+  limit = 10
+  period = 60

@@ -12,7 +12,10 @@ import type { Map as MLMap, Marker } from "maplibre-gl";
 
 import { BASEMAP_SOURCE, basemapSource, createBasemap, glyphsUrl } from "./basemap.js";
 import { maplibregl } from "./maplibre.js";
+import { startReporting } from "./report.js";
 import { fmtDist } from "./units.js";
+
+startReporting("build");
 
 declare global {
   interface Window {

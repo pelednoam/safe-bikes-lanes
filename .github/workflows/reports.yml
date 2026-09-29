@@ -1,0 +1,95 @@
+name: Error-report endpoint
+
+# The Cloudflare Worker the app sends its error reports to (reports/), which
+# files them as issues here. Tested on every change to it; deployed from main
+# once the Cloudflare secrets exist. Until then the deploy says so and stops,
+# and the app, built without REPORT_URL, sends nothing.
+on:
+  push:
+    branches: [main]
+    paths: ["reports/**", ".github/workflows/reports.yml"]
+  pull_request:
+    paths: ["reports/**", ".github/workflows/reports.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reports
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: reports
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm run check && npm test
+
+  deploy:
+    needs: test
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: reports
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      WRANGLER_SEND_METRICS: "false"
+    steps:
+      - name: Is Cloudflare set up?
+        id: ready
+        env:
+          ISSUES_TOKEN: ${{ secrets.REPORTS_GITHUB_TOKEN }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ] || [ -z "$ISSUES_TOKEN" ]; then
+            echo "::notice::Not deployed: set CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID and REPORTS_GITHUB_TOKEN (see reports/README.md)."
+            echo "go=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          fi
+        working-directory: .
+      - if: steps.ready.outputs.go == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - if: steps.ready.outputs.go == 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      # Only wrangler runs here, with the Cloudflare token: no install scripts,
+      # and nothing of the repository's but the Worker's own files.
+      - if: steps.ready.outputs.go == 'true'
+        run: npm ci --ignore-scripts
+      - name: The KV namespace, created the first time
+        if: steps.ready.outputs.go == 'true'
+        run: |
+          find_id() {
+            npx wrangler kv namespace list |
+              node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const l=JSON.parse(s.slice(s.indexOf("[")));const n=l.find(x=>x.title==="safe-bikes-reports"||x.title.endsWith("-safe-bikes-reports"));process.stdout.write(n?n.id:"")})'
+          }
+          id=$(find_id)
+          if [ -z "$id" ]; then
+            npx wrangler kv namespace create safe-bikes-reports
+            id=$(find_id)
+          fi
+          [ -n "$id" ] || { echo "::error::no KV namespace"; exit 1; }
+          sed -i "s/^id = \"KV_ID\"$/id = \"$id\"/" wrangler.toml
+          grep -q "id = \"$id\"" wrangler.toml
+      - name: Deploy
+        if: steps.ready.outputs.go == 'true'
+        env:
+          ISSUES_TOKEN: ${{ secrets.REPORTS_GITHUB_TOKEN }}
+        run: |
+          npx wrangler deploy
+          printf '%s' "$ISSUES_TOKEN" | npx wrangler secret put GITHUB_TOKEN

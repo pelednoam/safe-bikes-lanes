@@ -4,6 +4,8 @@
 declare const __BUILD_VERSION__: string;
 declare const __BUILD_TIME__: string;
 declare const __BUILD_COMMIT__: string;
+/** Where error reports go (src/report.ts); "" in a build given no REPORT_URL. */
+declare const __REPORT_URL__: string;
 
 /** Stylesheets imported for their side effect; Vite bundles them. */
 declare module "*.css";

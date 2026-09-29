@@ -36,6 +36,33 @@ function pages(): Record<string, string> {
   return input;
 }
 
+/** Where the app sends its error reports (src/report.ts, the Worker in
+ * reports/), or "" to send none: the default, so a local or test build
+ * reports nothing. Checked here, because it also goes into every page's
+ * Content-Security-Policy. */
+function reportUrl(): string {
+  const url = process.env["REPORT_URL"] ?? "";
+  if (url === "") return "";
+  const parsed = new URL(url);
+  if (parsed.protocol !== "https:") throw new Error(`REPORT_URL must be https: ${url}`);
+  return url;
+}
+const REPORT_URL = reportUrl();
+
+/** The report endpoint's origin, added to each page's connect-src, which
+ * otherwise blocks it: a page that connects nowhere (no connect-src) sends no
+ * reports and is left alone. */
+function reportCsp(): Plugin {
+  return {
+    name: "report-csp",
+    transformIndexHtml: (html) => {
+      if (REPORT_URL === "") return html;
+      const origin = new URL(REPORT_URL).origin;
+      return html.replace(/(connect-src [^;"]*)/, `$1 ${origin}`);
+    },
+  };
+}
+
 function gitCommit(): string {
   try {
     return execSync("git rev-parse --short HEAD", { cwd: WEB }).toString().trim();
@@ -137,6 +164,7 @@ export default defineConfig({
       process.env["BUILD_TIME"] ?? `${new Date().toISOString().slice(0, 19)}Z`,
     ),
     __BUILD_COMMIT__: JSON.stringify(process.env["BUILD_COMMIT"] ?? gitCommit()),
+    __REPORT_URL__: JSON.stringify(REPORT_URL),
   },
   build: {
     outDir: OUT,
@@ -163,5 +191,5 @@ export default defineConfig({
   // the parts of the page drawn from state are Preact components (src/ui/);
   // said here as well as in tsconfig.json, so the build and the tests agree
   oxc: { jsx: { runtime: "automatic", importSource: "preact" } },
-  plugins: [noMapLibreTags(), precache()],
+  plugins: [noMapLibreTags(), precache(), reportCsp()],
 });

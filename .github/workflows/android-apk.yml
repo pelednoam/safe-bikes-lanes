@@ -81,6 +81,8 @@ jobs:
         # committed in git.
         env:
           APP_VERSION: ${{ steps.version.outputs.app_version }}
+          # the app reports its errors where the site does (pages.yml)
+          REPORT_URL: ${{ vars.REPORT_URL }}
         run: npm run app:sync
         working-directory: web
       - name: Restore the signing key

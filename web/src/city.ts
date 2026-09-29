@@ -21,6 +21,9 @@ import type { SegmentProps } from "./segment.js";
 import type { Map as MLMap } from "maplibre-gl";
 
 import { maplibregl } from "./maplibre.js";
+import { startReporting } from "./report.js";
+
+startReporting("city");
 
 declare global {
   interface Window {
