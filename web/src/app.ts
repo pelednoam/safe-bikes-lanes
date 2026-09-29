@@ -128,6 +128,7 @@ import { Trip, type TripSnapshot } from "./trip.js";
 import { h, render } from "preact";
 import { type Headline, NavHeadline, NavTripLine, type TripLine } from "./ui/NavBanner.js";
 import { OptionCards } from "./ui/OptionCards.js";
+import { Cautions, ClassBar, ClassKey, WhyList } from "./ui/RouteSummary.js";
 import type { RoutingApi, WirePrefs } from "./routing.js";
 import { WORKER_FAILED, wrap } from "./rpc.js";
 import { type SpeakPriority, SpeechQueue } from "./speech.js";
@@ -1605,73 +1606,29 @@ function showSummary(option: RouteOption): void {
     s.shortest_meters === undefined || (s.detour_pct ?? 0) <= 0
       ? "same"
       : `+${s.detour_pct}% (${fmtDist(s.shortest_meters)})`;
-  const bar = el<HTMLDivElement>("classbar");
-  bar.innerHTML = "";
-  const key = el<HTMLDivElement>("class-key");
-  key.innerHTML = "";
-  const total = Object.values(s.by_class_m).reduce((a, m) => a + m, 0);
-  for (const [cls, m] of Object.entries(s.by_class_m) as [ProtectionClass, number][]) {
-    const seg = document.createElement("i");
-    // the class's mark as a pattern, so the bar reads without its colours
-    seg.className = `pat-${cls}`;
-    seg.style.cssText = `flex:${m};background-color:${CLASS_COLORS[cls] ?? "#999"}`;
-    seg.title = `${CLASS_LABELS[cls] ?? cls}: ${fmtDist(m)}`;
-    bar.appendChild(seg);
-    // and in words, which a title attribute is not on a phone or to a keyboard
-    const pct = total > 0 ? Math.round((100 * m) / total) : 0;
-    if (pct < 1) continue;
-    const item = document.createElement("span");
-    item.innerHTML = `${classSwatch(cls, 22, 12)} `;
-    item.append(`${CLASS_LABELS[cls] ?? cls} ${pct}%`);
-    key.appendChild(item);
-  }
+  const parts = (Object.entries(s.by_class_m) as [ProtectionClass, number][]).map(([cls, meters]) => ({
+    cls,
+    meters,
+  }));
+  const breakdown = { parts, colors: CLASS_COLORS, labels: CLASS_LABELS };
+  render(h(ClassBar, breakdown), el<HTMLDivElement>("classbar"));
+  render(
+    h(ClassKey, { ...breakdown, swatch: (cls: ProtectionClass) => classSwatch(cls, 22, 12) }),
+    el<HTMLDivElement>("class-key"),
+  );
   renderRibbon(option);
-  const cautions = el<HTMLDivElement>("cautions");
-  cautions.innerHTML = "";
-  if (s.cautions.length === 0) {
-    const div = document.createElement("div");
-    div.className = "all-clear";
-    div.textContent = "✓ no stressful segments";
-    cautions.appendChild(div);
-  }
-  for (const c of s.cautions) {
-    const div = document.createElement("div");
-    div.className = "caution";
-    div.textContent = `⚠ ${c.name}: ${fmtDist(c.meters)} of ${CLASS_LABELS[c.cls] ?? c.cls} `;
-    if (c.lon !== undefined && c.lat !== undefined) {
-      const lon = c.lon;
-      const lat = c.lat;
-      const a = document.createElement("a");
-      a.href = `https://maps.google.com/maps?q=&layer=c&cbll=${lat},${lon}`;
-      a.target = "_blank";
-      a.rel = "noopener";
-      a.textContent = "street view";
-      div.appendChild(a);
-      if (mapillaryToken !== "") {
-        div.appendChild(document.createTextNode(" · "));
-        const photo = document.createElement("a");
-        photo.href = "#";
-        photo.textContent = "📷 photo";
-        photo.title = "recent street-level photo (Mapillary)";
-        photo.addEventListener("click", (ev: Event) => {
-          ev.preventDefault();
-          void showMapillaryPreview(lon, lat);
-        });
-        div.appendChild(photo);
-      }
-    }
-    cautions.appendChild(div);
-  }
-  const why = el<HTMLDetailsElement>("why");
-  const whyList = el<HTMLUListElement>("why-list");
-  whyList.innerHTML = "";
+  render(
+    h(Cautions, {
+      cautions: s.cautions,
+      labels: CLASS_LABELS,
+      photos: mapillaryToken !== "",
+      onPhoto: (lon: number, lat: number) => void showMapillaryPreview(lon, lat),
+    }),
+    el<HTMLDivElement>("cautions"),
+  );
   const explanation = s.explanation ?? [];
-  why.style.display = explanation.length > 0 ? "block" : "none";
-  for (const reason of explanation) {
-    const li = document.createElement("li");
-    li.textContent = reason;
-    whyList.appendChild(li);
-  }
+  el<HTMLDetailsElement>("why").style.display = explanation.length > 0 ? "block" : "none";
+  render(h(WhyList, { reasons: explanation }), el<HTMLUListElement>("why-list"));
 
   // daylight check: warn when the ride would end near or after sunset
   const sunsetBox = el<HTMLDivElement>("sunset");
