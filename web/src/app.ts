@@ -124,6 +124,7 @@ import { NetworkTiles } from "./tiles.js";
 import { withRetry } from "./retry.js";
 import { COVERAGE, HOME, outsideCoverage } from "./coverage.js";
 import { Lane, type Ticket } from "./planner.js";
+import { Trip, type TripSnapshot } from "./trip.js";
 import type { RoutingApi, WirePrefs } from "./routing.js";
 import { WORKER_FAILED, wrap } from "./rpc.js";
 import { type SpeakPriority, SpeechQueue } from "./speech.js";
@@ -523,8 +524,9 @@ const tapTargets = new Map<TapLayer, TapTarget>();
 function onTap(layer: TapLayer, open: TapOpen, alsoSetsPoint = false): void {
   tapTargets.set(layer, { open, alsoSetsPoint });
 }
-let options: RouteOption[] = [];
-let selectedId: RouteOption["id"] | null = null;
+/** The route options on screen and the chosen one (trip.ts): a plan's answer
+ * is published with the ticket it was planned under, and refused if stale. */
+const trip = new Trip();
 let shedMode = false;
 let shedCenter: [number, number] | null = null;
 let sketchyMarks: [number, number][] = loadSketchy();
@@ -1221,17 +1223,16 @@ async function requestRoute(): Promise<void> {
       if (!mapped) throw new Error("this area isn't mapped for routing yet");
       found = await route();
     }
-    if (ticket.stale()) return;
     const fallback = found[0];
     if (!fallback) throw new Error("no route found");
-    options = found;
+    if (!trip.publish(ticket, found)) return;
     // an A-to-B trip replaces a round trip, and its stop
     poiMarker?.remove();
     poiMarker = null;
     loopParams = null;
     const wanted = pendingSelect;
     pendingSelect = null;
-    selectOption(wanted !== null && options.some((o) => o.id === wanted) ? wanted : fallback.id);
+    selectOption(wanted !== null && trip.options.some((o) => o.id === wanted) ? wanted : fallback.id);
     recordRecentRoute([s.lng, s.lat], [d.lng, d.lat]);
     revealSheet();
     frameRoute(fallback);
@@ -1240,8 +1241,7 @@ async function requestRoute(): Promise<void> {
     poiMarker?.remove();
     poiMarker = null;
     loopParams = null;
-    options = [];
-    selectedId = null;
+    trip.clear();
     renderOptions();
     clearOptionChips();
     errBox.textContent = plainError(err);
@@ -1324,7 +1324,7 @@ async function requestLoop(): Promise<void> {
     // a choice of loops, not a verdict: the runner-ups go in the same option
     // cards the point-to-point router uses, so picking between them is the
     // gesture the rider already knows
-    options = [option, ...more.map((m) => m.option)];
+    if (!trip.publish(ticket, [option, ...more.map((m) => m.option)])) return;
     loopParams = { km, kind };
     selectOption("loop");
     poiMarker?.remove();
@@ -1361,15 +1361,15 @@ function renderOptionChips(): void {
   clearOptionChips();
   const refocus = chipToFocus;
   chipToFocus = null;
-  if (options.length < 2) return; // no choice to make
-  options.forEach((o, i) => {
+  if (trip.options.length < 2) return; // no choice to make
+  trip.options.forEach((o, i) => {
     const coords = o.payload.geojson.features.flatMap((f) => f.geometry.coordinates);
     if (coords.length === 0) return;
     const frac = Math.min(0.9, 0.35 + i * 0.2);
     const pt = coords[Math.floor(coords.length * frac)] ?? coords[coords.length - 1];
     if (!pt) return;
     const chip = document.createElement("div");
-    chip.className = "opt-chip" + (o.id === selectedId ? " sel" : "");
+    chip.className = "opt-chip" + (o.id === trip.selectedId ? " sel" : "");
     chip.style.setProperty("--g", GRADE_COLORS[o.grade]);
     chip.style.setProperty("--gt", GRADE_TEXT[o.grade]);
     chip.textContent = `${o.grade} · ${o.payload.summary.minutes} min`;
@@ -1377,7 +1377,7 @@ function renderOptionChips(): void {
     // reachable and pressable from a keyboard, like the cards they mirror
     chip.tabIndex = 0;
     chip.setAttribute("role", "button");
-    chip.setAttribute("aria-pressed", String(o.id === selectedId));
+    chip.setAttribute("aria-pressed", String(o.id === trip.selectedId));
     chip.setAttribute(
       "aria-label",
       `${o.label}: grade ${o.grade}, ${o.payload.summary.minutes} minutes`,
@@ -1462,11 +1462,10 @@ function selectOption(id: RouteOption["id"]): void {
   // drawn route underneath (a mid-ride hazard mark re-plans) would show one
   // line while the voice read another, so keep them in step.
   const wasNavigating = navActive;
-  const chosen = options.find((o) => o.id === id);
-  if (!chosen) return;
-  selectedId = id;
+  if (!trip.select(id)) return;
+  const chosen = trip.selected as RouteOption;
   getSource("route").setData(chosen.payload.geojson as GeoJSON.GeoJSON);
-  const altFeatures = options
+  const altFeatures = trip.options
     .filter((o) => o.id !== id)
     .flatMap((o) => o.payload.geojson.features);
   getSource("alts").setData({
@@ -1485,7 +1484,7 @@ function selectOption(id: RouteOption["id"]): void {
     announce(
       `${chosen.label} route, grade ${chosen.grade}: ${fmtDist(s.meters)}, ${s.minutes} min, ` +
         `${s.pct_protected}% protected.` +
-        (options.length > 1 ? ` ${options.length} route options.` : ""),
+        (trip.options.length > 1 ? ` ${trip.options.length} route options.` : ""),
     );
   });
   if (wasNavigating && navActive) {
@@ -1500,7 +1499,7 @@ let optionToFocus: RouteOption["id"] | null = null;
 function renderOptions(): void {
   const box = el<HTMLDivElement>("options");
   box.innerHTML = "";
-  if (options.length === 0) {
+  if (trip.options.length === 0) {
     box.style.display = "none";
     return;
   }
@@ -1512,15 +1511,15 @@ function renderOptions(): void {
   box.setAttribute("aria-label", "Route options");
   const refocus = optionToFocus;
   optionToFocus = null;
-  if (options.length > 1) {
+  if (trip.options.length > 1) {
     const head = document.createElement("div");
     head.className = "options-head";
-    head.textContent = `${options.length} route options`;
+    head.textContent = `${trip.options.length} route options`;
     box.appendChild(head);
   }
-  for (const o of options) {
+  for (const o of trip.options) {
     const card = document.createElement("div");
-    card.className = "option-card" + (o.id === selectedId ? " selected" : "");
+    card.className = "option-card" + (o.id === trip.selectedId ? " selected" : "");
     card.title = o.gradeReason;
     const s = o.payload.summary;
     const badge = document.createElement("b");
@@ -1541,7 +1540,7 @@ function renderOptions(): void {
     // the selected card is the hero: just the headline numbers, since the
     // breakdown below it already spells out protected/quiet/climb
     stats.textContent =
-      o.id === selectedId
+      o.id === trip.selectedId
         ? `${fmtDist(s.meters)} · ${s.minutes} min · ${s.pct_protected}% protected`
         : `${fmtDist(s.meters)} · ${s.minutes} min · ${s.pct_protected}% protected` +
           ` · ↗ ${fmtClimb(s.climb_m ?? 0)}`;
@@ -1550,13 +1549,13 @@ function renderOptions(): void {
     card.addEventListener("click", () => {
       selectOption(o.id);
     });
-    const selected = o.id === selectedId;
+    const selected = o.id === trip.selectedId;
     card.setAttribute("role", "radio");
     card.setAttribute("aria-checked", String(selected));
     // one tab stop for the group, on the chosen one — the radio pattern
     card.tabIndex = selected ? 0 : -1;
     card.addEventListener("keydown", (ev: KeyboardEvent) => {
-      const i = options.findIndex((x) => x.id === o.id);
+      const i = trip.options.findIndex((x) => x.id === o.id);
       const step =
         ev.key === "ArrowDown" || ev.key === "ArrowRight"
           ? 1
@@ -1565,7 +1564,7 @@ function renderOptions(): void {
             : 0;
       const target =
         step !== 0
-          ? options[(i + step + options.length) % options.length]
+          ? trip.options[(i + step + trip.options.length) % trip.options.length]
           : ev.key === "Enter" || ev.key === " "
             ? o
             : undefined;
@@ -1582,7 +1581,7 @@ function renderOptions(): void {
       getSource("route").setData(o.payload.geojson as GeoJSON.GeoJSON);
     });
     card.addEventListener("mouseleave", () => {
-      const sel = options.find((x) => x.id === selectedId);
+      const sel = trip.selected;
       if (sel) getSource("route").setData(sel.payload.geojson as GeoJSON.GeoJSON);
     });
     box.appendChild(card);
@@ -1805,7 +1804,7 @@ function toldSaved(btn: HTMLElement, result: SaveResult): void {
 }
 
 el<HTMLButtonElement>("gpx").addEventListener("click", () => {
-  const sel = options.find((o) => o.id === selectedId);
+  const sel = trip.selected;
   if (!sel) return;
   const gpx = toGPX(sel.payload, `Family bike route (${sel.label})`);
   const saving = saveBlob(new Blob([gpx], { type: "application/gpx+xml" }), "family-bike-route.gpx");
@@ -1814,7 +1813,7 @@ el<HTMLButtonElement>("gpx").addEventListener("click", () => {
 });
 
 el<HTMLButtonElement>("print-cues").addEventListener("click", () => {
-  const sel = options.find((o) => o.id === selectedId);
+  const sel = trip.selected;
   if (!sel) return;
   const cues = buildCues(sel.payload);
   const s = sel.payload.summary;
@@ -1864,8 +1863,8 @@ function updateHash(): void {
     walkM: walkMaxM,
     avoid: [...avoidTypes],
     option:
-      selectedId === "safest" || selectedId === "balanced" || selectedId === "direct"
-        ? selectedId
+      trip.selectedId === "safest" || trip.selectedId === "balanced" || trip.selectedId === "direct"
+        ? trip.selectedId
         : null,
   });
   if (hash === null) return;
@@ -1965,7 +1964,7 @@ el<HTMLButtonElement>("share").addEventListener("click", () => {
 
 /** Label a just-planned route from its street names for the recent list. */
 function recordRecentRoute(s: [number, number], e: [number, number]): void {
-  const sel = options.find((o) => o.id === selectedId) ?? options[0];
+  const sel = trip.selected ?? trip.options[0];
   if (!sel) return;
   const names = sel.payload.geojson.features
     .map((f) => f.properties.name)
@@ -3883,8 +3882,7 @@ function resetPlan(clearLink = true): void {
   el<HTMLInputElement>("from-field").value = "";
   el<HTMLDivElement>("search-results").innerHTML = "";
   syncOD();
-  options = [];
-  selectedId = null;
+  trip.clear();
   renderOptions();
   getSource("route").setData(emptyFC());
   getSource("alts").setData(emptyFC());
@@ -4992,6 +4990,8 @@ async function rideOptionsFrom(
  * right is worse than none. */
 const rideLane = new Lane();
 const rideStale = (ticket: Ticket): boolean => ticket.stale() || !navActive;
+/** A ride's ticket as the trip takes it: stale too once the ride is over. */
+const rideTicket = (ticket: Ticket): Ticket => ({ stale: () => rideStale(ticket) });
 /** A reroute is also dropped when the rider rejoins before it arrives. */
 const rerouteLane = new Lane();
 
@@ -5014,7 +5014,7 @@ async function replanRide(): Promise<void> {
     if (rideStale(ticket)) return;
     const first = found?.[0];
     if (!found || !first) return;
-    options = found;
+    if (!trip.publish(rideTicket(ticket), found)) return;
     selectOption(first.id);
     rebuildNavFromSelected();
   } catch {
@@ -5025,7 +5025,7 @@ async function replanRide(): Promise<void> {
 }
 
 function rebuildNavFromSelected(): boolean {
-  const sel = options.find((o) => o.id === selectedId);
+  const sel = trip.selected;
   if (!sel) return false;
   // a detour to a stop is off the loop; the loop itself is on it from the start
   const leg = loopLegs.get(sel) ?? (navLoop !== null && sel === navLoop ? { legM: 0, resumeM: 0 } : null);
@@ -5395,7 +5395,7 @@ async function rerouteFrom(from: [number, number], heading: number | null): Prom
   try {
     const found = await rideOptionsFrom(from, heading ?? undefined);
     if (rideStale(ticket)) return;
-    if (found !== null) options = found;
+    if (found !== null && !trip.publish(rideTicket(ticket), found)) return;
     const first = found?.[0];
     if (first) {
       selectOption(first.id);
@@ -5441,7 +5441,7 @@ let rideGen = 0;
 async function startNav(): Promise<void> {
   // a ride follows the streets as they are, never a what-if's proposed lane
   clearWhatIf();
-  const chosen = options.find((o) => o.id === selectedId);
+  const chosen = trip.selected;
   navLoop = chosen !== undefined && chosen.id.startsWith("loop") ? chosen : null;
   rideEngine.start();
   if (!rebuildNavFromSelected()) return;
@@ -5562,8 +5562,8 @@ async function detourToNearest(kind: "water" | "restroom" | "playground"): Promi
     }
     const found = await routing.plan(from, poi.geometry.coordinates, routePrefs());
     if (rideStale(ticket)) return;
-    options = found;
-    const first = options[0];
+    if (!trip.publish(rideTicket(ticket), found)) return;
+    const first = found[0];
     if (!first) return;
     selectOption(first.id);
     if (navOriginalDest === null) navOriginalDest = navDest;
@@ -5608,9 +5608,9 @@ async function resumeRide(): Promise<void> {
     if (rideStale(ticket)) return;
     const first = found?.[0];
     if (!found || !first) throw new Error("no way back");
+    if (!trip.publish(rideTicket(ticket), found)) return;
     navDest = original;
     navOriginalDest = null;
-    options = found;
     selectOption(first.id);
     rebuildNavFromSelected();
     el<HTMLButtonElement>("nav-resume").style.display = "none";
@@ -5696,7 +5696,7 @@ el<HTMLButtonElement>("nav-hazard").addEventListener("click", () => {
     }
     renderOptions();
     renderOptionChips();
-    const sel = options.find((o) => o.id === selectedId);
+    const sel = trip.selected;
     if (sel) showSummary(sel);
     renderPlacesAndRecent();
     renderRides();
@@ -5923,7 +5923,7 @@ map.on("mousedown", pauseFollowForInput);
 // ---------------------------------------------------------------------------
 
 el<HTMLButtonElement>("offline-btn").addEventListener("click", () => {
-  const sel = options.find((o) => o.id === selectedId);
+  const sel = trip.selected;
   if (!sel) return;
   const btn = el<HTMLButtonElement>("offline-btn");
   const tiles = routeTiles(buildTrack(sel.payload).coords, [13, BASEMAP_MAXZOOM]);
@@ -6424,7 +6424,7 @@ const whatIfLane = new Lane();
  * it lives only in the what-if view: undo, a new plan and starting a ride all
  * leave it, and none of them ever see a router with the project applied (see
  * withUpgraded). */
-let whatIfReal: { options: RouteOption[]; selected: RouteOption["id"] | null } | null = null;
+let whatIfReal: TripSnapshot | null = null;
 
 /** Leave the what-if view without touching what is drawn — for a new plan,
  * which is about to replace the drawn trip anyway. */
@@ -6460,9 +6460,9 @@ function clearWhatIf(): void {
   showRealTrip(real);
 }
 
-function showRealTrip(real: { options: RouteOption[]; selected: RouteOption["id"] | null }): void {
-  options = real.options;
-  const back = real.selected ?? options[0]?.id;
+function showRealTrip(real: TripSnapshot): void {
+  trip.restore(real);
+  const back = real.selected ?? real.options[0]?.id;
   if (back !== undefined) selectOption(back);
 }
 
@@ -6502,7 +6502,7 @@ async function runWhatIf(pid: string): Promise<void> {
   // measured against the real trip, even when another what-if is on screen —
   // which goes first, so a failure below leaves the real trip drawn
   clearWhatIf();
-  const real = { options, selected: selectedId };
+  const real = trip.snapshot();
   const chosen = real.options.find((o) => o.id === real.selected) ?? real.options[0];
   if (!chosen) {
     out.textContent = "plan a trip first, then ask";
@@ -6535,9 +6535,9 @@ async function runWhatIf(pid: string): Promise<void> {
     out.textContent = "couldn't re-plan with that built";
     return;
   }
+  if (!trip.publish(ticket, hypothetical)) return;
   whatIfReal = real;
   whatIfPid = pid;
-  options = hypothetical;
   selectOption(shown.id);
   el<HTMLButtonElement>("whatif-clear").style.display = "";
   const now = shown.payload.summary;

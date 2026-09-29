@@ -673,6 +673,7 @@ test.describe("at a desk", () => {
 });
 
 test("a map opened outside the area says what it covers, and goes there", async ({ page }) => {
+  test.slow(); // a planner boot, then a move: most of a minute on a loaded runner
   // Android's emulators, and anyone opening the app away from home, put the
   // map somewhere this app has nothing to draw: it was a blank grey map
   await page.goto("/");
@@ -690,6 +691,7 @@ test("a map opened outside the area says what it covers, and goes there", async 
 });
 
 test("the notice about the area stays away inside it", async ({ page }) => {
+  test.slow(); // a planner boot, then a move: most of a minute on a loaded runner
   await page.goto("/");
   await page.waitForFunction(() => window._map?.isStyleLoaded() === true, null, { timeout: budget(60_000) });
   // and at the edge of it, where half the view is outside
