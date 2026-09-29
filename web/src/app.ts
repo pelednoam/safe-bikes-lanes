@@ -80,11 +80,9 @@ import {
   removeHazard,
   setHazardCategory,
 } from "./hazards.js";
-import type { RecentRoute, SavedPlace } from "./places.js";
 import {
   clearRecent,
   deletePlace,
-  emojiFor,
   exportBackup,
   importBackup,
   listPlaces,
@@ -130,6 +128,7 @@ import { type Headline, NavHeadline, NavTripLine, type TripLine } from "./ui/Nav
 import { OptionCards } from "./ui/OptionCards.js";
 import { type GradeView, SearchResults, type SearchRowView } from "./ui/SearchResults.js";
 import { Cautions, ClassBar, ClassKey, WhyList } from "./ui/RouteSummary.js";
+import { RecentRoutes, SavedPlaces } from "./ui/PlacesAndRecent.js";
 import type { RoutingApi, WirePrefs } from "./routing.js";
 import { WORKER_FAILED, wrap } from "./rpc.js";
 import { type SpeakPriority, SpeechQueue } from "./speech.js";
@@ -1904,75 +1903,35 @@ function promptSavePlace(lon: number, lat: number): void {
   renderPlacesAndRecent();
 }
 
-function placeRow(place: SavedPlace): HTMLDivElement {
-  const row = document.createElement("div");
-  row.className = "search-row";
-  const label = document.createElement("span");
-  label.textContent = `${emojiFor(place.name)} ${place.name}`;
-  row.appendChild(label);
-  for (const kind of ["start", "end"] as const) {
-    const btn = document.createElement("button");
-    btn.textContent = kind;
-    btn.addEventListener("click", () => {
-      setPoint(kind, [place.lon, place.lat]);
-      map.flyTo({ center: [place.lon, place.lat], zoom: 15 });
-    });
-    row.appendChild(btn);
-  }
-  const rm = document.createElement("button");
-  rm.textContent = "✕";
-  rm.title = "delete place";
-  rm.addEventListener("click", () => {
-    deletePlace(place.name);
-    renderPlacesAndRecent();
-  });
-  row.appendChild(rm);
-  return row;
-}
-
-function recentRow(route: RecentRoute): HTMLDivElement {
-  const row = document.createElement("div");
-  row.className = "search-row";
-  const label = document.createElement("span");
-  label.textContent = `🕘 ${route.label} · ${fmtDist(route.km * 1000)}`;
-  label.title = "plan this route again";
-  label.style.cursor = "pointer";
-  label.addEventListener("click", () => {
-    planBetween(route.s, route.e);
-  });
-  row.appendChild(label);
-  const swapBtn = document.createElement("button");
-  swapBtn.textContent = "⇄";
-  swapBtn.title = "plan the reverse direction";
-  swapBtn.addEventListener("click", () => {
-    planBetween(route.e, route.s);
-  });
-  row.appendChild(swapBtn);
-  return row;
-}
-
 function renderPlacesAndRecent(): void {
-  const placesBox = el<HTMLDivElement>("places-list");
-  placesBox.innerHTML = "";
-  const places = listPlaces();
-  for (const place of places) placesBox.appendChild(placeRow(place));
-  const recentBox = el<HTMLDivElement>("recent-list");
-  recentBox.innerHTML = "";
+  render(
+    h(SavedPlaces, {
+      places: listPlaces(),
+      onUse: (place, as) => {
+        setPoint(as, [place.lon, place.lat]);
+        map.flyTo({ center: [place.lon, place.lat], zoom: 15 });
+      },
+      onDelete: (place) => {
+        deletePlace(place.name);
+        renderPlacesAndRecent();
+      },
+    }),
+    el<HTMLDivElement>("places-list"),
+  );
   const recent = listRecent();
   // collapsed by default; the whole section is hidden when there's no history
   el<HTMLDetailsElement>("recent-box").style.display = recent.length > 0 ? "block" : "none";
-  if (recent.length > 0) {
-    for (const route of recent.slice(0, 5)) recentBox.appendChild(recentRow(route));
-    const clear = document.createElement("button");
-    clear.textContent = "clear history";
-    clear.title = "clear recent routes";
-    clear.style.cssText = "margin-top:4px;padding:1px 8px;font-size:13px";
-    clear.addEventListener("click", () => {
-      clearRecent();
-      renderPlacesAndRecent();
-    });
-    recentBox.appendChild(clear);
-  }
+  render(
+    h(RecentRoutes, {
+      routes: recent,
+      onPlan: planBetween,
+      onClear: () => {
+        clearRecent();
+        renderPlacesAndRecent();
+      },
+    }),
+    el<HTMLDivElement>("recent-list"),
+  );
 }
 
 // ---------------------------------------------------------------------------
