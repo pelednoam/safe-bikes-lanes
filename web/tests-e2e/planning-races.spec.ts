@@ -46,15 +46,18 @@ async function boot(page: Page, hash: string): Promise<void> {
  * how many it has held up, so a test can check its race really ran: routing
  * tiles are fetched by the routing worker, and a delay that never applied to
  * them would leave these tests passing without a race in them. */
-async function slowTiles(page: Page, ms: number): Promise<{ delayed: () => number }> {
+async function slowTiles(page: Page, ms: number): Promise<{ delayed: () => number; held: () => number }> {
   let delayed = 0;
+  let held = 0;
   await page.route(/\/data\/tiles\/[^/]+\.json$/, async (route) => {
     if (route.request().url().endsWith("manifest.json")) return route.continue();
     delayed++;
+    held++;
     await new Promise((r) => setTimeout(r, ms));
+    held--;
     return route.continue();
   });
-  return { delayed: () => delayed };
+  return { delayed: () => delayed, held: () => held };
 }
 
 /** A location request that is held until the test releases it, like a cold GPS.
@@ -257,13 +260,20 @@ test("the last destination asked for is the one that gets drawn", async ({ page 
   // first because the far one never waited at all, and the test passes anyway
   await expect.poll(slow.delayed, { timeout: budget(20_000) }).toBeGreaterThan(0);
   await click(near);
-  // past the far request's tile wait, so it has had every chance to land
+  // Routing runs in a worker, so the page is free while a route is found:
+  // reading the route once the network went quiet read the old trip on a slow
+  // runner, before either plan had landed. Wait for the near one to be drawn...
+  const drawnTo = async (): Promise<number> => {
+    const route = await drawnRoute(page);
+    const last = route[route.length - 1];
+    return last === undefined ? Infinity : metres(last, near);
+  };
+  await expect.poll(drawnTo, { timeout: budget(90_000), message: "the near trip was never drawn" }).toBeLessThan(400);
+  // ...then until every held tile has been answered, so the far plan has had
+  // every chance to land, and it still must not have replaced the near one
+  await expect.poll(slow.held, { timeout: budget(60_000) }).toBe(0);
   await settled(page);
-  const route = await drawnRoute(page);
-  const last = route[route.length - 1];
-  expect(last).toBeDefined();
-  if (!last) return;
-  expect(metres(last, near), "the route drawn goes to an older destination").toBeLessThan(400);
+  expect(await drawnTo(), "the route drawn goes to an older destination").toBeLessThan(400);
   await expect(page.locator("#loading")).toBeHidden();
 });
 

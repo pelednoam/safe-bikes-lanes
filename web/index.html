@@ -836,17 +836,9 @@
   <button id="nav-playground" aria-label="Detour to the nearest playground"><span>🛝</span>park</button>
 </div>
 <div id="nav-banner">
-  <div id="nav-main">
-    <span id="nav-icon">⬆</span>
-    <div id="nav-texts">
-      <div id="nav-dist">–</div>
-      <div id="nav-street">–</div>
-    </div>
-  </div>
-  <div id="nav-trip">
-    <span id="nav-remaining"></span>
-    <span id="nav-speed"></span>
-  </div>
+  <!-- drawn from the ride's state (src/ui/NavBanner.tsx) -->
+  <div id="nav-main"></div>
+  <div id="nav-trip"></div>
   <!-- safety warnings were voice-only, so a muted phone (or two chatty kids)
        meant no warning at all before a busy crossing -->
   <div id="nav-alert" style="display:none"></div>

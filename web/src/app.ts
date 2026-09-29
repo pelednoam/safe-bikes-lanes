@@ -126,6 +126,7 @@ import { COVERAGE, HOME, outsideCoverage } from "./coverage.js";
 import { Lane, type Ticket } from "./planner.js";
 import { Trip, type TripSnapshot } from "./trip.js";
 import { h, render } from "preact";
+import { type Headline, NavHeadline, NavTripLine, type TripLine } from "./ui/NavBanner.js";
 import { OptionCards } from "./ui/OptionCards.js";
 import type { RoutingApi, WirePrefs } from "./routing.js";
 import { WORKER_FAILED, wrap } from "./rpc.js";
@@ -4977,6 +4978,27 @@ function rebuildNavFromSelected(): boolean {
   return true;
 }
 
+/** What the ride banner says, which is all it says: drawn from here
+ * (src/ui/NavBanner.tsx), never written into the page piece by piece. */
+const rideView: { headline: Headline; trip: TripLine } = {
+  headline: { icon: "⬆", dist: "–", street: "–" },
+  trip: { remaining: "", speed: "" },
+};
+
+function showHeadline(headline: Headline): void {
+  rideView.headline = headline;
+  render(h(NavHeadline, headline), el<HTMLDivElement>("nav-main"));
+}
+
+function showTripLine(line: TripLine): void {
+  rideView.trip = line;
+  render(h(NavTripLine, line), el<HTMLDivElement>("nav-trip"));
+}
+
+// drawn once at load, as the page's own markup used to be
+showHeadline(rideView.headline);
+showTripLine(rideView.trip);
+
 /** Distance / ETA line. `straight` marks an off-route estimate (as the crow
  * flies) so the number is honest rather than frozen at its last on-route value. */
 function showTrip(t: Extract<RideEffect, { type: "trip" }>): void {
@@ -4984,15 +5006,14 @@ function showTrip(t: Extract<RideEffect, { type: "trip" }>): void {
   const clock = eta.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   // "arrive" spelled out pushed this past the banner width, so it wrapped with
   // "PM" alone on a second line and the banner's height twitched all ride
-  el<HTMLElement>("nav-remaining").textContent =
-    `${t.straight ? "~" : ""}${fmtDist(t.remainingM)} · ${t.minutes} min · eta ${clock}`;
-  el<HTMLElement>("nav-speed").textContent = t.speedMps > 0.8 ? fmtSpeedRound(t.speedMps) : "";
+  showTripLine({
+    remaining: `${t.straight ? "~" : ""}${fmtDist(t.remainingM)} · ${t.minutes} min · eta ${clock}`,
+    speed: t.speedMps > 0.8 ? fmtSpeedRound(t.speedMps) : "",
+  });
 }
 
 function showBanner(m: Maneuver | undefined, distToNextM: number): void {
-  el<HTMLElement>("nav-icon").textContent = m?.icon ?? "⬆";
-  el<HTMLElement>("nav-dist").textContent = navDistText(distToNextM);
-  el<HTMLElement>("nav-street").textContent = m?.text ?? "";
+  showHeadline({ icon: m?.icon ?? "⬆", dist: navDistText(distToNextM), street: m?.text ?? "" });
 }
 
 function toFix(pos: GeolocationPosition): NativeFix {
@@ -5185,7 +5206,7 @@ function frameRoute(option: RouteOption): void {
 /** Where the rider is, in words. The hazard dialog used to print raw decimal
  * degrees at them while the app already knew the street name. */
 async function hereLabel(lon: number, lat: number): Promise<string> {
-  const street = el<HTMLElement>("nav-street").textContent?.trim();
+  const street = rideView.headline.street.trim();
   if (navActive && street && !/^[-–]$/.test(street) && !/^⚠/.test(street)) {
     return `on ${street}`;
   }
@@ -5309,9 +5330,7 @@ function applyRideEffect(e: RideEffect): void {
       hideRideAlert();
       return;
     case "offRoute":
-      el<HTMLElement>("nav-icon").textContent = "↩";
-      el<HTMLElement>("nav-dist").textContent = "off route";
-      el<HTMLElement>("nav-street").textContent = "adjusting…";
+      showHeadline({ icon: "↩", dist: "off route", street: "adjusting…" });
       return;
     case "banner":
       showBanner(e.maneuver, e.distToNextM);
@@ -5362,17 +5381,12 @@ async function rerouteFrom(from: [number, number], heading: number | null): Prom
 
 function showArrival(atStop: boolean, totalM: number): void {
   if (atStop) {
-    el<HTMLElement>("nav-icon").textContent = "🛑";
-    el<HTMLElement>("nav-dist").textContent = "At the stop";
-    el<HTMLElement>("nav-street").textContent = "tap ▶ resume to ride on";
+    showHeadline({ icon: "🛑", dist: "At the stop", street: "tap ▶ resume to ride on" });
     el<HTMLButtonElement>("nav-resume").style.display = "inline-block";
     return;
   }
-  el<HTMLElement>("nav-icon").textContent = "🏁";
-  el<HTMLElement>("nav-dist").textContent = "Arrived";
-  el<HTMLElement>("nav-street").textContent = navDestLabel ?? "you're there";
-  el<HTMLElement>("nav-remaining").textContent = `${fmtDist(totalM)} ridden`;
-  el<HTMLElement>("nav-speed").textContent = "";
+  showHeadline({ icon: "🏁", dist: "Arrived", street: navDestLabel ?? "you're there" });
+  showTripLine({ remaining: `${fmtDist(totalM)} ridden`, speed: "" });
   hideRideAlert();
   finishAndSaveRide();
 }
