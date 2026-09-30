@@ -640,12 +640,24 @@ test.describe("at a desk", () => {
     // and the chips on the map
     const chip = page.locator(".opt-chip").first();
     await chip.focus();
+    await page.evaluate(() => {
+      (window as unknown as { __chip?: Element | null }).__chip = document.activeElement;
+    });
     await page.keyboard.press("Enter");
     await expect(page.locator(".option-card").first()).toHaveAttribute(
       "aria-checked",
       "true",
       repaint,
     );
+    // the badges are kept through the repaint, not rebuilt: the keyboard is
+    // still on the very badge it pressed
+    expect(
+      await page.evaluate(() => {
+        const was = (window as unknown as { __chip?: Element | null }).__chip;
+        return was !== null && was !== undefined && document.activeElement === was && was.isConnected;
+      }),
+    ).toBe(true);
+    await expect(chip).toHaveClass(/\bsel\b/);
   });
 
   test("the rider choice shows where the keyboard is, and which is chosen", async ({ page }) => {

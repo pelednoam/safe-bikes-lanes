@@ -108,7 +108,6 @@ import {
   fmtDist,
   fmtClimb,
   fmtDistTight,
-  fmtSpeed,
   fmtSpeedRound,
   fromMeters,
   getUnits,
@@ -129,6 +128,8 @@ import { OptionCards } from "./ui/OptionCards.js";
 import { type GradeView, SearchResults, type SearchRowView } from "./ui/SearchResults.js";
 import { Cautions, ClassBar, ClassKey, Ribbon, WhyList } from "./ui/RouteSummary.js";
 import { RecentRoutes, SavedPlaces } from "./ui/PlacesAndRecent.js";
+import { RideList, RideTotalsLine, SketchyList } from "./ui/Lists.js";
+import { chipViews, paintChip } from "./chips.js";
 import type { RoutingApi, WirePrefs } from "./routing.js";
 import { reportCaught, startReporting } from "./report.js";
 import { WORKER_FAILED, wrap } from "./rpc.js";
@@ -675,10 +676,9 @@ async function ensureRouter(
   // measurably cheaper but produced a less safe route (50% -> 34% protected
   // on Wellesley->Revere), which is the wrong trade for this app.
   const marginCells = margin + Math.round(padM / 2200);
-  const { ready, rebuilt } = await routing.ensure(points, marginCells, onProgress);
+  const { ready } = await routing.ensure(points, marginCells, onProgress);
   if (!ready) return false;
   routerReady = true;
-  if (rebuilt) renderSketchy();
   return true;
 }
 
@@ -1356,57 +1356,47 @@ async function requestLoop(): Promise<void> {
   }
 }
 
-let optionChips: Marker[] = [];
+/** The badges on the map, one per option (src/chips.ts), kept across
+ * repaints and updated in place: a badge the keyboard is on stays the element
+ * it is on. */
+const optionChips = new Map<RouteOption["id"], Marker>();
 function clearOptionChips(): void {
-  for (const c of optionChips) c.remove();
-  optionChips = [];
+  for (const chip of optionChips.values()) chip.remove();
+  optionChips.clear();
 }
 
-/** Selectable grade·time chips on the map, one per alternative (Google-style,
- * but the lead label is the safety grade, not the ETA). */
-let chipToFocus: RouteOption["id"] | null = null;
-
 function renderOptionChips(): void {
-  clearOptionChips();
-  const refocus = chipToFocus;
-  chipToFocus = null;
-  if (trip.options.length < 2) return; // no choice to make
-  trip.options.forEach((o, i) => {
-    const coords = o.payload.geojson.features.flatMap((f) => f.geometry.coordinates);
-    if (coords.length === 0) return;
-    const frac = Math.min(0.9, 0.35 + i * 0.2);
-    const pt = coords[Math.floor(coords.length * frac)] ?? coords[coords.length - 1];
-    if (!pt) return;
-    const chip = document.createElement("div");
-    chip.className = "opt-chip" + (o.id === trip.selectedId ? " sel" : "");
-    chip.style.setProperty("--g", GRADE_COLORS[o.grade]);
-    chip.style.setProperty("--gt", GRADE_TEXT[o.grade]);
-    chip.textContent = `${o.grade} · ${o.payload.summary.minutes} min`;
-    chip.title = `${o.label}: ${o.gradeReason}`;
-    // reachable and pressable from a keyboard, like the cards they mirror
-    chip.tabIndex = 0;
-    chip.setAttribute("role", "button");
-    chip.setAttribute("aria-pressed", String(o.id === trip.selectedId));
-    chip.setAttribute(
-      "aria-label",
-      `${o.label}: grade ${o.grade}, ${o.payload.summary.minutes} minutes`,
-    );
-    chip.addEventListener("click", (ev: Event) => {
-      ev.stopPropagation();
-      selectOption(o.id);
-    });
-    chip.addEventListener("keydown", (ev: KeyboardEvent) => {
-      if (ev.key !== "Enter" && ev.key !== " ") return;
-      ev.preventDefault();
-      ev.stopPropagation();
-      chipToFocus = o.id; // the chips are rebuilt; keep the focus on this one
-      selectOption(o.id);
-    });
-    if (refocus === o.id) window.setTimeout(() => chip.focus(), 0);
-    optionChips.push(
-      new maplibregl.Marker({ element: chip }).setLngLat(pt as [number, number]).addTo(map),
-    );
-  });
+  const views = chipViews(trip.options, trip.selectedId, GRADE_COLORS, GRADE_TEXT);
+  const listed = new Set(views.map((v) => v.id));
+  for (const [id, chip] of optionChips) {
+    if (listed.has(id)) continue;
+    chip.remove();
+    optionChips.delete(id);
+  }
+  for (const v of views) {
+    let chip = optionChips.get(v.id);
+    if (chip === undefined) {
+      const el = document.createElement("div");
+      // reachable and pressable from a keyboard, like the cards they mirror
+      el.tabIndex = 0;
+      el.setAttribute("role", "button");
+      el.addEventListener("click", (ev: Event) => {
+        ev.stopPropagation();
+        selectOption(v.id);
+      });
+      el.addEventListener("keydown", (ev: KeyboardEvent) => {
+        if (ev.key !== "Enter" && ev.key !== " ") return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        selectOption(v.id);
+      });
+      chip = new maplibregl.Marker({ element: el }).setLngLat(v.at).addTo(map);
+      optionChips.set(v.id, chip);
+    } else {
+      chip.setLngLat(v.at);
+    }
+    paintChip(chip.getElement(), v);
+  }
 }
 
 /** Takes the pending panel paint's listeners off. A superseded paint used to
@@ -2365,34 +2355,21 @@ el<HTMLInputElement>("shed-budget").addEventListener("input", () => {
 // ---------------------------------------------------------------------------
 
 function renderSketchy(): void {
-  const box = el<HTMLDivElement>("sketchy-section");
-  const list = el<HTMLDivElement>("sketchy-list");
-  list.innerHTML = "";
-  box.style.display = sketchyMarks.length > 0 ? "block" : "none";
-  sketchyMarks.forEach((mark, i) => {
-    const row = document.createElement("div");
-    row.className = "sketchy-row";
-    const span = document.createElement("span");
-    span.textContent = `⚠ marked spot ${i + 1}`;
-    span.style.cursor = "pointer";
-    span.title = "fly to";
-    span.addEventListener("click", () => {
-      map.flyTo({ center: mark, zoom: 16 });
-    });
-    row.appendChild(span);
-    const rm = document.createElement("button");
-    rm.textContent = "✕";
-    rm.title = "remove";
-    rm.addEventListener("click", () => {
-      sketchyMarks = sketchyMarks.filter((_, j) => j !== i);
-      saveSketchy(sketchyMarks);
-      applyAvoidPoints();
-      renderSketchy();
-      void requestRoute();
-    });
-    row.appendChild(rm);
-    list.appendChild(row);
-  });
+  el<HTMLDivElement>("sketchy-section").style.display = sketchyMarks.length > 0 ? "block" : "none";
+  render(
+    h(SketchyList, {
+      marks: sketchyMarks,
+      onFly: (mark) => map.flyTo({ center: mark, zoom: 16 }),
+      onRemove: (i) => {
+        sketchyMarks = sketchyMarks.filter((_, j) => j !== i);
+        saveSketchy(sketchyMarks);
+        applyAvoidPoints();
+        renderSketchy();
+        void requestRoute();
+      },
+    }),
+    el<HTMLDivElement>("sketchy-list"),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -4355,56 +4332,31 @@ function rideCard(ride: RideSummary): PreparedImage {
 
 function renderRides(): void {
   const rides = loadRides();
-  const totals = rideTotals(rides, new Date());
-  el<HTMLDivElement>("ride-totals").innerHTML =
-    rides.length === 0
-      ? "No rides yet — rides are saved automatically when you Navigate, or use ● Record."
-      : `<b>${totals.count}</b> rides · <b>${fmtDist(totals.km * 1000)}</b> total · ` +
-        `<b>${totals.movingHours} h</b> moving · longest <b>${fmtDist(totals.longestKm * 1000)}</b> · ` +
-        `this month <b>${fmtDist(totals.thisMonthKm * 1000)}</b> · avg <b>${totals.avgProtectedPct}%</b> protected`;
+  render(
+    h(RideTotalsLine, { totals: rides.length === 0 ? null : rideTotals(rides, new Date()) }),
+    el<HTMLDivElement>("ride-totals"),
+  );
   el<HTMLButtonElement>("rides-share").style.display = rides.length === 0 ? "none" : "inline-block";
-  const table = el<HTMLTableElement>("ride-list");
-  table.innerHTML =
-    rides.length === 0
-      ? ""
-      : `<tr><th>date</th><th>${unitShort()}</th><th>moving</th>` +
-        `<th>avg</th><th>protected</th><th></th></tr>`;
-  for (const ride of rides) {
-    const tr = table.insertRow();
-    const d = new Date(ride.startedAt);
-    tr.insertCell().textContent = d.toLocaleDateString([], { month: "short", day: "numeric" });
-    tr.insertCell().textContent = fromMeters(ride.meters).toFixed(1);
-    tr.insertCell().textContent = `${Math.round(ride.movingS / 60)} min`;
-    tr.insertCell().textContent =
-      ride.movingS > 0 ? fmtSpeed(ride.meters / ride.movingS) : "–";
-    tr.insertCell().textContent = `${ride.pctProtected}% + ${ride.pctQuiet}% quiet`;
-    const actions = tr.insertCell();
-    const show = document.createElement("button");
-    show.textContent = "map";
-    show.addEventListener("click", () => {
-      showRideOnMap(ride);
-      el<HTMLDialogElement>("rides").close();
-    });
-    actions.appendChild(show);
-    const shareBtn = document.createElement("button");
-    shareBtn.textContent = "📤";
-    shareBtn.title = "share this ride (stats card + text)";
-    // drawn as soon as a finger lands on it; usually ready by the click
-    shareBtn.addEventListener("pointerdown", () => {
-      rideCard(ride);
-    });
-    shareBtn.addEventListener("click", () => {
-      shareCard(rideShareText(ride), rideCard(ride), "bike-ride.png", shareBtn);
-    });
-    actions.appendChild(shareBtn);
-    const rm = document.createElement("button");
-    rm.textContent = "✕";
-    rm.addEventListener("click", () => {
-      deleteRide(ride.id);
-      renderRides();
-    });
-    actions.appendChild(rm);
-  }
+  render(
+    h(RideList, {
+      rides,
+      onMap: (ride) => {
+        showRideOnMap(ride);
+        el<HTMLDialogElement>("rides").close();
+      },
+      onSharePrepare: (ride) => {
+        rideCard(ride);
+      },
+      onShare: (ride, button) => {
+        shareCard(rideShareText(ride), rideCard(ride), "bike-ride.png", button);
+      },
+      onDelete: (ride) => {
+        deleteRide(ride.id);
+        renderRides();
+      },
+    }),
+    el<HTMLTableElement>("ride-list"),
+  );
 }
 
 el<HTMLButtonElement>("rides-btn").addEventListener("click", () => {
@@ -5917,6 +5869,11 @@ el<HTMLInputElement>("show-constr").addEventListener("change", (e: Event) => {
 });
 
 renderPlacesAndRecent();
+// At load, not when a router is first built: that was load when the whole
+// graph came down at startup, and since the graph is tiled a router exists
+// only once a route is asked for, so the marks on the device went unlisted
+// until then.
+renderSketchy();
 
 // test hook: E2E (Playwright) asserts on live layer state through this
 declare global {
