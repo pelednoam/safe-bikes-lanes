@@ -1,5 +1,6 @@
-// What one street segment is, in words — shared by the route planner and the
-// per-city pages.
+// What one street segment is, in words, and its street-level photo — shared by
+// the route planner and the per-city pages, which draw it as a card
+// (src/ui/SegmentCard.tsx).
 //
 // This is a safety claim shown to a parent deciding where to take a child, so
 // the two pages must not be able to say different things about the same street.
@@ -76,10 +77,11 @@ export function classGrade(cls: ProtectionClass): SafetyGrade | null {
   return m <= 1.6 ? "A" : m <= 2.4 ? "B" : m <= 4 ? "C" : m <= 8 ? "D" : "F";
 }
 
-/** Street names come from OpenStreetMap, which anyone can edit, and both pages
- * render this card through MapLibre's setHTML — i.e. innerHTML. A name of
- * `<img src=x onerror=...>` would then run script on the page's own origin,
- * where the rider's saved routes live. Escape anything that came from data. */
+/** Street names come from OpenStreetMap, which anyone can edit. Written into
+ * HTML (a printed cue sheet, a popup set with MapLibre's setHTML), a name of
+ * `<img src=x onerror=...>` would run script on the page's own origin, where
+ * the rider's saved routes live. Escape anything that came from data. (The
+ * street card itself is drawn as text: src/ui/SegmentCard.tsx.) */
 export function esc(text: string): string {
   return text
     .replace(/&/g, "&amp;")
@@ -95,44 +97,6 @@ export interface SegmentProps {
   name?: string | null | undefined;
   crashes?: number | null | undefined;
   source?: string | undefined;
-}
-
-/** The card shown for a street: grade, what it is, what that means for a child,
- * how far they'd detour to avoid it, and whether anyone has crashed there. */
-export function segmentHtml(props: SegmentProps, opts: { photo: boolean } = { photo: false }): string {
-  const cls = props.cls;
-  // a class we can't grade is a class we can't describe either: say nothing
-  // rather than something confident and wrong
-  const grade = cls !== undefined ? classGrade(cls) : null;
-  const known = cls !== undefined && grade !== null;
-  const label = known ? esc(CLASS_LABELS[cls] ?? cls) : "type unknown";
-  const badge =
-    grade !== null
-      ? `<span style="background:${GRADE_COLORS[grade]};color:${GRADE_TEXT[grade]};border-radius:5px;` +
-        `padding:0 6px;font-weight:700">${grade}</span> `
-      : "";
-  const meaning = known ? `<br>${CLASS_SAFETY[cls]}` : "";
-  const mult = known ? PROFILES.young_kids.mult[cls] : null;
-  const stress =
-    mult !== null
-      ? `<br><small>kid-stress ×${mult} — young kids would detour up to ` +
-        `${mult}× the distance to avoid ${mult > 1.6 ? "this" : "worse"}</small>`
-      : "";
-  const crashCount = props.crashes ?? 0;
-  const crashes =
-    crashCount > 0
-      ? `<br><small>⚠ ${crashCount} bike crash${crashCount > 1 ? "es" : ""} ` +
-        `recorded nearby (2021–26)</small>`
-      : "";
-  const unconfirmed =
-    props.source === "osm" && known && FACILITY_CLASSES.includes(cls)
-      ? "<br><small><i>facility per OSM only (not in official layers yet)</i></small>"
-      : "";
-  const photoSlot = opts.photo ? `<div data-seg-photo></div>` : "";
-  const name = props.name !== undefined && props.name !== null && props.name !== ""
-    ? props.name
-    : "unnamed";
-  return `${badge}<b>${esc(name)}</b><br>${label}${meaning}${stress}${crashes}${unconfirmed}${photoSlot}`;
 }
 
 /** The caution list a printed cue sheet carries.
@@ -292,33 +256,4 @@ export function clearPhotoCache(): void {
   // flight, and when that one resolves it writes the old token's answer into
   // the fresh cache — so correcting a bad token still showed no photos.
   photoGen++;
-}
-
-/** Fill a card's photo slot once the image resolves, if the card is still up. */
-export function fillSegmentPhoto(
-  slotOwner: HTMLElement | null | undefined,
-  lon: number,
-  lat: number,
-  token: string,
-  stillWanted: () => boolean,
-): void {
-  if (!slotOwner || token === "") return;
-  void fetchSegmentPhoto(lon, lat, token).then(({ url, captured }) => {
-    if (!stillWanted()) return; // the pointer moved on
-    const slot = slotOwner.querySelector<HTMLDivElement>("div[data-seg-photo]");
-    if (!slot || !slot.isConnected) return;
-    if (url === null) {
-      // "no photo here" is a claim about the world; when we simply stopped
-      // asking, it isn't one we can make
-      slot.innerHTML = photosPaused()
-        ? `<small><i>street-level photos are rate-limited right now</i></small>`
-        : `<small><i>no street-level photo here</i></small>`;
-      return;
-    }
-    const when =
-      captured !== null ? ` <small>${new Date(captured).toLocaleDateString()}</small>` : "";
-    slot.innerHTML =
-      `<img src="${esc(url)}" alt="" style="max-width:210px;border-radius:6px;display:block;` +
-      `margin-top:4px">📷${when}`;
-  });
 }

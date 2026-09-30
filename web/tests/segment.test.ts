@@ -2,6 +2,8 @@
 // per-city pages. It states what a street is like for a child, so the two pages
 // must not be able to describe the same street differently — that's why it's
 // one module, and why its wording is pinned here.
+import { h } from "preact";
+import { renderToString } from "preact-render-to-string";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -11,12 +13,17 @@ import {
   esc,
   photosPaused,
   fetchSegmentPhoto,
-  fillSegmentPhoto,
   GRADE_COLORS,
   GRADE_TEXT,
   nearestMapillary,
-  segmentHtml,
+  type SegmentProps,
 } from "../src/segment.js";
+import { type Photo, photoFor, SegmentCard } from "../src/ui/SegmentCard.js";
+
+/** The street card as a page draws it. */
+function card(seg: SegmentProps, photo: Photo = { state: "off" }): string {
+  return renderToString(h(SegmentCard, { seg, photo }));
+}
 
 // The lookup holds a cache and a rate-limit back-off between calls, so a test
 // that trips either would otherwise change the answer the next test gets.
@@ -36,7 +43,7 @@ describe("the street card", () => {
   });
 
   it("says what the street is, and what that means for a child", () => {
-    const html = segmentHtml({ cls: "lane", name: "Cedar Street" });
+    const html = card({ cls: "lane", name: "Cedar Street" });
     expect(html).toContain("Cedar Street");
     expect(html).toContain("painted lane");
     // the plain-words meaning is the point: "painted lane" alone tells a parent
@@ -47,31 +54,38 @@ describe("the street card", () => {
   });
 
   it("names crashes only when there are some, and counts them correctly", () => {
-    expect(segmentHtml({ cls: "busy_street", crashes: 0 })).not.toContain("crash");
-    expect(segmentHtml({ cls: "busy_street", crashes: null })).not.toContain("crash");
-    expect(segmentHtml({ cls: "busy_street", crashes: 1 })).toContain("1 bike crash recorded");
-    expect(segmentHtml({ cls: "busy_street", crashes: 4 })).toContain("4 bike crashes recorded");
+    expect(card({ cls: "busy_street", crashes: 0 })).not.toContain("crash");
+    expect(card({ cls: "busy_street", crashes: null })).not.toContain("crash");
+    expect(card({ cls: "busy_street", crashes: 1 })).toContain("1 bike crash recorded");
+    expect(card({ cls: "busy_street", crashes: 4 })).toContain("4 bike crashes recorded");
   });
 
   it("flags a facility only OpenStreetMap knows about", () => {
     // a lane the city's own layer doesn't list is a weaker claim, and the card
     // should say so rather than presenting it as confirmed
-    expect(segmentHtml({ cls: "separated", source: "osm" })).toContain("OSM only");
-    expect(segmentHtml({ cls: "separated", source: "cambridge" })).not.toContain("OSM only");
+    expect(card({ cls: "separated", source: "osm" })).toContain("OSM only");
+    expect(card({ cls: "separated", source: "cambridge" })).not.toContain("OSM only");
     // an unprotected road isn't a facility, so the caveat doesn't apply
-    expect(segmentHtml({ cls: "busy_street", source: "osm" })).not.toContain("OSM only");
+    expect(card({ cls: "busy_street", source: "osm" })).not.toContain("OSM only");
   });
 
   it("copes with a street it knows nothing about", () => {
-    const html = segmentHtml({});
+    const html = card({});
     expect(html).toContain("unnamed");
     expect(html).not.toContain("undefined");
     expect(html).not.toContain("NaN");
   });
 
   it("only leaves a photo slot when there's a token to fill it", () => {
-    expect(segmentHtml({ cls: "lane" }, { photo: true })).toContain("data-seg-photo");
-    expect(segmentHtml({ cls: "lane" }, { photo: false })).not.toContain("data-seg-photo");
+    expect(card({ cls: "lane" }, { state: "waiting" })).toContain("data-seg-photo");
+    expect(card({ cls: "lane" })).not.toContain("data-seg-photo");
+  });
+
+  it("puts what the page adds after the card, photo included", () => {
+    const html = renderToString(
+      h(SegmentCard, { seg: { cls: "lane" }, photo: { state: "waiting" } }, h("small", null, "right-click to mark")),
+    );
+    expect(html.indexOf("data-seg-photo")).toBeLessThan(html.indexOf("right-click to mark"));
   });
 });
 
@@ -96,7 +110,7 @@ describe("the grade letters can be read", () => {
   });
 
   it("and the street card uses them", () => {
-    expect(segmentHtml({ cls: "lane", name: "Cedar Street" })).toContain(
+    expect(card({ cls: "lane", name: "Cedar Street" })).toContain(
       `color:${GRADE_TEXT.C}`,
     );
   });
@@ -173,23 +187,10 @@ describe("finding a street-level photo", () => {
   });
 });
 
-describe("putting the photo into a card that's already on screen", () => {
+describe("the photo a card shows", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
-
-  /** The bit of a card the photo lands in. No jsdom here, so it's by hand — the
-   * function only needs a slot to find and something to write into. */
-  function fakeCard(opts: { connected?: boolean; hasSlot?: boolean } = {}): {
-    owner: HTMLElement;
-    slot: { innerHTML: string; isConnected: boolean };
-  } {
-    const slot = { innerHTML: "", isConnected: opts.connected ?? true };
-    const owner = {
-      querySelector: (): unknown => (opts.hasSlot === false ? null : slot),
-    } as unknown as HTMLElement;
-    return { owner, slot };
-  }
 
   function stubPhoto(images: unknown[]): void {
     vi.stubGlobal(
@@ -198,9 +199,7 @@ describe("putting the photo into a card that's already on screen", () => {
     );
   }
 
-  const settle = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
-
-  it("shows the picture, with when it was taken", async () => {
+  it("is the picture, with when it was taken", async () => {
     stubPhoto([
       {
         thumb_256_url: "https://img/here",
@@ -208,50 +207,44 @@ describe("putting the photo into a card that's already on screen", () => {
         computed_geometry: { coordinates: [-71.2, 42.38] },
       },
     ]);
-    const { owner, slot } = fakeCard();
-    fillSegmentPhoto(owner, -71.2, 42.38, "token", () => true);
-    await settle();
-    expect(slot.innerHTML).toContain("https://img/here");
-    expect(slot.innerHTML).toContain("2023"); // a 2015 photo is weaker evidence
+    const photo = await photoFor(-71.2, 42.38, "token");
+    expect(photo).toEqual({ state: "shown", url: "https://img/here", captured: Date.UTC(2023, 4, 17) });
+    const html = card({ cls: "lane" }, photo);
+    expect(html).toContain('src="https://img/here"');
+    expect(html).toContain("2023"); // a 2015 photo is weaker evidence
   });
 
   it("says plainly when there's no photo, rather than leaving a hole", async () => {
     stubPhoto([]);
-    const { owner, slot } = fakeCard();
-    fillSegmentPhoto(owner, -71.21, 42.38, "token", () => true);
-    await settle();
-    expect(slot.innerHTML).toContain("no street-level photo here");
+    const photo = await photoFor(-71.21, 42.38, "token");
+    expect(photo).toEqual({ state: "none" });
+    expect(card({ cls: "lane" }, photo)).toContain("no street-level photo here");
   });
 
-  it("drops the photo if the pointer has moved on", async () => {
-    stubPhoto([
-      { thumb_256_url: "https://img/stale", computed_geometry: { coordinates: [-71.22, 42.38] } },
-    ]);
-    const { owner, slot } = fakeCard();
-    // hovering across a map fires these faster than they resolve; a late answer
-    // must not paint a photo of the street you already left
-    fillSegmentPhoto(owner, -71.22, 42.38, "token", () => false);
-    await settle();
-    expect(slot.innerHTML).toBe("");
+  it("doesn't claim there is none when it stopped asking", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("slow down", { status: 429 })));
+    const photo = await photoFor(-71.215, 42.38, "token");
+    expect(photo).toEqual({ state: "paused" });
+    const html = card({ cls: "lane" }, photo);
+    expect(html).toContain("rate-limited right now");
+    expect(html).not.toContain("no street-level photo");
   });
 
-  it("does nothing when there's no card, no slot, or no token", async () => {
+  it("is off without a token, and doesn't call out", async () => {
     const f = vi.fn();
     vi.stubGlobal("fetch", f);
-    fillSegmentPhoto(null, -71.23, 42.38, "token", () => true);
-    fillSegmentPhoto(fakeCard().owner, -71.24, 42.38, "", () => true);
-    await settle();
+    expect(await photoFor(-71.23, 42.38, "")).toEqual({ state: "off" });
     expect(f).not.toHaveBeenCalled();
+  });
 
-    stubPhoto([
-      { thumb_256_url: "https://img/x", computed_geometry: { coordinates: [-71.25, 42.38] } },
-    ]);
-    const gone = fakeCard({ connected: false });
-    fillSegmentPhoto(gone.owner, -71.25, 42.38, "token", () => true);
-    const slotless = fakeCard({ hasSlot: false });
-    fillSegmentPhoto(slotless.owner, -71.26, 42.38, "token", () => true);
-    await settle();
-    expect(gone.slot.innerHTML).toBe(""); // the card was closed mid-flight
+  it("is an empty slot while it's on its way", () => {
+    expect(card({ cls: "lane" }, { state: "waiting" })).toMatch(/<div data-seg-photo(="")?><\/div>/);
+  });
+
+  it("carries its URL as an attribute value, never as markup", () => {
+    const html = card({ cls: "lane" }, { state: "shown", url: 'https://img/x"><script>alert(1)</script>', captured: null });
+    expect(html).not.toContain("<script>");
+    expect(html).toContain("&quot;");
   });
 });
 
@@ -259,7 +252,7 @@ describe("a street whose class we don't recognise", () => {
   // a page can be a build behind the data it fetches, so this is reachable
   it("says so, instead of grading it the worst", () => {
     for (const cls of ["", "trolley_portal", undefined]) {
-      const html = segmentHtml({ cls: cls as never, name: "Mystery Ave" });
+      const html = card({ cls: cls as never, name: "Mystery Ave" });
       expect(html).toContain("Mystery Ave");
       expect(html).toContain("type unknown");
       expect(html).not.toContain(">F<"); // an F is a claim; we don't have one
@@ -270,7 +263,7 @@ describe("a street whose class we don't recognise", () => {
   });
 
   it("still reports what it does know about it", () => {
-    const html = segmentHtml({ cls: "" as never, crashes: 3, source: "osm" });
+    const html = card({ cls: "" as never, crashes: 3, source: "osm" });
     expect(html).toContain("3 bike crashes recorded");
     // but not a facility caveat about a facility we can't name
     expect(html).not.toContain("OSM only");
@@ -281,7 +274,7 @@ describe("a street name that came from OpenStreetMap", () => {
   // anyone can edit OSM, and both pages render this card through MapLibre's
   // setHTML — i.e. innerHTML, on the origin holding the rider's saved routes
   it("cannot smuggle markup into the card", () => {
-    const html = segmentHtml({
+    const html = card({
       cls: "lane",
       name: '<img src=x onerror="alert(1)">',
     });
@@ -294,7 +287,7 @@ describe("a street name that came from OpenStreetMap", () => {
   });
 
   it("still reads correctly when the name merely contains punctuation", () => {
-    expect(segmentHtml({ cls: "lane", name: "Mass. Ave & Beacon" })).toContain(
+    expect(card({ cls: "lane", name: "Mass. Ave & Beacon" })).toContain(
       "Mass. Ave &amp; Beacon",
     );
   });
@@ -305,7 +298,7 @@ describe("a street name that came from OpenStreetMap", () => {
     // output and esc() is not involved. The property that actually holds is
     // stronger, so assert that instead — every class with a stress multiplier
     // has a label, so the raw class is only ever rendered for one we reject.
-    const html = segmentHtml({ cls: "<b>x</b>" as never, name: "A St" });
+    const html = card({ cls: "<b>x</b>" as never, name: "A St" });
     expect(html).not.toContain("<b>x</b>");
     expect(html).not.toContain("&lt;b&gt;x");
     expect(html).toContain("type unknown");

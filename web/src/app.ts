@@ -61,10 +61,8 @@ import {
   esc,
   FACILITY_CLASSES,
   nearestMapillary,
-  fillSegmentPhoto as fillPhotoSlot,
   GRADE_COLORS,
   GRADE_TEXT,
-  segmentHtml,
 } from "./segment.js";
 import type { Maneuver } from "./nav.js";
 import { buildTrack, distM, sunsetTime } from "./nav.js";
@@ -131,6 +129,7 @@ import { RecentRoutes, SavedPlaces } from "./ui/PlacesAndRecent.js";
 import { RideList, RideTotalsLine, SketchyList } from "./ui/Lists.js";
 import { chipViews, paintChip } from "./chips.js";
 import { BuildList, type BuildListStatus } from "./ui/BuildList.js";
+import { SegmentCardView } from "./ui/SegmentCard.js";
 import type { RoutingApi, WirePrefs } from "./routing.js";
 import { reportCaught, startReporting } from "./report.js";
 import { WORKER_FAILED, wrap } from "./rpc.js";
@@ -493,6 +492,8 @@ function syncAvoidSummary(): void {
     avoidTypes.size === 0 ? "🛡 avoid lane types" : `🛡 avoiding ${avoidTypes.size} lane type${avoidTypes.size > 1 ? "s" : ""}`;
 }
 let hoverPopup: Popup | null = null;
+/** The street card the hover popup shows (src/ui/SegmentCard.tsx). */
+const segmentCard = new SegmentCardView();
 /** Take the hover card down for a click card of the same thing. Both open on a
  * desktop tap — the pointer is over it — and two cards over one spot is noise;
  * the click card is the one with a close button, so it stays. */
@@ -3092,26 +3093,24 @@ map.on("load", () => {
         crashes?: number;
         source?: string;
       };
-      const html =
-        segmentHtml(props, { photo: mapillaryToken !== "" }) +
-        // "right-click" means nothing on a phone
-        `<br><small>${
-          window.matchMedia("(hover: none)").matches
-            ? "press and hold to mark as sketchy"
-            : "right-click to mark as sketchy"
-        }</small>`;
+      // "right-click" means nothing on a phone
+      const hint = window.matchMedia("(hover: none)").matches
+        ? "press and hold to mark as sketchy"
+        : "right-click to mark as sketchy";
+      segmentCard.show(props, [h("br", null), h("small", null, hint)], mapillaryToken !== "");
       if (!hoverPopup) {
         hoverPopup = new maplibregl.Popup({ closeButton: true, closeOnClick: true });
         hoverPopup.addTo(map);
       }
-      hoverPopup.setLngLat(e.lngLat).setHTML(html);
+      // the same element each time: the card is drawn into it, not replaced
+      hoverPopup.setLngLat(e.lngLat).setDOMContent(segmentCard.el);
       if (mapillaryToken !== "") {
         window.clearTimeout(segPhotoTimer);
         const popup = hoverPopup;
         const { lng, lat } = e.lngLat;
         // debounce: only fetch once the cursor rests on a segment
         segPhotoTimer = window.setTimeout(() => {
-          fillPhotoSlot(popup.getElement(), lng, lat, mapillaryToken, () => popup === hoverPopup);
+          segmentCard.loadPhoto(lng, lat, mapillaryToken, () => popup === hoverPopup);
         }, 300);
       }
     });

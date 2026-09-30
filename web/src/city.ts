@@ -16,7 +16,9 @@ import {
   createBasemap,
   glyphsUrl,
 } from "./basemap.js";
-import { fillSegmentPhoto, segmentHtml } from "./segment.js";
+import { h, type ComponentChildren } from "preact";
+
+import { SegmentCardView } from "./ui/SegmentCard.js";
 import type { SegmentProps } from "./segment.js";
 import type { Map as MLMap } from "maplibre-gl";
 
@@ -679,37 +681,42 @@ async function start(): Promise<void> {
     // The street card, in the route planner's own words (src/segment.ts), plus
     // what this page knows that it doesn't: which piece of the network the
     // street belongs to, and whether you can leave it.
-    const popup = new maplibregl.Popup({ closeButton: false, closeOnClick: false });
+    // one card element, drawn into for each street (src/ui/SegmentCard.tsx)
+    const card = new SegmentCardView();
+    const popup = new maplibregl.Popup({ closeButton: false, closeOnClick: false }).setDOMContent(card.el);
     let photoTimer: number | undefined;
     let openFor = "";
 
-    const cardFor = (
+    /** What this page says under the card: which piece of the network. */
+    const belongsTo = (
       props: Record<string, unknown> | null | undefined,
       layer: "islands" | "barriers",
-    ): string => {
-      const seg: SegmentProps = {
-        cls: props?.["cls"] as SegmentProps["cls"],
-        name: props?.["name"] as string | null,
-        crashes: props?.["crashes"] as number | null,
-        source: props?.["source"] as string | undefined,
-      };
-      const body = segmentHtml(seg, { photo: mapillaryToken !== "" });
-      if (layer === "barriers") {
-        return `${body}<br><small><b>A barrier.</b> This is what cuts the safe pieces apart.</small>`;
-      }
+    ): ComponentChildren => {
+      const line = (lead: string, rest: string): ComponentChildren => [
+        h("br", null),
+        h("small", null, h("b", null, lead), rest),
+      ];
+      if (layer === "barriers") return line("A barrier.", " This is what cuts the safe pieces apart.");
       const isle = Number(props?.["isle"] ?? -1);
       const km = props?.["isle_km"];
-      const belongs =
-        isle === 0
-          ? city.stats.connected_leaves_city
-            ? `<br><small><b>The main network:</b> ${mi(Number(km))} in ${city.name}, part of` +
-              ` ${mi(city.stats.connected_region_km)} that carries on past the town line.</small>`
-            : `<br><small><b>The main network:</b> ${mi(Number(km))} — the largest connected` +
-              ` piece in ${city.name}, but it doesn't leave the city.</small>`
-          : `<br><small><b>A pocket:</b> ${mi(Number(km))} of it in ${city.name}, cut off from` +
-            " the main network — you can't leave it without riding something" +
-            " hostile.</small>";
-      return body + belongs;
+      if (isle !== 0) {
+        return line(
+          "A pocket:",
+          ` ${mi(Number(km))} of it in ${city.name}, cut off from the main network — you can't` +
+            " leave it without riding something hostile.",
+        );
+      }
+      return city.stats.connected_leaves_city
+        ? line(
+            "The main network:",
+            ` ${mi(Number(km))} in ${city.name}, part of ${mi(city.stats.connected_region_km)} that` +
+              " carries on past the town line.",
+          )
+        : line(
+            "The main network:",
+            ` ${mi(Number(km))} — the largest connected piece in ${city.name}, but it doesn't leave` +
+              " the city.",
+          );
     };
 
     const show = (
@@ -721,19 +728,26 @@ async function start(): Promise<void> {
       const { lng, lat } = e.lngLat;
       const id = `${layer}:${String(f.properties?.["name"] ?? "")}:${lng.toFixed(4)},${lat.toFixed(4)}`;
       map.getCanvas().style.cursor = "pointer";
-      // Reposition freely, but only rewrite the card when it's a different card.
-      // setHTML on every mousemove replaced the popup's DOM — including a photo
-      // that had already arrived — and the early return below then stopped it
-      // ever being fetched again, so settling on a street lost its picture.
+      // Reposition freely, but only draw the card again when it's a different
+      // card: drawing it asks for its photo afresh, and doing that on every
+      // mousemove (setHTML, once) lost a photo that had already arrived, which
+      // the early return below then never fetched again.
       popup.setLngLat(e.lngLat).addTo(map);
       if (id === openFor) return;
       openFor = id;
-      popup.setHTML(cardFor(f.properties, layer));
+      const props = f.properties;
+      const seg: SegmentProps = {
+        cls: props?.["cls"] as SegmentProps["cls"],
+        name: props?.["name"] as string | null,
+        crashes: props?.["crashes"] as number | null,
+        source: props?.["source"] as string | undefined,
+      };
+      card.show(seg, belongsTo(props, layer), mapillaryToken !== "");
       // debounced like the planner's: the photo is for the street you settled
       // on, not every street the pointer crossed getting there
       window.clearTimeout(photoTimer);
       photoTimer = window.setTimeout(() => {
-        fillSegmentPhoto(popup.getElement(), lng, lat, mapillaryToken, () => openFor === id);
+        card.loadPhoto(lng, lat, mapillaryToken, () => openFor === id);
       }, 300);
     };
 
