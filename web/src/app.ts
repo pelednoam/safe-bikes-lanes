@@ -120,7 +120,7 @@ import { withRetry } from "./retry.js";
 import { COVERAGE, HOME, outsideCoverage } from "./coverage.js";
 import { Lane, type Ticket } from "./planner.js";
 import { Trip, type TripSnapshot } from "./trip.js";
-import { h, render } from "preact";
+import { type ComponentChild, h, render } from "preact";
 import { type Headline, NavHeadline, NavTripLine, type TripLine } from "./ui/NavBanner.js";
 import { OptionCards } from "./ui/OptionCards.js";
 import { type GradeView, SearchResults, type SearchRowView } from "./ui/SearchResults.js";
@@ -130,6 +130,16 @@ import { RideList, RideTotalsLine, SketchyList } from "./ui/Lists.js";
 import { chipViews, paintChip } from "./chips.js";
 import { BuildList, type BuildListStatus } from "./ui/BuildList.js";
 import { SegmentCardView } from "./ui/SegmentCard.js";
+import {
+  BlockCard,
+  cardElement,
+  ConstructionCard,
+  CrossingCard,
+  ElevationCard,
+  HazardCard,
+  PlaceCard,
+  textOf,
+} from "./ui/MapCards.js";
 import type { RoutingApi, WirePrefs } from "./routing.js";
 import { reportCaught, startReporting } from "./report.js";
 import { WORKER_FAILED, wrap } from "./rpc.js";
@@ -2727,36 +2737,25 @@ map.on("load", () => {
       dropHoverCard();
       const f = e.features?.[0];
       if (!f) return;
-      const props = f.properties as {
-        src?: string;
-        name?: string;
-        detail?: string;
-        start?: string;
-        end?: string;
-        kind?: string;
-        address?: string;
-      };
-      const source = props.src === "massdot_wzdx" ? "MassDOT work zone" : "Cambridge street permit";
-      // Escaped, like the hover popup beside it: every field here comes from a
-      // city permit feed or MassDOT's work-zone API, so a project named
-      // `<img onerror=…>` would have run in the reader's page. The hover popup
-      // escaped these and this one did not, which is the kind of gap that
-      // survives precisely because the two look alike.
-      // MapLibre hands back whatever the feed had, including null, and a permit
-      // whose address is three spaces should read as absent rather than as a
-      // blank line. An empty string was already absent, as the `||` chain here
-      // used to treat it.
-      const text = (t: unknown): string =>
-        typeof t === "string" && t.trim() !== "" ? esc(t.trim()) : "";
-      const title = text(props.name) || text(props.kind) || "construction";
-      const address = text(props.address);
-      const detail = text(props.detail);
+      // The same card as the hover's (src/ui/MapCards.tsx), drawn as text:
+      // every field comes from a city permit feed or MassDOT's work-zone API,
+      // and this one once set them as HTML unescaped while the hover escaped
+      // them, the kind of gap that survives because the two look alike.
+      const p = f.properties as Record<string, unknown>;
       new maplibregl.Popup()
         .setLngLat(e.lngLat)
-        .setHTML(
-          `🚧 <b>${title}</b><br>${address}` +
-            (detail === "" ? "" : `<br>${detail}`) +
-            `<br><small>${source} · ${text(props.start) || "?"} → ${text(props.end) || "?"}</small>`,
+        .setDOMContent(
+          cardElement(
+            h(ConstructionCard, {
+              name: textOf(p["name"]),
+              kind: textOf(p["kind"]),
+              address: textOf(p["address"]),
+              detail: textOf(p["detail"]),
+              src: textOf(p["src"]),
+              start: textOf(p["start"]),
+              end: textOf(p["end"]),
+            }),
+          ),
         )
         .addTo(map);
     });
@@ -2972,56 +2971,58 @@ map.on("load", () => {
     },
   });
 
-  // hover tooltips on every dot layer (clicks keep their richer popups)
-  const hoverHtml: Record<string, (props: Record<string, unknown>) => string> = {
-    pois: (p) => {
-      const kind = typeof p["kind"] === "string" ? p["kind"] : "";
-      const meta = POI_META[kind];
-      const name = typeof p["name"] === "string" && p["name"] !== "" ? p["name"] : null;
-      return `${meta?.emoji ?? "📍"} <b>${esc(name ?? meta?.label ?? "stop")}</b>` +
-        (name ? `<br><small>${meta?.label ?? ""}</small>` : "");
-    },
-    gateways: () =>
-      "🚦 <b>safe crossing</b><br><small>signalized crossing of a busy street</small>",
+  // hover tooltips on every dot layer (clicks keep their richer popups);
+  // src/ui/MapCards.tsx draws them
+  const placeCard = (p: Record<string, unknown>, withKind: boolean): ComponentChild => {
+    const kind = typeof p["kind"] === "string" ? p["kind"] : "";
+    const meta = POI_META[kind];
+    const name = textOf(p["name"]);
+    return h(PlaceCard, {
+      emoji: meta?.emoji ?? "📍",
+      name: name || (meta?.label ?? "stop"),
+      kind: withKind && name !== "" ? (meta?.label ?? "") : "",
+    });
+  };
+  const constructionCard = (p: Record<string, unknown>): ComponentChild =>
+    h(ConstructionCard, {
+      name: textOf(p["name"]),
+      kind: textOf(p["kind"]),
+      address: textOf(p["address"]),
+      detail: textOf(p["detail"]),
+      src: textOf(p["src"]),
+      start: textOf(p["start"]),
+      end: textOf(p["end"]),
+    });
+  /** A hazard report's photo, read from the device once per report. Read on
+   * every mousemove before, each time into a new object URL never let go. */
+  const hazardPhotos = new Map<string, string | null>();
+  const hazardPhotoId = (p: Record<string, unknown>): string | null =>
+    (p["hasPhoto"] === true || p["hasPhoto"] === "true") && textOf(String(p["id"] ?? "")) !== ""
+      ? String(p["id"])
+      : null;
+  const hoverCards: Record<string, (props: Record<string, unknown>) => ComponentChild> = {
+    pois: (p) => placeCard(p, true),
+    gateways: () => h(CrossingCard, {}),
     hazardpts: (p) => {
       const cat = typeof p["category"] === "string" ? (p["category"] as HazardCategory) : null;
-      const note =
-        typeof p["note"] === "string" && p["note"] !== "" ? `<br>${esc(p["note"])}` : "";
-      const when =
-        typeof p["t"] === "number"
-          ? `<br><small>${new Date(p["t"]).toLocaleDateString()} · click to remove</small>`
-          : "";
-      // photo placeholder — filled asynchronously from IndexedDB below
-      const photo =
-        p["hasPhoto"] === true || p["hasPhoto"] === "true"
-          ? `<img data-hazard-photo="${esc(String(p["id"] ?? ""))}" alt=""
-               style="max-width:180px;display:block;border-radius:6px;margin-top:4px">`
-          : "";
-      return `⚠ <b>${cat !== null ? HAZARD_LABELS[cat] : "hazard"}</b>${note}${photo}${when}`;
+      const id = hazardPhotoId(p);
+      return h(HazardCard, {
+        label: cat !== null ? HAZARD_LABELS[cat] : "hazard",
+        note: textOf(p["note"]),
+        when: typeof p["t"] === "number" ? new Date(p["t"]).toLocaleDateString() : null,
+        photo: id !== null ? (hazardPhotos.get(id) ?? null) : null,
+      });
     },
-    "construction-pts": (p) => constructionHtml(p),
-    "construction-lines": (p) => constructionHtml(p),
+    "construction-pts": constructionCard,
+    "construction-lines": constructionCard,
   };
-  function constructionHtml(p: Record<string, unknown>): string {
-    const name = typeof p["name"] === "string" && p["name"] !== "" ? p["name"] : "construction";
-    const kind = typeof p["kind"] === "string" ? ` · ${esc(p["kind"] as string)}` : "";
-    const address =
-      typeof p["address"] === "string" && p["address"] !== "" ? `<br>${esc(p["address"] as string)}` : "";
-    const detail =
-      typeof p["detail"] === "string" && p["detail"] !== "" ? `<br>${esc(p["detail"] as string)}` : "";
-    const source =
-      p["src"] === "massdot_wzdx" ? "MassDOT work zone" : "Cambridge street permit";
-    const dates =
-      typeof p["start"] === "string" && typeof p["end"] === "string"
-        ? ` · ${esc(p["start"] as string)} → ${esc(p["end"] as string)}`
-        : "";
-    return `🚧 <b>${esc(name)}</b>${kind}${address}${detail}<br><small>${source}${dates}</small>`;
-  }
-  for (const [layer, html] of Object.entries(hoverHtml)) {
+  for (const [layer, card] of Object.entries(hoverCards)) {
     map.on("mousemove", layer, (e: MapLayerMouseEvent) => {
       map.getCanvas().style.cursor = "pointer";
       const f = e.features?.[0];
       if (!f) return;
+      const props = f.properties as Record<string, unknown>;
+      const el = cardElement(card(props));
       hoverPopup?.remove();
       hoverPopup = new maplibregl.Popup({
         closeButton: false,
@@ -3029,16 +3030,16 @@ map.on("load", () => {
         offset: 10,
       })
         .setLngLat(e.lngLat)
-        .setHTML(html(f.properties as Record<string, unknown>))
+        .setDOMContent(el)
         .addTo(map);
-      // hazard photos live in IndexedDB — fill the placeholder if present
-      const slot = hoverPopup
-        .getElement()
-        ?.querySelector<HTMLImageElement>("img[data-hazard-photo]");
-      const photoId = slot?.dataset["hazardPhoto"];
-      if (slot && photoId !== undefined && photoId !== "") {
+      // hazard photos live in IndexedDB: read once, then drawn from memory
+      const photoId = layer === "hazardpts" ? hazardPhotoId(props) : null;
+      if (photoId !== null && !hazardPhotos.has(photoId)) {
+        hazardPhotos.set(photoId, null);
         void getHazardPhoto(photoId).then((blob) => {
-          if (blob && slot.isConnected) slot.src = URL.createObjectURL(blob);
+          if (!blob) return;
+          hazardPhotos.set(photoId, URL.createObjectURL(blob));
+          if (el.isConnected) render(card(props), el);
         });
       }
     });
@@ -3054,7 +3055,7 @@ map.on("load", () => {
     dropHoverCard();
     new maplibregl.Popup({ offset: 10 })
       .setLngLat(e.lngLat)
-      .setHTML(hoverHtml["gateways"]?.({}) ?? "")
+      .setDOMContent(cardElement(h(CrossingCard, {})))
       .addTo(map);
   });
 
@@ -3135,11 +3136,9 @@ map.on("load", () => {
       dropHoverCard();
       const f = e.features?.[0];
       if (!f) return;
-      const props = f.properties as { kind?: string; name?: string };
-      const meta = props.kind !== undefined ? POI_META[props.kind] : undefined;
       new maplibregl.Popup()
         .setLngLat(e.lngLat)
-        .setHTML(`${meta?.emoji ?? ""} <b>${esc(String(props.name || meta?.label || "?"))}</b>`)
+        .setDOMContent(cardElement(placeCard(f.properties as Record<string, unknown>, false)))
         .addTo(map);
     },
     true,
@@ -3153,9 +3152,10 @@ map.on("load", () => {
     hoverPopup?.remove();
     hoverPopup = new maplibregl.Popup({ closeButton: true, closeOnClick: true })
       .setLngLat(e.lngLat)
-      .setHTML(
-        `🚴 ${fmtDist(Number(props.fac_m) || 0)} of bike facilities in this block` +
-          `<br><small>${fmtDist(Number(props.prot_m) || 0)} protected (path/separated)</small>`,
+      .setDOMContent(
+        cardElement(
+          h(BlockCard, { facilityM: Number(props.fac_m) || 0, protectedM: Number(props.prot_m) || 0 }),
+        ),
       )
       .addTo(map);
   });
@@ -3171,7 +3171,7 @@ map.on("load", () => {
     hoverPopup?.remove();
     hoverPopup = new maplibregl.Popup({ closeButton: true, closeOnClick: true })
       .setLngLat(e.lngLat)
-      .setHTML(`elevation ~${fmtClimb(Number(props.elev) || 0)}`)
+      .setDOMContent(cardElement(h(ElevationCard, { elevM: Number(props.elev) || 0 })))
       .addTo(map);
   });
   map.on("mouseleave", "elevmap", () => {
