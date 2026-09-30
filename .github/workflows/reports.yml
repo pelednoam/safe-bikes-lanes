@@ -71,6 +71,28 @@ jobs:
       # and nothing of the repository's but the Worker's own files.
       - if: steps.ready.outputs.go == 'true'
         run: npm ci --ignore-scripts
+      # A new Cloudflare account has no workers.dev subdomain, and wrangler
+      # won't pick one outside a terminal: the Worker's address would be
+      # https://safe-bikes-reports.<subdomain>.workers.dev. Registered once;
+      # the name is the WORKERS_SUBDOMAIN variable, else pelednoam.
+      - name: The workers.dev subdomain, registered the first time
+        if: steps.ready.outputs.go == 'true'
+        env:
+          WANTED: ${{ vars.WORKERS_SUBDOMAIN || 'pelednoam' }}
+        run: |
+          case "$WANTED" in *[!a-z0-9-]*|"") echo "::error::bad subdomain '$WANTED'"; exit 1;; esac
+          api="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain"
+          auth="Authorization: Bearer $CLOUDFLARE_API_TOKEN"
+          field='let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const r=JSON.parse(s);process.stdout.write(r.success&&r.result&&r.result.subdomain?r.result.subdomain:"")})'
+          have=$(curl -sS -H "$auth" "$api" | node -e "$field")
+          if [ -z "$have" ]; then
+            resp=$(curl -sS -X PUT -H "$auth" -H "content-type: application/json" \
+              --data "{\"subdomain\":\"$WANTED\"}" "$api")
+            have=$(printf '%s' "$resp" | node -e "$field")
+            [ -n "$have" ] || { echo "::error::couldn't register $WANTED.workers.dev: $resp"; exit 1; }
+            echo "registered $have.workers.dev"
+          fi
+          echo "::notice::The Worker is https://safe-bikes-reports.$have.workers.dev/report"
       - name: The KV namespace, created the first time
         if: steps.ready.outputs.go == 'true'
         run: |
