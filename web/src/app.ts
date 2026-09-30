@@ -130,6 +130,7 @@ import { Cautions, ClassBar, ClassKey, Ribbon, WhyList } from "./ui/RouteSummary
 import { RecentRoutes, SavedPlaces } from "./ui/PlacesAndRecent.js";
 import { RideList, RideTotalsLine, SketchyList } from "./ui/Lists.js";
 import { chipViews, paintChip } from "./chips.js";
+import { BuildList, type BuildListStatus } from "./ui/BuildList.js";
 import type { RoutingApi, WirePrefs } from "./routing.js";
 import { reportCaught, startReporting } from "./report.js";
 import { WORKER_FAILED, wrap } from "./rpc.js";
@@ -6361,97 +6362,38 @@ async function runWhatIf(pid: string): Promise<void> {
   );
 }
 
+/** Where the project data is: drawn by the list, which nothing else writes. */
+let buildListStatus: BuildListStatus = "idle";
+
+/** Preview a project's line on the map while its row is hovered or focused. */
+function previewProject(pid: string | null): void {
+  if (map.getLayer("build-hover") === undefined) return;
+  map.setFilter("build-hover", ["==", ["get", "pid"], pid ?? ""]);
+  // only useful once the layer is drawable; focusProject turns it on
+  map.setLayoutProperty(
+    "build-hover",
+    "visibility",
+    pid !== null && el<HTMLInputElement>("show-build").checked ? "visible" : "none",
+  );
+}
+
 function renderBuildList(): void {
-  const box = el<HTMLDivElement>("build-list");
-  box.innerHTML = "";
-  const ranked = rankedProjects();
+  const ranked = buildListStatus === "ready" ? rankedProjects() : [];
   // scored over every project, not the deduped list: the map draws the
   // alternatives too, and they'd otherwise keep our weighting while the rest
   // switched to the reader's
-  repaintProjects(scoreAllProjects());
-  if (ranked.length === 0) {
-    box.textContent = "no candidate projects here";
-    return;
-  }
-  ranked.slice(0, 20).forEach((p, i) => {
-    const row = document.createElement("div");
-    row.className = "build-row" + (p.pid === selectedProject ? " selected" : "");
-    row.tabIndex = 0;
-    row.setAttribute("role", "button");
-    row.setAttribute("aria-pressed", p.pid === selectedProject ? "true" : "false");
-    row.setAttribute("data-pid", p.pid);
-    const head = document.createElement("div");
-    head.className = "build-where";
-    const rank = document.createElement("span");
-    rank.className = "build-rank";
-    rank.textContent = `${i + 1}.`;
-    head.appendChild(rank);
-    if (p.kind === "spot_fix") {
-      // A spot fix is one location, not a length to protect. Rebuilding the
-      // heading as "39 m of X" re-imposed the corridor framing the pipeline
-      // deliberately avoids, and made the distinction invisible here.
-      const badge = document.createElement("span");
-      badge.className = "build-badge";
-      badge.textContent = "spot fix";
-      head.appendChild(badge);
-    }
-    head.appendChild(
-      document.createTextNode(
-        `${fmtDist(p.length_m)} of ${p.name}${p.towns ? ` — ${p.towns}` : ""}`,
-      ),
-    );
-    row.appendChild(head);
-    const why = document.createElement("div");
-    why.className = "build-why";
-    // the pipeline's own sentence, minus the "N m of Street (Town)" opener the
-    // heading above already carries
-    why.textContent = p.summary.split("; ").slice(1).join("; ");
-    if (p.kind === "spot_fix") {
-      why.textContent = `one location to treat — ${why.textContent}`;
-    }
-    row.appendChild(why);
-    if (p.group_size > 1) {
-      const alt = document.createElement("div");
-      alt.className = "build-alt";
-      alt.textContent = `${p.group_size - 1} other way${p.group_size > 2 ? "s" : ""} across the same gap`;
-      row.appendChild(alt);
-    }
-    const act = (): void => {
-      focusProject(p.pid);
-    };
-    const preview = (on: boolean): void => {
-      if (map.getLayer("build-hover") === undefined) return;
-      map.setFilter("build-hover", ["==", ["get", "pid"], on ? p.pid : ""]);
-      // only useful once the layer is drawable; focusProject turns it on
-      map.setLayoutProperty(
-        "build-hover",
-        "visibility",
-        on && el<HTMLInputElement>("show-build").checked ? "visible" : "none",
-      );
-    };
-    row.addEventListener("mouseenter", () => preview(true));
-    row.addEventListener("mouseleave", () => preview(false));
-    row.addEventListener("focus", () => preview(true));
-    row.addEventListener("blur", () => preview(false));
-    row.addEventListener("click", act);
-    row.addEventListener("keydown", (e: KeyboardEvent) => {
-      if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        act();
-      }
-    });
-    box.appendChild(row);
-  });
-  if (ranked.length > 20) {
-    const more = document.createElement("div");
-    more.className = "hint";
-    // never imply the list is the whole field
-    const all = priorityMeta?.candidates ?? ranked.length;
-    more.textContent =
-      `showing the top 20 of ${ranked.length} mapped project` +
-      `${ranked.length === 1 ? "" : "s"}; the CSV has all ${all} that were measured`;
-    box.appendChild(more);
-  }
+  if (buildListStatus === "ready") repaintProjects(scoreAllProjects());
+  render(
+    h(BuildList, {
+      status: buildListStatus,
+      ranked,
+      selected: selectedProject,
+      measured: priorityMeta?.candidates ?? null,
+      onPick: focusProject,
+      onPreview: previewProject,
+    }),
+    el<HTMLDivElement>("build-list"),
+  );
 }
 
 function describeMeta(meta: PriorityMeta): void {
@@ -6528,7 +6470,8 @@ let buildDataStarted = false;
 function ensureBuildData(): void {
   if (buildDataStarted) return;
   buildDataStarted = true;
-  el<HTMLDivElement>("build-list").textContent = "loading projects…";
+  buildListStatus = "loading";
+  renderBuildList();
   void dataReady
     .then(() => loadJson<GeoJSON.FeatureCollection>("priorities.geojson"))
     .then((fc) => {
@@ -6581,13 +6524,14 @@ function ensureBuildData(): void {
         opt.textContent = town;
         select.appendChild(opt);
       }
+      buildListStatus = "ready";
       renderBuildList();
     })
     .catch(() => {
       // metadata said there was a ranking and the ranking didn't load: say so
       // rather than leaving "loading projects…" up forever
-      el<HTMLDivElement>("build-list").textContent =
-        "couldn't load the projects — check your connection and reopen this section";
+      buildListStatus = "failed";
+      renderBuildList();
       buildDataStarted = false;
     });
 }

@@ -83,6 +83,27 @@ test("the weight sliders re-sort without changing the numbers", async ({ page })
     .toBe(firstBefore);
 });
 
+test("choosing a project from the keyboard leaves the keyboard on it", async ({ page }) => {
+  // The list was rebuilt from nothing on every change, choosing included, and
+  // the focus went with the row it was on.
+  await openBuild(page);
+  const row = page.locator(".build-row").nth(1);
+  await expect(row).toBeVisible({ timeout: 20_000 });
+  await row.focus();
+  await page.evaluate(() => {
+    (window as unknown as { __row?: Element | null }).__row = document.activeElement;
+  });
+  await page.keyboard.press("Enter");
+  await expect(row).toHaveClass(/selected/);
+  await expect(row).toHaveAttribute("aria-pressed", "true");
+  expect(
+    await page.evaluate(() => {
+      const was = (window as unknown as { __row?: Element | null }).__row;
+      return was !== null && was !== undefined && was.isConnected && document.activeElement === was;
+    }),
+  ).toBe(true);
+});
+
 test("selecting a project highlights it on the map and frames it", async ({ page }) => {
   await openBuild(page);
   const row = page.locator(".build-row").first();
