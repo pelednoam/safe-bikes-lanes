@@ -102,13 +102,23 @@ def test_dependabot_keeps_the_pins_moving() -> None:
     # Worker (reports/) was added with exact pins and nothing to move them.
     npm_dirs = {u["directory"] for u in updates if u["package-ecosystem"] == "npm"}
     packages: set[str] = set()
-    # walked with the big directories pruned, not globbed: **/package.json went
-    # down every node_modules tree on the machine to throw those paths away after
+    # Walked with the big directories pruned, not globbed: **/package.json went
+    # down every node_modules tree on the machine to throw those paths away after.
+    # node_modules and the like are pruned wherever they are; the built and fetched
+    # directories only where this repository has them, by path, so that a package
+    # under some other directory that happens to be called "data" is still checked.
+    generated = {"web/dist", "web/data", "web/test-data", "web/coverage", "data"}
     for here, dirs, files in os.walk(ROOT):
-        dirs[:] = [d for d in dirs if d not in {"node_modules", ".venv", ".git", "dist", "data"}]
+        rel = Path(here).relative_to(ROOT).as_posix()
+        dirs[:] = [
+            d
+            for d in dirs
+            if d not in {"node_modules", ".venv", ".git"}
+            and (d if rel == "." else f"{rel}/{d}") not in generated
+        ]
         if "package.json" in files:
-            packages.add("/" + Path(here).relative_to(ROOT).as_posix())
-    packages.discard("/.")
+            # Dependabot names the repository root "/"
+            packages.add("/" if rel == "." else f"/{rel}")
     assert packages <= npm_dirs, f"no Dependabot entry for {sorted(packages - npm_dirs)}"
     assert {"/web", "/reports"} <= npm_dirs
     # and the lockfile is where Dependabot has to look

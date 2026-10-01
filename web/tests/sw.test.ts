@@ -49,10 +49,7 @@ function loadWorker(fetchImpl: FetchFn, caches = new FakeCacheStorage(), loaded:
       listeners[type] = fn;
     },
     skipWaiting: () => undefined,
-    clients: {
-      claim: async () => undefined,
-      matchAll: async () => [],
-    },
+    clients: { claim: async () => undefined },
     location: new URL(`${ORIGIN}/sw.js`),
   };
   const names = [
@@ -204,6 +201,14 @@ describe("updating the service worker", () => {
     const c = await live("C");
     const names = (await c.caches.keys()).filter((k) => k.startsWith("family-bike-router-"));
     expect(names.sort()).toEqual(["family-bike-router-A", "family-bike-router-C"]);
+  });
+
+  it("forgets the data order an earlier version of the worker kept", async () => {
+    const store = new FakeCacheStorage();
+    const order = await store.open("bike-cache-order");
+    await order.put(`${ORIGIN}/__order-data`, new Response('["family-bike-data-d1"]'));
+    await deployed(store, "A", "d1");
+    expect((await store.open("bike-cache-order")).urls()).toEqual([`${ORIGIN}/__order-shell`]);
   });
 
   it("keeps only the current data: another build's tiles don't join this one's", async () => {

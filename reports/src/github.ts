@@ -10,6 +10,19 @@ export interface GitHub {
   comment(issue: number, body: string): Promise<void>;
 }
 
+/** An answer from GitHub that wasn't a success. `status` is its HTTP status: a 4xx
+ * is a refusal (nothing was made), where a network failure (no GitHubError at all)
+ * or a 5xx leaves it unknown whether the request was acted on. */
+export class GitHubError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = "GitHubError";
+  }
+}
+
 export interface Created {
   number: number;
   labelled: boolean;
@@ -35,7 +48,9 @@ export function github(repo: string, token: string, fetchFn: Fetch = fetch): Git
       },
     });
   const ok = async (resp: Response, what: string): Promise<Response> => {
-    if (!resp.ok) throw new Error(`GitHub ${what}: ${resp.status} ${(await resp.text()).slice(0, 200)}`);
+    if (!resp.ok) {
+      throw new GitHubError(`GitHub ${what}: ${resp.status} ${(await resp.text()).slice(0, 200)}`, resp.status);
+    }
     return resp;
   };
 
@@ -49,9 +64,11 @@ export function github(repo: string, token: string, fetchFn: Fetch = fetch): Git
     async create(title, body) {
       // The label has to exist (the deploy creates it): GitHub refuses a label it
       // can't create with a 422, and that is an error, with no issue filed. But a
-      // token without triage access has the label silently dropped from a 201,
-      // and that issue is public already: it is reported as filed, unlabelled, so
-      // that the caller records it rather than filing it again on the next report.
+      // token that can't apply labels (a fine-grained one without Issues: Read and
+      // write on this repository, a classic one without triage access) has the
+      // label silently dropped from a 201, and that issue is public already: it is
+      // reported as filed, unlabelled, so that the caller records it rather than
+      // filing it again on the next report.
       const resp = await ok(
         await api(`/repos/${repo}/issues`, {
           method: "POST",

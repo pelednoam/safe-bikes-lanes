@@ -91,15 +91,27 @@ jobs:
           # not ours, so a "::" at the start of one of its lines is not a command.
           oneline() { printf '%s' "$1" | tr '\r\n' '  ' | cut -c1-300 | sed 's/::/: :/g'; }
           state='let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{let r;try{r=JSON.parse(s)}catch{process.stdout.write("error");return}const n=r.success&&r.result&&r.result.subdomain;const none=(r.success&&!n)||(r.errors||[]).some(e=>e.code===10007);process.stdout.write(n?"have:"+n:none?"missing":"error")})'
-          # the body is kept, so a failure can say what Cloudflare answered without asking again
-          body=$(curl -sS --retry 3 --retry-all-errors -H "$auth" "$api" 2>&1) || body="${body:-no answer}"
-          got=$(printf '%s' "$body" | node -e "$state") || got=error
+          # curl's own messages (a retry it made, the reason it gave up) go to a file,
+          # not into the body: with 2>&1 a retry that then succeeded put a warning
+          # in front of the JSON, and the JSON failed to parse. The body is parsed
+          # only if curl succeeded; both are kept for what an error says.
+          err=$(mktemp)
+          if body=$(curl -sS --retry 3 --retry-all-errors -H "$auth" "$api" 2>"$err"); then
+            got=$(printf '%s' "$body" | node -e "$state") || got=error
+          else
+            got=error
+            body="$body $(cat "$err")"
+          fi
           case "$got" in
             have:*) have="${got#have:}" ;;
             missing)
-              resp=$(curl -sS --retry 3 --retry-all-errors -X PUT -H "$auth" -H "content-type: application/json" \
-                --data "{\"subdomain\":\"$WANTED\"}" "$api") || resp=""
-              got=$(printf '%s' "$resp" | node -e "$state") || got=error
+              if resp=$(curl -sS --retry 3 --retry-all-errors -X PUT -H "$auth" -H "content-type: application/json" \
+                --data "{\"subdomain\":\"$WANTED\"}" "$api" 2>"$err"); then
+                got=$(printf '%s' "$resp" | node -e "$state") || got=error
+              else
+                got=error
+                resp="$resp $(cat "$err")"
+              fi
               case "$got" in
                 have:*) have="${got#have:}"; echo "registered $have.workers.dev" ;;
                 *) echo "::error::couldn't register $WANTED.workers.dev: $(oneline "$resp")"; exit 1 ;;

@@ -1,20 +1,23 @@
 // The endpoint, and how a report becomes an issue or a count on one.
 import { describe, expect, it, vi } from "vitest";
 
-import type { GitHub } from "../src/github.js";
+import { GitHubError, type GitHub } from "../src/github.js";
 import { fingerprint, type Report } from "../src/report.js";
 import { capOf, type Ctx, type Env, file, handle, readLimited, type Seen, type Store } from "../src/worker.js";
 import { sample } from "./sample.js";
 
 const SITE = "https://pelednoam.github.io";
 
-function memoryStore(): Store & { data: Map<string, string> } {
+function memoryStore(): Store & { data: Map<string, string>; ttl: Map<string, number | undefined> } {
   const data = new Map<string, string>();
+  const ttl = new Map<string, number | undefined>();
   return {
     data,
+    ttl,
     get: (k) => Promise.resolve(data.get(k) ?? null),
-    put: (k, v) => {
+    put: (k, v, options) => {
       data.set(k, v);
+      ttl.set(k, options?.expirationTtl);
       return Promise.resolve();
     },
   };
@@ -230,15 +233,62 @@ describe("filing", () => {
     await Promise.all([first, second]);
   });
 
-  it("doesn't count a create that failed against the day's new issues", async () => {
+  it("gives the slot back when GitHub plainly refused, by taking one off what is there now", async () => {
+    // A's create is refused after B has taken a slot: writing back the count A
+    // read (0) would erase B's. Taking one off the current count leaves B's.
+    const e = env({ DAILY_NEW_CAP: "5" });
+    let refuse: () => void = () => undefined;
+    const refusing = new Promise<void>((_, no) => (refuse = () => no(new GitHubError("GitHub create: 422", 422))));
+    const a = { ...fakeGitHub(), create: () => refusing.then(() => ({ number: 1, labelled: true })) };
+    const aDone = file(sample({ message: "a" }), e, a, day1).catch((err: unknown) => err);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(await e.REPORTS.get("new:2026-09-29")).toBe("1");
+    // B takes a slot, and files, while A is still waiting on GitHub
+    await file(sample({ message: "b" }), e, fakeGitHub(), day1);
+    expect(await e.REPORTS.get("new:2026-09-29")).toBe("2");
+    refuse();
+    expect(await aDone).toBeInstanceOf(GitHubError);
+    // 2 - 1: B's issue is still counted
+    expect(await e.REPORTS.get("new:2026-09-29")).toBe("1");
+  });
+
+  it("keeps the slot when the outcome is unknown: a network failure or a 5xx may have filed it", async () => {
+    const e = env({ DAILY_NEW_CAP: "5" });
+    const down = { ...fakeGitHub(), create: () => Promise.reject(new TypeError("fetch failed")) };
+    await expect(file(sample({ message: "one" }), e, down, day1)).rejects.toThrow("fetch failed");
+    const broken = {
+      ...fakeGitHub(),
+      create: () => Promise.reject(new GitHubError("GitHub create: 502", 502)),
+    };
+    await expect(file(sample({ message: "two" }), e, broken, day1)).rejects.toThrow("502");
+    expect(await e.REPORTS.get("new:2026-09-29")).toBe("2");
+  });
+
+  it("doesn't count a create that was refused against the day's new issues", async () => {
     const e = env({ DAILY_NEW_CAP: "1" });
-    const failing = { ...fakeGitHub(), create: () => Promise.reject(new Error("no label")) };
-    await expect(file(sample({ message: "one" }), e, failing, day1)).rejects.toThrow("no label");
-    await expect(file(sample({ message: "two" }), e, failing, day1)).rejects.toThrow("no label");
+    const refused = {
+      ...fakeGitHub(),
+      create: () => Promise.reject(new GitHubError("GitHub create: 422", 422)),
+    };
+    await expect(file(sample({ message: "one" }), e, refused, day1)).rejects.toThrow("422");
+    await expect(file(sample({ message: "two" }), e, refused, day1)).rejects.toThrow("422");
     // the cap of one is still unspent when GitHub works again
     const gh = fakeGitHub();
     await file(sample({ message: "three" }), e, gh, day1);
     expect(gh.calls.filter((c) => c.startsWith("create"))).toHaveLength(1);
+  });
+
+  it("never lets an unlabelled issue's record expire, so find() not seeing it can't file another", async () => {
+    const e = env({ DAILY_NEW_CAP: "5" });
+    const store = e.REPORTS as ReturnType<typeof memoryStore>;
+    const gh = { ...fakeGitHub(), create: () => Promise.resolve({ number: 42, labelled: false }) };
+    await expect(file(sample(), e, gh, day1)).rejects.toThrow(/Issues: Read and write/);
+    const fp = `fp:${await fingerprint(sample())}`;
+    expect(store.ttl.get(fp), "an unlabelled issue's record has no expiry").toBeUndefined();
+    // a labelled one's does
+    const labelled = fakeGitHub();
+    await file(sample({ message: "another" }), e, labelled, day1);
+    expect(store.ttl.get(`fp:${await fingerprint(sample({ message: "another" }))}`)).toBeGreaterThan(0);
   });
 
   it("stops for the day at the cap", async () => {

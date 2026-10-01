@@ -112,14 +112,17 @@ export function check(body: unknown): Checked {
  * "42.38" is a kilometre and "42.4" ten: a coordinate is found at whatever
  * precision it was cut to, and a decimal in an error message is almost never
  * what the bug is. */
-const DECIMAL = /-?\d+\.\d+/g;
+const DECIMAL = /-?\d+\s*\.\s*\d+/g;
 /** Numbers set side by side: "42,-71", "14/4953/6060" (a tile), "12_34" (a grid
  * cell), "14:4953:6060", "14-4953-6060", "POINT(-71 42)", "tile 4953 6060".
  * Counts and sizes stand alone; these are positions. */
 const NUMBER_RUN = /-?\d+(?:(?:\s*[,/_;:x×-]\s*|\s+)-?\d+)+/g;
-/** "z=14 x=4953 y=6060", "lat=42 lon=-71": tile axes and coordinates with their
- * names, whole numbers too (a decimal is taken anyway). */
-const LABELLED = /\b(?:[xyz]|lat(?:itude)?|lon(?:gitude)?|lng)\s*[=:]\s*-?\d+(?:\.\d+)?/gi;
+/** "z=14 x=4953 y=6060", "lat=42 lon=-71", '"lat":42', "tile_x=4953", "lat 42":
+ * tile axes and coordinates with their names, whole numbers too (a decimal is
+ * taken anyway). The name must not be the end of a longer word ("max 5"), but may
+ * follow an underscore or a quote, which is how JSON.stringify and snake_case
+ * write them. */
+const LABELLED = /(?<![A-Za-z])(?:[xyz]|lat(?:itude)?|lon(?:gitude)?|lng)["']?\s*[=:]?\s*-?\d+(?:\.\d+)?/gi;
 /** Degrees, minutes, seconds: 42°23'48"N 71°7'20"W. */
 const DMS = /\d+\s*°(?:\s*\d+(?:\.\d+)?\s*['′’])?(?:\s*\d+(?:\.\d+)?\s*(?:"|″|''))?\s*[NSEW]?/gi;
 /** A long run of digits: a tile index, an id, a phone number. Statuses (404),
@@ -144,17 +147,20 @@ const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f]/g;
  * the soft hyphen, interlinear annotation marks, tag characters), every
  * variation selector, fillers, line and paragraph separators. In a public
  * issue's title they make one report look like another, and, like control
- * characters, they hide a coordinate from a match. By class, not by list: a
+ * characters, they hide a coordinate from a match. Combining marks go too
+ * ("42\u0301.3967" reads as the coordinate it is). By class, not by list: a
  * hand-picked list had gaps (U+FFF9, the Mongolian selectors), each one a way to
  * split "42.3967" so that nothing matched it. */
 // eslint-disable-next-line no-misleading-character-class
-const INVISIBLE = /[\p{Cf}\p{Variation_Selector}\u034f\u115f\u1160\u17b4\u17b5\u2028\u2029\u3164\uffa0]/gu;
+const INVISIBLE =
+  /[\p{Cf}\p{Mn}\p{Me}\p{Variation_Selector}\u115f\u1160\u17b4\u17b5\u2028\u2029\u2800\u3164\uffa0]/gu;
 
 /** The bundles this app builds, by name: "app-BrmPk3gH.js" (a name and Vite's
  * eight-character hash), and the few files that keep theirs. The only file
  * names that stay in a report: any other, "12_Elm_St.json" for one, is
  * whatever a feed or a rider put in a URL. */
-const BUNDLE_NAME = /^(?:[A-Za-z][A-Za-z0-9.-]*-([A-Za-z0-9_-]{8})|sw|compat|maplibre-gl(?:-[a-z]+)?)\.m?js$/;
+const BUNDLE_NAME =
+  /^(?:[A-Za-z][A-Za-z-]*(?:\.worker)?-([A-Za-z0-9_-]{8})|sw|compat|maplibre-gl(?:-[a-z]+)?)\.m?js$/;
 /** A name of this shape, with a hash that has a capital in it, as Vite's nearly
  * always does (all but one in sixty, which loses its frame's file name). A
  * geohash ("home-dr5regw3.js", a place to within tens of metres) is lowercase
@@ -163,7 +169,12 @@ function isBundle(file: string): boolean {
   const m = BUNDLE_NAME.exec(file);
   if (m === null) return false;
   const hash = m[1];
-  return hash === undefined || /[A-Z]/.test(hash);
+  if (hash !== undefined && !/[A-Z]/.test(hash)) return false;
+  // The name part has no digits, which is where a coordinate would sit
+  // ("p42.3967-71.1223-AbCdEfGh.js"), and, as a last check, a name that scrubbing
+  // would change is not kept: whatever the pattern lets through, this can't be
+  // made to publish what the rest of the scrubber would take out.
+  return scrub(file) === file;
 }
 
 /** A URL down to its bundle's name, if it names one: the host is ours, and the
@@ -185,8 +196,8 @@ function urlToFile(url: string): string {
 function ascii(text: string): string {
   return text
     .replace(/\p{Nd}/gu, (d) => (/[0-9]/.test(d) ? d : "0"))
-    .replace(/[\u066b\uff0e\u2024\ufe52]/g, ".")
-    .replace(/[\u066c\u060c\uff0c\ufe50]/g, ",");
+    .replace(/[\u066b\u2396\uff0e\u2024\u2027\ufe52\u00b7\u3002\uff61]/g, ".")
+    .replace(/[\u066c\u060c\uff0c\ufe50\uff64\u3001]/g, ",");
 }
 
 /** Text with anything that could say where someone is, or who, taken out. */
@@ -198,8 +209,10 @@ export function scrub(text: string): string {
     .replace(EMAIL, "‹email›")
     .replace(ADDRESS, "‹address›")
     .replace(DMS, "‹n›")
-    .replace(LABELLED, "‹n›")
+    // decimals before the labelled whole numbers: "lat 42 .3967" must lose its
+    // fraction with it, not have "lat 42" taken and ".3967" left behind
     .replace(DECIMAL, "‹n›")
+    .replace(LABELLED, "‹n›")
     .replace(NUMBER_RUN, "‹n›")
     .replace(LONG_DIGITS, "‹n›");
 }

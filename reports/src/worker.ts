@@ -3,7 +3,7 @@
 // The answer goes back at once and the filing happens after (waitUntil): a
 // report is sent as the page may be closing, and nothing the app does waits
 // on it. Errors while filing are logged for `wrangler tail`, never returned.
-import { type Created, type GitHub, github, LABEL } from "./github.js";
+import { type Created, type GitHub, GitHubError, github, LABEL } from "./github.js";
 import {
   check,
   fingerprint,
@@ -140,28 +140,43 @@ export async function file(r: Report, env: Env, gh: GitHub, now: Date): Promise<
       const newKey = `new:${day}`;
       const opened = Number((await env.REPORTS.get(newKey)) ?? "0");
       if (opened >= capOf(env.DAILY_NEW_CAP, DEFAULT_DAILY_NEW_CAP)) return;
-      // The slot is taken before the issue is made, and given back if none was:
-      // counted afterwards, the window between reading the count and writing it
-      // was a round trip to GitHub, and a burst of new errors (a crash right after
-      // a deploy, across every rider) all read the same count and all filed.
+      // The slot is taken before the issue is made, so that the window between
+      // reading the count and writing it isn't a round trip to GitHub (a crash right
+      // after a deploy, across every rider, would all read the same count and file).
+      // That narrows the window; it doesn't close it. KV has no atomic increment and
+      // its reads can be a minute stale at another location, so the cap is a limit
+      // on a flood, not an exact count (a Durable Object would make it exact).
       await env.REPORTS.put(newKey, String(opened + 1), { expirationTtl: DAY_TTL_S });
       let made: Created;
       try {
         made = await gh.create(issueTitle(r), issueBody(r, fp, day));
       } catch (err) {
-        // nothing was filed (GitHub refused it): the slot is free again
-        await env.REPORTS.put(newKey, String(opened), { expirationTtl: DAY_TTL_S }).catch(() => undefined);
+        // Given back only when GitHub plainly refused (a 4xx: nothing was made).
+        // A network failure or a 5xx may have filed the issue before it failed, and
+        // then the slot is spent. And given back by taking one off what is there
+        // now, not by writing back what was read: other reports have taken slots
+        // since, and restoring the old count would erase theirs.
+        if (err instanceof GitHubError && err.status >= 400 && err.status < 500) {
+          const now = Number((await env.REPORTS.get(newKey)) ?? "1");
+          await env.REPORTS.put(newKey, String(Math.max(0, now - 1)), { expirationTtl: DAY_TTL_S }).catch(
+            () => undefined,
+          );
+        }
         throw err;
       }
-      // Recorded whether or not it has its label: the issue is public, and
-      // without a record the next report of the same error would file another,
-      // which nothing finds (find() looks at labelled issues) and nothing counts.
-      await env.REPORTS.put(key, JSON.stringify({ issue: made.number, day, pending: 0 } satisfies Seen), {
-        expirationTtl: SEEN_TTL_S,
-      });
+      // Recorded whether or not it has its label: the issue is public, and without
+      // a record the next report of the same error would file another, which nothing
+      // finds (find() looks at labelled issues) and nothing counts. An unlabelled
+      // issue's record doesn't expire: once it did, find() could never see the issue
+      // again and the error would file a fresh one every SEEN_TTL_S.
+      await env.REPORTS.put(
+        key,
+        JSON.stringify({ issue: made.number, day, pending: 0 } satisfies Seen),
+        made.labelled ? { expirationTtl: SEEN_TTL_S } : undefined,
+      );
       if (!made.labelled) {
         throw new Error(
-          `issue #${made.number} was filed without the "${LABEL}" label: the token needs Issues: Read and write on this repository`,
+          `issue #${made.number} was filed without the "${LABEL}" label: the token needs Issues: Read and write on this repository (fine-grained), or triage access (classic), and the label must exist`,
         );
       }
       return;

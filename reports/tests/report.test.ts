@@ -59,7 +59,7 @@ describe("the scrubbing", () => {
     expect(scrub("no route from -71.1223,42.3967 to [-71.0867, 42.3626]")).toBe("no route from ‹n›,‹n› to [‹n›, ‹n›]");
     // a kilometre and ten kilometres: still where someone is
     expect(scrub("at 42.38 -71.1")).toBe("at ‹n› ‹n›");
-    expect(scrub("lat=42.3967;lon=-71.1223")).toBe("‹n›;‹n›");
+    expect(scrub("lat=42.3967;lon=-71.1223")).toBe("lat=‹n›;lon=‹n›");
     expect(scrub("center 42,-71")).toBe("center ‹n›");
   });
 
@@ -146,6 +146,26 @@ describe("the scrubbing", () => {
     expect(scrub("42\u{E0100}.3967")).toBe("‹n›");
   });
 
+  it("takes out a coordinate whose decimal point is any of the separators phones and locales use", () => {
+    for (const dot of ["\u2396", "\u00b7", "\u3002", "\uff61", "\u2027"]) {
+      expect(scrub(`42${dot}3967 | -71${dot}1223`), dot).toBe("‹n› | ‹n›");
+    }
+  });
+
+  it("takes out a coordinate a combining mark or a space is set into", () => {
+    expect(scrub("42\u0301.3967")).toBe("‹n›");
+    expect(scrub("42.\u20dd3967")).toBe("‹n›");
+    expect(scrub("lat 42 .3967")).toBe("lat ‹n›");
+  });
+
+  it("takes out latitude and longitude written as JSON keys, snake_case, or with no separator", () => {
+    expect(scrub('{"lat":42,"lon":-71}')).toBe('{"‹n›,"‹n›}');
+    expect(scrub("tile_x=4953 user_lat=42")).toBe("tile_‹n› user_‹n›");
+    expect(scrub("lat 42")).toBe("‹n›");
+    // and not the ends of longer words
+    expect(scrub("max 5 latency 200")).toBe("max 5 latency 200");
+  });
+
   it("takes out coordinates written with other separators between ASCII digits", () => {
     expect(scrub("42．3967,-71．1223")).toBe("‹n›,‹n›");
     expect(scrub("42.3967，-71.1223")).toBe("‹n›,‹n›");
@@ -153,7 +173,7 @@ describe("the scrubbing", () => {
 
   it("takes out latitude and longitude by name", () => {
     expect(scrub("lat=42 lon=-71")).toBe("‹n› ‹n›");
-    expect(scrub("latitude: 42.38, longitude: -71.1")).toBe("‹n›, ‹n›");
+    expect(scrub("latitude: 42.38, longitude: -71.1")).toBe("latitude: ‹n›, longitude: ‹n›");
     expect(scrub("lng=-71")).toBe("‹n›");
   });
 
@@ -172,6 +192,16 @@ describe("the scrubbing", () => {
     expect(scrub("GET https://api.example/routes/12_Elm_St.json failed")).toBe("GET ‹url› failed");
     expect(scrub("GET https://localhost/app-BrmPk3gH.js failed")).toBe("GET app-BrmPk3gH.js failed");
     expect(scrub("https://localhost/sw.js")).toBe("sw.js");
+  });
+
+  it("doesn't keep a file name that carries a coordinate, whatever its hash looks like", () => {
+    // the pattern let digits and dots into the name part for "routing.worker-…"; a
+    // name with a coordinate in it was then kept as the app's own
+    for (const name of ["p42.3967-71.1223-AbCdEfGh.js", "pin-42.3967--71.1223-Location.js", "Home-dr5regw3-AbCdEfGh.js"]) {
+      expect(scrub(`https://example.test/${name}`), name).toBe("‹url›");
+    }
+    expect(scrubbed(sample({ frames: ["f (p42.3967-71.1223-AbCdEfGh.js:1:2)"] })).frames).toEqual(["f (‹url›)"]);
+    expect(scrubbed(sample({ frames: ["f (lat42.3967-lon71.1223-AbCdEfGh.js:1:2)"] })).frames).toEqual(["f (‹url›)"]);
   });
 
   it("doesn't keep a name whose suffix could be a geohash: a place to within tens of metres", () => {
@@ -210,6 +240,20 @@ describe("one problem, one issue", () => {
     const a = scrubbed(sample({ message: "no tile 12 at z14" }));
     const b = scrubbed(sample({ message: "no tile 12345 at z14" }));
     expect(await fingerprint(a)).toBe(await fingerprint(b));
+  });
+
+  it("reads the same failure differently with a URL that has a query and one that hasn't: an accepted split", async () => {
+    // A query is taken whole to the end of the line (privacy: its words can have
+    // spaces in them, and stopping at the first would publish the rest), which also
+    // takes what follows it; without one, the rest of the message stays. Folding
+    // the two together (everything after a URL dropped from the fingerprint) was
+    // tried, and folds different failures at the same URL into one issue instead.
+    // Duplicates are bounded by the daily cap; a hidden failure is not.
+    const a = scrubbed(sample({ message: "GET https://api.example/search failed with 404" }));
+    const b = scrubbed(sample({ message: "GET https://api.example/search?q=Elm failed with 404" }));
+    expect(a.message).toBe("GET ‹url› failed with 404");
+    expect(b.message).toBe("GET ‹url›");
+    expect(await fingerprint(a)).not.toBe(await fingerprint(b));
   });
 
   it("is a different problem when what followed the URL differs: the failures aren't folded into one issue", async () => {

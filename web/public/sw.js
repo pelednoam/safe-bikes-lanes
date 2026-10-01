@@ -187,6 +187,8 @@ self.addEventListener("activate", (event) => {
       );
       await Promise.all(stale.map((k) => caches.delete(k)));
       await writeOrder([CACHE, ...order.filter((n) => n !== CACHE)]);
+      // the data order an earlier version of this kept, which nothing reads now
+      await (await caches.open(ORDER_CACHE)).delete(new URL("__order-data", self.location).href);
       // take control of open pages so the update reaches them at once
       await self.clients.claim();
     })(),
