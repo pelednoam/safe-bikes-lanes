@@ -385,8 +385,9 @@ export class RideEngine {
     // of, and as the end of a gap it would earn the distance to somewhere the
     // rider may never have been (and a good fix back where they were, after it,
     // would find the allowance already spent). And only when the rider was on the
-    // loop as the gap began: one that began off it (a wrong turn, then the
-    // signal went) covered ground that can't be called round the loop.
+    // loop as the gap began (the last good fix before it snapped onto the line): one
+    // that began off it (a wrong turn, then the signal went) covered ground that
+    // can't be called round the loop.
     const good = fix.accuracy <= MAX_GPS_ACCURACY_M;
     if (good) {
       if (this.goodPos !== null && this.goodAt > 0) {
@@ -409,6 +410,12 @@ export class RideEngine {
     if (!this.prevPos || distM(this.prevPos, here) > 3) this.prevPos = here;
 
     const snap = snapToTrack(track, fix.lon, fix.lat, this.hint);
+    // Where the last good fix was, for a gap that begins after it: on the line, or
+    // not. Read by the NEXT fix's gap, so it is set here, after this fix's own has
+    // been decided; it is this alone, not the strikes below, that says whether a gap
+    // began on the loop, so a gap starting at a good fix already off the line, though
+    // not yet a sure wrong turn, earns nothing.
+    if (good) this.lastGoodOnRoute = snap.offM <= OFF_ROUTE_M;
     const step: RideStep = {
       // Draw the dot ON the route while we're plausibly on it — raw bike GPS
       // wanders 5-15 m, which visibly drifts the dot into buildings and across
@@ -431,14 +438,11 @@ export class RideEngine {
       this.onRouteFixes = 0;
       this.offCount++;
       // A wrong turn, once it is sure to be one (the same strikes as a reroute),
-      // takes the allowance with it: ground covered unseen before it wasn't round
-      // the loop from where the rider has ended up. One fix 40 m out on picking
-      // the signal up again is multipath, not a wrong turn, and it doesn't: the
-      // first fix after a tunnel is often that far off while claiming to be good.
-      if (this.offCount >= OFF_ROUTE_STRIKES) {
-        this.lastGoodOnRoute = false;
-        this.unseenM = 0;
-      }
+      // takes the allowance already earned with it: ground covered unseen before it
+      // wasn't round the loop from where the rider has ended up. One fix 40 m out on
+      // picking the signal up again is multipath, not a wrong turn, and it doesn't:
+      // the first fix after a tunnel is often that far off while claiming to be good.
+      if (this.offCount >= OFF_ROUTE_STRIKES) this.unseenM = 0;
       // instant feedback while we make sure it's a real deviation
       effects.push({ type: "offRoute" });
       // keep the trip line live instead of freezing on the last on-route value:
@@ -479,7 +483,6 @@ export class RideEngine {
       this.offCount = 0;
       this.rerouteTries = 0;
       this.onRouteFixes++;
-      this.lastGoodOnRoute = true;
     }
     // The rider found the way back before the new one arrived: switching to it
     // now would send them off the line they are on, to follow a way back from

@@ -116,6 +116,20 @@ describe("sharing when the clipboard is refused", () => {
     expect(told).toEqual([["Picture saved; couldn't copy the text", false]]);
   });
 
+  it("says so when there is no clipboard at all, and copy() throws before it returns a promise", async () => {
+    const told: [string, boolean][] = [];
+    const image = new PreparedImage(Promise.resolve(new Blob(["png"])));
+    await image.ready;
+    await shareImage("x", image, "card.png", {
+      copy: () => {
+        throw new TypeError("Cannot read properties of undefined (reading 'writeText')");
+      },
+      download: () => undefined,
+      tell: (m, ok) => told.push([m, ok]),
+    });
+    expect(told).toEqual([["Picture saved; couldn't copy the text", false]]);
+  });
+
   it("says so when there was no picture either", async () => {
     const told: [string, boolean][] = [];
     const image = new PreparedImage(Promise.reject(new Error("canvas")));

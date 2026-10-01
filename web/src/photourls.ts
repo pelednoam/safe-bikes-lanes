@@ -14,9 +14,10 @@ export class PhotoUrls {
   /** The read in flight for a photo, which every card asking for it waits on. */
   private readonly pending = new Map<string, Promise<boolean>>();
   private readonly retryAt = new Map<string, number>();
-  /** Bumped for a photo whose report goes while it is being read, so the read,
-   * finding it has been overtaken, leaves no URL behind. */
-  private readonly epoch = new Map<string, number>();
+  /** Which read is the current one for a photo. A report that goes while its
+   * photo is being read has its token taken away, so the read, finding it isn't
+   * the current one any more, leaves no URL behind. */
+  private readonly tokens = new Map<string, object>();
 
   constructor(
     private readonly load: (id: string) => Promise<Blob | null>,
@@ -48,34 +49,39 @@ export class PhotoUrls {
     const inFlight = this.pending.get(id);
     if (inFlight !== undefined) return inFlight;
     if (this.now() < (this.retryAt.get(id) ?? 0)) return Promise.resolve(false);
-    const read = this.read(id).finally(() => {
+    const token = {};
+    this.tokens.set(id, token);
+    const read = this.read(id, token).finally(() => {
+      // only this read's own entries: after a prune, a newer read may hold them
       if (this.pending.get(id) === read) this.pending.delete(id);
+      if (this.tokens.get(id) === token) this.tokens.delete(id);
     });
     this.pending.set(id, read);
     return read;
   }
 
-  private async read(id: string): Promise<boolean> {
-    const started = this.epoch.get(id) ?? 0;
+  private async read(id: string, token: object): Promise<boolean> {
     const retryLater = (): void => {
       // from when it failed, not from when it began: a slow read would otherwise
       // have a retry window that was mostly over before it started
       this.retryAt.set(id, this.now() + (this.opts.retryMs ?? RETRY_MS));
     };
-    let blob: Blob | null;
     try {
-      blob = await this.load(id);
+      const blob = await this.load(id);
+      if (this.tokens.get(id) !== token) return false; // its report went meanwhile
+      if (blob === null) {
+        retryLater();
+        return false;
+      }
+      // inside the try: making the URL can fail too (out of memory, a blob the
+      // browser refuses), and nothing above this would have caught it
+      this.urls.set(id, (this.opts.make ?? ((b: Blob) => URL.createObjectURL(b)))(blob));
+      this.retryAt.delete(id);
+      return true;
     } catch {
-      blob = null;
-    }
-    if ((this.epoch.get(id) ?? 0) !== started) return false; // its report went meanwhile
-    if (blob === null) {
-      retryLater();
+      if (this.tokens.get(id) === token) retryLater();
       return false;
     }
-    this.urls.set(id, (this.opts.make ?? ((b: Blob) => URL.createObjectURL(b)))(blob));
-    this.retryAt.delete(id);
-    return true;
   }
 
   /** Let go of every photo whose report is gone (deleted, or the list reloaded),
@@ -87,8 +93,13 @@ export class PhotoUrls {
       free(url);
       this.urls.delete(id);
     }
-    for (const id of this.pending.keys()) {
-      if (!keep.has(id)) this.epoch.set(id, (this.epoch.get(id) ?? 0) + 1);
+    // a read still under way for a report that is gone is cut off, and its promise
+    // dropped, so that if the report comes back before it settles the card asking
+    // then starts a fresh read instead of being handed one that will say "nothing"
+    for (const id of [...this.tokens.keys()]) {
+      if (keep.has(id)) continue;
+      this.tokens.delete(id);
+      this.pending.delete(id);
     }
     for (const id of this.retryAt.keys()) if (!keep.has(id)) this.retryAt.delete(id);
   }

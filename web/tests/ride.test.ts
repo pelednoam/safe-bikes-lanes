@@ -809,6 +809,22 @@ describe("a round trip", () => {
     expect(r.engine.loopDoneM).toBeGreaterThan(650);
   });
 
+  it("gives a gap that began at a good fix already off the line no allowance, though it isn't yet a sure wrong turn", () => {
+    // one or two good fixes off the line aren't enough to reroute, but they are
+    // enough to say the rider was not on the loop as the signal went
+    const r = new Ride(route(LOOP));
+    r.engine.setRoute(r.payload, { legM: 0, resumeM: 0 });
+    r.onReroute = () => null;
+    r.ride({ untilM: 300 });
+    const done = r.engine.loopDoneM;
+    const start = pointAlong(pathOf(r.payload), 300).at;
+    r.fix({ ...offsetFix(start, 180, 70), speed: 4 }); // one fix, 70 m south: off the line
+    r.now += 90_000;
+    const far = pointAlong(pathOf(r.payload), 900).at;
+    r.fix({ lon: far[0], lat: far[1], accuracy: 8, speed: 5, heading: 0 });
+    expect(r.engine.loopDoneM).toBeLessThan(done + 100);
+  });
+
   it("still counts a gap that began on the loop, which is what the allowance is for", () => {
     const r = new Ride(route(LOOP));
     r.engine.setRoute(r.payload, { legM: 0, resumeM: 0 });

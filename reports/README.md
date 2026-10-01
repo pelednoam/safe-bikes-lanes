@@ -28,9 +28,11 @@ deploys it from main.
 2. **GitHub token for the issues**: a fine-grained personal access token for
    this repository only, with *Issues: Read and write* and nothing else.
    The label the issues go under, `error report`, is created by the deploy. The
-   Worker refuses to file an issue without it, since one without could never be
-   found again, so the token needs enough access to label issues (Issues:
-   Read and write is enough on your own repository).
+   Worker needs it on every issue it files (one without could never be found
+   again), so the token needs Issues: Read and write on this repository, which is
+   enough to apply a label. If GitHub drops it anyway (a token without that
+   access has its labels dropped), the issue is still recorded, so a repeat
+   doesn't file another, and the Worker logs the error (`npx wrangler tail`).
 3. **Repository secrets** (*Settings → Secrets and variables → Actions*):
    `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `REPORTS_GITHUB_TOKEN`.
 4. Run the workflow: `gh workflow run reports.yml --ref main`. The first

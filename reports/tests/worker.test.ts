@@ -43,7 +43,7 @@ function fakeGitHub(existing: number | null = null): GitHub & { calls: string[] 
     },
     create: (title) => {
       calls.push(`create ${title}`);
-      return Promise.resolve(7);
+      return Promise.resolve({ number: 7, labelled: true });
     },
     comment: (n, body) => {
       calls.push(`comment ${n} ${body}`);
@@ -192,6 +192,42 @@ describe("filing", () => {
     expect(gh.calls.filter((c) => c.startsWith("create"))).toHaveLength(2);
     await file(sample({ message: "one" }), e, gh, day1);
     expect((await seen(e, sample({ message: "one" }))).pending).toBe(1);
+  });
+
+  it("records an issue GitHub filed without its label, so a repeat doesn't file another", async () => {
+    // a token without triage access has the label dropped from a 201: the issue
+    // is public, and find() (labelled issues only) can never see it
+    const e = env({ DAILY_NEW_CAP: "5" });
+    const gh = { ...fakeGitHub(), create: () => Promise.resolve({ number: 42, labelled: false }) };
+    await expect(file(sample(), e, gh, day1)).rejects.toThrow(/issue #42 was filed without the "error report" label/);
+    // the issue is counted against the day, and remembered
+    expect(await e.REPORTS.get("new:2026-09-29")).toBe("1");
+    expect(await seen(e, sample())).toEqual({ issue: 42, day: "2026-09-29", pending: 0 });
+    // so the same error again is a repeat of #42, not a new issue
+    const again = fakeGitHub();
+    await file(sample(), e, again, day1);
+    expect(again.calls).toEqual([]);
+    expect((await seen(e, sample())).pending).toBe(1);
+  });
+
+  it("takes the day's slot before it makes the issue, so a burst can't all read the same count", async () => {
+    const e = env({ DAILY_NEW_CAP: "2" });
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((r) => (release = r));
+    const slow = {
+      ...fakeGitHub(),
+      create: async () => {
+        await held;
+        return { number: 1, labelled: true };
+      },
+    };
+    const first = file(sample({ message: "a" }), e, slow, day1);
+    const second = file(sample({ message: "b" }), e, slow, day1);
+    // let both reach the create: the count the second reads is the first's slot
+    await new Promise((r) => setTimeout(r, 20));
+    expect(await e.REPORTS.get("new:2026-09-29")).toBe("2");
+    release();
+    await Promise.all([first, second]);
   });
 
   it("doesn't count a create that failed against the day's new issues", async () => {

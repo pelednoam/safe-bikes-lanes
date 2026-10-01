@@ -3,7 +3,7 @@
 // The answer goes back at once and the filing happens after (waitUntil): a
 // report is sent as the page may be closing, and nothing the app does waits
 // on it. Errors while filing are logged for `wrangler tail`, never returned.
-import { type GitHub, github } from "./github.js";
+import { type Created, type GitHub, github, LABEL } from "./github.js";
 import {
   check,
   fingerprint,
@@ -140,13 +140,30 @@ export async function file(r: Report, env: Env, gh: GitHub, now: Date): Promise<
       const newKey = `new:${day}`;
       const opened = Number((await env.REPORTS.get(newKey)) ?? "0");
       if (opened >= capOf(env.DAILY_NEW_CAP, DEFAULT_DAILY_NEW_CAP)) return;
-      const issue = await gh.create(issueTitle(r), issueBody(r, fp, day));
-      // counted once it is filed: a create that fails (a missing label, a revoked
-      // token) used to use up the day's few new issues without making one
+      // The slot is taken before the issue is made, and given back if none was:
+      // counted afterwards, the window between reading the count and writing it
+      // was a round trip to GitHub, and a burst of new errors (a crash right after
+      // a deploy, across every rider) all read the same count and all filed.
       await env.REPORTS.put(newKey, String(opened + 1), { expirationTtl: DAY_TTL_S });
-      await env.REPORTS.put(key, JSON.stringify({ issue, day, pending: 0 } satisfies Seen), {
+      let made: Created;
+      try {
+        made = await gh.create(issueTitle(r), issueBody(r, fp, day));
+      } catch (err) {
+        // nothing was filed (GitHub refused it): the slot is free again
+        await env.REPORTS.put(newKey, String(opened), { expirationTtl: DAY_TTL_S }).catch(() => undefined);
+        throw err;
+      }
+      // Recorded whether or not it has its label: the issue is public, and
+      // without a record the next report of the same error would file another,
+      // which nothing finds (find() looks at labelled issues) and nothing counts.
+      await env.REPORTS.put(key, JSON.stringify({ issue: made.number, day, pending: 0 } satisfies Seen), {
         expirationTtl: SEEN_TTL_S,
       });
+      if (!made.labelled) {
+        throw new Error(
+          `issue #${made.number} was filed without the "${LABEL}" label: the token needs Issues: Read and write on this repository`,
+        );
+      }
       return;
     }
     seen = { issue: found, day, pending: 0 };

@@ -59,7 +59,7 @@ describe("the scrubbing", () => {
     expect(scrub("no route from -71.1223,42.3967 to [-71.0867, 42.3626]")).toBe("no route from ‹n›,‹n› to [‹n›, ‹n›]");
     // a kilometre and ten kilometres: still where someone is
     expect(scrub("at 42.38 -71.1")).toBe("at ‹n› ‹n›");
-    expect(scrub("lat=42.3967;lon=-71.1223")).toBe("lat=‹n›;lon=‹n›");
+    expect(scrub("lat=42.3967;lon=-71.1223")).toBe("‹n›;‹n›");
     expect(scrub("center 42,-71")).toBe("center ‹n›");
   });
 
@@ -121,9 +121,15 @@ describe("the scrubbing", () => {
     expect(r.frames).toEqual([
       // a column past five digits is a position, not an id
       "onFix (app-AbCd1234.js:1:23456)",
-      "geocode (‹url›:4:5)",
+      "geocode (‹url›)",
       "near ‹n› (app-AbCd1234.js:9:9)",
     ]);
+  });
+
+  it("scrubs a frame whole when its file isn't one of the app's bundles, 'position' and all", () => {
+    // the last two numbers of "f (42:3967:711223)" are not a line and a column
+    const r = scrubbed(sample({ frames: ["f (42:3967:711223)", "g (geo:423967:711223)", "h (home-dr5regw3.js:1:2)"] }));
+    expect(r.frames).toEqual(["f (‹url›)", "g (‹url›)", "h (‹url›)"]);
   });
 
   it("takes out a control character first, so one inside a coordinate doesn't hide it", () => {
@@ -134,6 +140,21 @@ describe("the scrubbing", () => {
 
   it("takes out the characters that render as nothing, whichever script they come from", () => {
     expect(scrub("a\u034fb\u3164c\ufe0fd\u{E0041}e")).toBe("abcde");
+    // by class: these were missing from a hand-made list, and each splits a coordinate
+    expect(scrub("42\ufff9.3967,-71\ufff9.1223")).toBe("‹n›,‹n›");
+    expect(scrub("42\u180b.3967")).toBe("‹n›");
+    expect(scrub("42\u{E0100}.3967")).toBe("‹n›");
+  });
+
+  it("takes out coordinates written with other separators between ASCII digits", () => {
+    expect(scrub("42．3967,-71．1223")).toBe("‹n›,‹n›");
+    expect(scrub("42.3967，-71.1223")).toBe("‹n›,‹n›");
+  });
+
+  it("takes out latitude and longitude by name", () => {
+    expect(scrub("lat=42 lon=-71")).toBe("‹n› ‹n›");
+    expect(scrub("latitude: 42.38, longitude: -71.1")).toBe("‹n›, ‹n›");
+    expect(scrub("lng=-71")).toBe("‹n›");
   });
 
   it("takes out tile and coordinate forms with other separators, labels, degrees, and other digits", () => {
@@ -151,6 +172,25 @@ describe("the scrubbing", () => {
     expect(scrub("GET https://api.example/routes/12_Elm_St.json failed")).toBe("GET ‹url› failed");
     expect(scrub("GET https://localhost/app-BrmPk3gH.js failed")).toBe("GET app-BrmPk3gH.js failed");
     expect(scrub("https://localhost/sw.js")).toBe("sw.js");
+  });
+
+  it("doesn't keep a name whose suffix could be a geohash: a place to within tens of metres", () => {
+    // eight lowercase characters and digits: Vite's hash has a capital in it
+    expect(scrub("https://example.test/home-dr5regw3.js")).toBe("‹url›");
+  });
+
+  it("keeps the names of the bundles this app really builds", () => {
+    for (const name of [
+      "app-BrmPk3gH.js",
+      "SegmentCard-BfR1ViFb.js",
+      "report-DPXCPETW.js",
+      "routing.worker-Cb0awvtT.js",
+      "maplibre-gl.mjs",
+      "maplibre-gl-shared.mjs",
+      "sw.js",
+    ]) {
+      expect(scrub(`https://localhost/${name}`), name).toBe(name);
+    }
   });
 });
 
@@ -172,10 +212,10 @@ describe("one problem, one issue", () => {
     expect(await fingerprint(a)).toBe(await fingerprint(b));
   });
 
-  it("is the same problem with a URL that has a query and one that has none", async () => {
-    const a = scrubbed(sample({ message: "GET https://api.example/search failed with 404" }));
-    const b = scrubbed(sample({ message: "GET https://api.example/search?q=Elm failed with 404" }));
-    expect(await fingerprint(a)).toBe(await fingerprint(b));
+  it("is a different problem when what followed the URL differs: the failures aren't folded into one issue", async () => {
+    const a = scrubbed(sample({ message: "GET https://api.example/a failed with 404" }));
+    const b = scrubbed(sample({ message: "GET https://api.example/b failed with CORS" }));
+    expect(await fingerprint(a)).not.toBe(await fingerprint(b));
   });
 
   it("is the same problem in the next build, whose bundle has a new name", async () => {

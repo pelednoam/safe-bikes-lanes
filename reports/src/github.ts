@@ -3,8 +3,16 @@
 export interface GitHub {
   /** The open or closed issue carrying this marker, if there is one. */
   find(marker: string): Promise<number | null>;
-  create(title: string, body: string): Promise<number>;
+  /** File an issue. `labelled` is whether it carries the label find() looks for:
+   * GitHub drops a label a token has no right to apply from a 201, so the issue
+   * exists either way, and the caller has to know that it does. */
+  create(title: string, body: string): Promise<Created>;
   comment(issue: number, body: string): Promise<void>;
+}
+
+export interface Created {
+  number: number;
+  labelled: boolean;
 }
 
 /** The label the issues are filed under. Searching only issues that carry it
@@ -39,11 +47,11 @@ export function github(repo: string, token: string, fetchFn: Fetch = fetch): Git
       return found.items?.[0]?.number ?? null;
     },
     async create(title, body) {
-      // The label must be on it (the deploy creates it; reports/README.md): an issue
-      // filed without it could never be found again by find(), so it is a failure,
-      // not a fallback. GitHub refuses a label the token can't create with a 422,
-      // but a token without triage access on the repository can also have the label
-      // silently dropped from a 201, which is checked for below.
+      // The label has to exist (the deploy creates it): GitHub refuses a label it
+      // can't create with a 422, and that is an error, with no issue filed. But a
+      // token without triage access has the label silently dropped from a 201,
+      // and that issue is public already: it is reported as filed, unlabelled, so
+      // that the caller records it rather than filing it again on the next report.
       const resp = await ok(
         await api(`/repos/${repo}/issues`, {
           method: "POST",
@@ -52,10 +60,7 @@ export function github(repo: string, token: string, fetchFn: Fetch = fetch): Git
         "create",
       );
       const made = (await resp.json()) as { number: number; labels?: { name?: string }[] };
-      if (made.labels?.some((l) => l.name === LABEL) !== true) {
-        throw new Error(`GitHub create: issue #${made.number} was filed without the "${LABEL}" label; the token needs triage access`);
-      }
-      return made.number;
+      return { number: made.number, labelled: made.labels?.some((l) => l.name === LABEL) === true };
     },
     async comment(issue, body) {
       await ok(

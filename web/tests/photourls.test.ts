@@ -66,6 +66,41 @@ describe("a hazard's photo", () => {
     expect(await s.photos.ensure("a")).toBe(true);
   });
 
+  it("starts a fresh read when a report comes back while the cut-off one is still under way", async () => {
+    // the first read is overtaken (its report went), and the report returns before it
+    // settles: the card asking now must not be handed that read, which will say "nothing"
+    const resolvers: ((b: Blob) => void)[] = [];
+    const s = setup(() => new Promise<Blob>((r) => resolvers.push(r)));
+    const stale = s.photos.ensure("a");
+    s.photos.prune(new Set());
+    const fresh = s.photos.ensure("a");
+    expect(s.reads).toEqual(["a", "a"]);
+    resolvers[1]?.(blob);
+    expect(await fresh).toBe(true);
+    resolvers[0]?.(blob);
+    expect(await stale).toBe(false);
+    expect(s.made).toHaveLength(1);
+    expect(s.photos.get("a")).toBe("blob:0");
+  });
+
+  it("is tried again when making the URL fails, and says nothing out loud", async () => {
+    let t = 1000;
+    let failMake = true;
+    const photos = new PhotoUrls(async () => blob, {
+      now: () => t,
+      make: () => {
+        if (failMake) throw new Error("out of memory");
+        return "blob:ok";
+      },
+      free: () => undefined,
+    });
+    expect(await photos.ensure("a")).toBe(false);
+    failMake = false;
+    t += 6000;
+    expect(await photos.ensure("a")).toBe(true);
+    expect(photos.get("a")).toBe("blob:ok");
+  });
+
   it("counts the wait before trying again from when the read failed, not from when it began", async () => {
     let fail: () => void = () => undefined;
     const s = setup((_id, n) => (n === 1 ? new Promise<Blob>((_, no) => (fail = () => no(new Error("busy")))) : Promise.resolve(blob)));

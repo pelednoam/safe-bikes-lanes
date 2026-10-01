@@ -91,8 +91,9 @@ jobs:
           # not ours, so a "::" at the start of one of its lines is not a command.
           oneline() { printf '%s' "$1" | tr '\r\n' '  ' | cut -c1-300 | sed 's/::/: :/g'; }
           state='let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{let r;try{r=JSON.parse(s)}catch{process.stdout.write("error");return}const n=r.success&&r.result&&r.result.subdomain;const none=(r.success&&!n)||(r.errors||[]).some(e=>e.code===10007);process.stdout.write(n?"have:"+n:none?"missing":"error")})'
-          read_state() { curl -sS --retry 3 --retry-all-errors -H "$auth" "$api" | node -e "$state"; }
-          got=$(read_state) || got=error
+          # the body is kept, so a failure can say what Cloudflare answered without asking again
+          body=$(curl -sS --retry 3 --retry-all-errors -H "$auth" "$api" 2>&1) || body="${body:-no answer}"
+          got=$(printf '%s' "$body" | node -e "$state") || got=error
           case "$got" in
             have:*) have="${got#have:}" ;;
             missing)
@@ -103,7 +104,7 @@ jobs:
                 have:*) have="${got#have:}"; echo "registered $have.workers.dev" ;;
                 *) echo "::error::couldn't register $WANTED.workers.dev: $(oneline "$resp")"; exit 1 ;;
               esac ;;
-            *) echo "::error::couldn't read the account's workers.dev subdomain from Cloudflare: $(oneline "$(curl -sS "$api" -H "$auth" 2>&1 || true)")"; exit 1 ;;
+            *) echo "::error::couldn't read the account's workers.dev subdomain from Cloudflare: $(oneline "$body")"; exit 1 ;;
           esac
           echo "::notice::The Worker is https://safe-bikes-reports.$have.workers.dev/report"
       - name: The KV namespace, created the first time

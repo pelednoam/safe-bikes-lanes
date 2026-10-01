@@ -37,8 +37,6 @@ interface Worker {
 interface Loaded {
   /** The build's and the data's ids, as vite.config.ts writes them in. */
   ids?: { build?: string; data?: string };
-  /** The clients that are open when the worker activates. */
-  clients?: string[];
 }
 
 function loadWorker(fetchImpl: FetchFn, caches = new FakeCacheStorage(), loaded: Loaded = {}): Worker {
@@ -53,7 +51,7 @@ function loadWorker(fetchImpl: FetchFn, caches = new FakeCacheStorage(), loaded:
     skipWaiting: () => undefined,
     clients: {
       claim: async () => undefined,
-      matchAll: async () => (loaded.clients ?? []).map((id) => ({ id })),
+      matchAll: async () => [],
     },
     location: new URL(`${ORIGIN}/sw.js`),
   };
@@ -152,13 +150,8 @@ async function seed(w: Worker, url: string, text: string): Promise<void> {
 /** A deploy that installed completely and took over: its caches exist, then it
  * activates (what install's addAll does is tested apart; FakeCache fetches with
  * the global fetch, not the worker's). */
-async function deployed(
-  store: FakeCacheStorage,
-  build: string,
-  data: string,
-  clients: string[] = [],
-): Promise<Worker> {
-  const w = loadWorker(hangs, store, { ids: { build, data }, clients });
+async function deployed(store: FakeCacheStorage, build: string, data: string): Promise<Worker> {
+  const w = loadWorker(hangs, store, { ids: { build, data } });
   await store.open(String(w.consts["CACHE"]));
   await store.open(String(w.consts["DATA_CACHE"]));
   await w.activate();
@@ -166,7 +159,7 @@ async function deployed(
 }
 
 describe("updating the service worker", () => {
-  it("keeps the rider's downloaded maps, the data cache, and the last build's shell and data", async () => {
+  it("keeps the rider's downloaded maps, the data cache, and the last build's shell", async () => {
     const w = loadWorker(hangs);
     const current = String(w.consts["CACHE"]);
     const data = String(w.consts["DATA_CACHE"]);
@@ -175,7 +168,6 @@ describe("updating the service worker", () => {
       "family-bike-router-v10",
       "family-bike-router-v9",
       "family-bike-data-older",
-      "family-bike-data-newer",
       "bike-tiles-v1",
       "bike-tiles-browse-v1",
       "bike-styles-v1",
@@ -187,13 +179,12 @@ describe("updating the service worker", () => {
     await w.activate();
     // Every update used to delete every cache but the shell's own, including
     // the offline maps a rider had downloaded for tomorrow's ride. Now what goes
-    // is the shells and data two builds back and more.
+    // is the shells two builds back and more, and data built another time.
     expect((await w.caches.keys()).sort()).toEqual(
       [
         current,
         data,
         "family-bike-router-v9",
-        "family-bike-data-newer",
         "bike-cache-order",
         "bike-styles-v1",
         "bike-tiles-browse-v1",
@@ -215,37 +206,28 @@ describe("updating the service worker", () => {
     expect(names.sort()).toEqual(["family-bike-router-A", "family-bike-router-C"]);
   });
 
-  it("keeps the previous data for pages that were open at the update, and gives them it first", async () => {
-    // A page open since before a data deploy has the old manifest in hand and
-    // loads old tiles by the same names. Sent the new build's, it joins the two.
-    const store = new FakeCacheStorage();
-    const old = await deployed(store, "A", "d1");
-    await seed(old, "data/tiles/5_5.json", "the old build's tile");
-    const next = await deployed(store, "B", "d2", ["old-page"]);
-    await seed(next, "data/tiles/5_5.json", "the new build's tile");
-    expect(await store.keys()).toContain("family-bike-data-d1");
-    const answer = async (clientId: string): Promise<string> => {
-      vi.useFakeTimers();
-      const { response } = next.request("data/tiles/5_5.json", { clientId });
-      const done = response?.then((r) => r.text());
-      await vi.advanceTimersByTimeAsync(Number(next.consts["NETWORK_TIMEOUT_MS"] ?? 60_000));
-      const text = await done;
-      vi.useRealTimers();
-      return String(text);
-    };
-    expect(await answer("old-page")).toBe("the old build's tile");
-    expect(await answer("a-page-opened-since")).toBe("the new build's tile");
-  });
-
-  it("drops the previous data at the update after that, when no page can still be on it", async () => {
+  it("keeps only the current data: another build's tiles don't join this one's", async () => {
     const store = new FakeCacheStorage();
     for (const [build, data] of [["A", "d1"], ["B", "d2"], ["C", "d3"]] as const) {
       await deployed(store, build, data);
     }
-    expect((await store.keys()).filter((k) => k.startsWith("family-bike-data-")).sort()).toEqual([
-      "family-bike-data-d2",
+    expect((await store.keys()).filter((k) => k.startsWith("family-bike-data-"))).toEqual([
       "family-bike-data-d3",
     ]);
+  });
+
+  it("answers a data request from the current data, never another build's", async () => {
+    vi.useFakeTimers();
+    const store = new FakeCacheStorage();
+    const old = await deployed(store, "A", "d1");
+    await seed(old, "data/tiles/5_5.json", "the old build's tile");
+    const next = await deployed(store, "B", "d2");
+    await seed(next, "data/tiles/5_5.json", "the new build's tile");
+    const { response } = next.request("data/tiles/5_5.json");
+    const done = response?.then((r) => r.text());
+    await vi.advanceTimersByTimeAsync(Number(next.consts["NETWORK_TIMEOUT_MS"] ?? 60_000));
+    expect(await done).toBe("the new build's tile");
+    vi.useRealTimers();
   });
 
   it("never answers a data request from a shell cache, which may hold data from another build", async () => {
@@ -280,14 +262,28 @@ describe("updating the service worker", () => {
     expect(await (await data.match(`${ORIGIN}/data/tiles/103_76.json`))?.text()).toBe("browsed tile");
   });
 
-  it("deletes a shell that didn't finish installing, so it can't pass for the last build's", async () => {
+  it("deletes what a failed install created, so it can't pass for the last build's or displace real data", async () => {
     const store = new FakeCacheStorage();
     vi.stubGlobal("fetch", async () => Promise.reject(new Error("offline")));
-    const failing = loadWorker(hangs, store, { ids: { build: "half" } });
+    const failing = loadWorker(hangs, store, { ids: { build: "half", data: "dhalf" } });
     const err = await failing.install();
     vi.unstubAllGlobals();
     expect(err).toBeInstanceOf(Error);
-    expect(await store.keys()).not.toContain("family-bike-router-half");
+    const keys = await store.keys();
+    expect(keys).not.toContain("family-bike-router-half");
+    expect(keys).not.toContain("family-bike-data-dhalf");
+  });
+
+  it("leaves data it didn't create when an install fails: last week's is what the rider has browsed", async () => {
+    const store = new FakeCacheStorage();
+    const was = await deployed(store, "A", "same");
+    await seed(was, "data/tiles/1_1.json", "browsed");
+    vi.stubGlobal("fetch", async () => Promise.reject(new Error("offline")));
+    const failing = loadWorker(hangs, store, { ids: { build: "B", data: "same" } });
+    await failing.install();
+    vi.unstubAllGlobals();
+    const data = await store.open("family-bike-data-same");
+    expect(data.urls()).toEqual([`${ORIGIN}/data/tiles/1_1.json`]);
   });
 
   it("answers the current build's page, not the previous one's, when both are kept", async () => {

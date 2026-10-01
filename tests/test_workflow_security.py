@@ -8,6 +8,7 @@ with its version in a comment for people and for Dependabot.
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -100,11 +101,14 @@ def test_dependabot_keeps_the_pins_moving() -> None:
     # Every npm package in the repository, found rather than listed: the error-report
     # Worker (reports/) was added with exact pins and nothing to move them.
     npm_dirs = {u["directory"] for u in updates if u["package-ecosystem"] == "npm"}
-    packages = {
-        f"/{p.parent.relative_to(ROOT).as_posix()}"
-        for p in ROOT.glob("**/package.json")
-        if "node_modules" not in p.parts and ".venv" not in p.parts
-    }
+    packages: set[str] = set()
+    # walked with the big directories pruned, not globbed: **/package.json went
+    # down every node_modules tree on the machine to throw those paths away after
+    for here, dirs, files in os.walk(ROOT):
+        dirs[:] = [d for d in dirs if d not in {"node_modules", ".venv", ".git", "dist", "data"}]
+        if "package.json" in files:
+            packages.add("/" + Path(here).relative_to(ROOT).as_posix())
+    packages.discard("/.")
     assert packages <= npm_dirs, f"no Dependabot entry for {sorted(packages - npm_dirs)}"
     assert {"/web", "/reports"} <= npm_dirs
     # and the lockfile is where Dependabot has to look

@@ -114,10 +114,16 @@ export function shareImage(
     // whether it really was copied: browsers refuse the clipboard as a matter of
     // course (no permission, the page not focused), and "text copied" over a
     // refusal is how a rider finds out later that they have nothing to paste
-    const copied = await env.copy(text).then(
-      () => true,
-      () => false,
-    );
+    // (try/await, not .then(): with no clipboard at all, copy() throws before it
+    // returns a promise, and that throw has to be a failure too, not an exception
+    // out of the fallback that nothing reports)
+    let copied = false;
+    try {
+      await env.copy(text);
+      copied = true;
+    } catch {
+      // not copied
+    }
     // one message, and a true one: "saved" over a refused save is the same trap
     if (blob === null) {
       if (copied) env.tell("Text copied", true);
