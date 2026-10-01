@@ -73,9 +73,13 @@ function fromExtension(stack: string | undefined): boolean {
 /** The browser's family and major version, and nothing else from the UA. */
 export function browserOf(ua: string): string {
   const v = (re: RegExp): string => re.exec(ua)?.[1] ?? "";
-  if (/Edg\//.test(ua)) return `Edge ${v(/Edg\/(\d+)/)}`;
-  if (/Firefox\//.test(ua)) return `Firefox ${v(/Firefox\/(\d+)/)}`;
-  if (/Chrome\//.test(ua)) return `${/; wv\)/.test(ua) ? "WebView" : "Chrome"} ${v(/Chrome\/(\d+)/)}`;
+  // trimmed: with no version to read, "Edge " would fail the endpoint's check,
+  // and the report would be dropped for the very browser it is about
+  if (/Edg\//.test(ua)) return `Edge ${v(/Edg\/(\d+)/)}`.trim();
+  if (/Firefox\//.test(ua)) return `Firefox ${v(/Firefox\/(\d+)/)}`.trim();
+  if (/Chrome\//.test(ua)) {
+    return `${/; wv\)/.test(ua) ? "WebView" : "Chrome"} ${v(/Chrome\/(\d+)/)}`.trim();
+  }
   if (/Safari\//.test(ua)) return `Safari ${v(/Version\/(\d+)/)}`.trim();
   return "";
 }
@@ -206,7 +210,11 @@ function pageSetup(): Setup {
  * without an endpoint and under test automation, so that no test run files an
  * issue. */
 export function startReporting(page: string, setup: Setup = pageSetup()): Reporter | null {
-  if (setup.endpoint === "" || setup.automated) return null;
+  if (setup.endpoint === "" || setup.automated) {
+    // and nothing from an earlier start carries on sending
+    active = null;
+    return null;
+  }
   active = createReporter({
     build: BUILD,
     page,

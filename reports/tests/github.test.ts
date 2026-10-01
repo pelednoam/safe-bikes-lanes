@@ -45,9 +45,15 @@ describe("the issues", () => {
   });
 
   it("opens one under its label", async () => {
-    const f = fakeFetch([json({ number: 3 }, 201)]);
+    const f = fakeFetch([json({ number: 3, labels: [{ name: LABEL }] }, 201)]);
     expect(await github(REPO, "tok", f.fetchFn).create("t", "b")).toBe(3);
     expect(f.calls[0]).toMatchObject({ method: "POST", body: { title: "t", body: "b", labels: [LABEL] } });
+  });
+
+  it("fails when GitHub files the issue but drops the label, which find() could never see again", async () => {
+    // a token without triage access has its labels dropped from a 201
+    const f = fakeFetch([json({ number: 9, labels: [] }, 201)]);
+    await expect(github(REPO, "tok", f.fetchFn).create("t", "b")).rejects.toThrow(/without the "error report" label/);
   });
 
   it("doesn't fall back to an issue without the label, which find() could never see again", async () => {

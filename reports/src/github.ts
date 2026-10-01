@@ -39,8 +39,11 @@ export function github(repo: string, token: string, fetchFn: Fetch = fetch): Git
       return found.items?.[0]?.number ?? null;
     },
     async create(title, body) {
-      // The label must exist (reports/README.md): an issue filed without it
-      // could never be found again by find(), so it is a failure, not a fallback.
+      // The label must be on it (the deploy creates it; reports/README.md): an issue
+      // filed without it could never be found again by find(), so it is a failure,
+      // not a fallback. GitHub refuses a label the token can't create with a 422,
+      // but a token without triage access on the repository can also have the label
+      // silently dropped from a 201, which is checked for below.
       const resp = await ok(
         await api(`/repos/${repo}/issues`, {
           method: "POST",
@@ -48,7 +51,11 @@ export function github(repo: string, token: string, fetchFn: Fetch = fetch): Git
         }),
         "create",
       );
-      return ((await resp.json()) as { number: number }).number;
+      const made = (await resp.json()) as { number: number; labels?: { name?: string }[] };
+      if (made.labels?.some((l) => l.name === LABEL) !== true) {
+        throw new Error(`GitHub create: issue #${made.number} was filed without the "${LABEL}" label; the token needs triage access`);
+      }
+      return made.number;
     },
     async comment(issue, body) {
       await ok(

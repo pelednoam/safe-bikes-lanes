@@ -84,10 +84,13 @@ jobs:
           case "$WANTED" in *[!a-z0-9-]*|"") echo "::error::bad subdomain '$WANTED'"; exit 1;; esac
           api="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain"
           auth="Authorization: Bearer $CLOUDFLARE_API_TOKEN"
-          # have:<name>, missing (Cloudflare's own 10007, "not found"), or error.
-          # Only "missing" registers one: an API that couldn't be reached or
-          # refused the token is not "nothing there yet".
-          state='let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{let r;try{r=JSON.parse(s)}catch{process.stdout.write("error");return}const n=r.success&&r.result&&r.result.subdomain;process.stdout.write(n?"have:"+n:(r.errors||[]).some(e=>e.code===10007)?"missing":"error")})'
+          # have:<name>, missing (Cloudflare's own 10007, "not found", or a success
+          # with no subdomain in it), or error. Only "missing" registers one: an API
+          # that couldn't be reached or refused the token is not "nothing there yet".
+          # What Cloudflare said is shown, one line, on an error: it is its text,
+          # not ours, so a "::" at the start of one of its lines is not a command.
+          oneline() { printf '%s' "$1" | tr '\r\n' '  ' | cut -c1-300 | sed 's/::/: :/g'; }
+          state='let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{let r;try{r=JSON.parse(s)}catch{process.stdout.write("error");return}const n=r.success&&r.result&&r.result.subdomain;const none=(r.success&&!n)||(r.errors||[]).some(e=>e.code===10007);process.stdout.write(n?"have:"+n:none?"missing":"error")})'
           read_state() { curl -sS --retry 3 --retry-all-errors -H "$auth" "$api" | node -e "$state"; }
           got=$(read_state) || got=error
           case "$got" in
@@ -98,9 +101,9 @@ jobs:
               got=$(printf '%s' "$resp" | node -e "$state") || got=error
               case "$got" in
                 have:*) have="${got#have:}"; echo "registered $have.workers.dev" ;;
-                *) echo "::error::couldn't register $WANTED.workers.dev: $resp"; exit 1 ;;
+                *) echo "::error::couldn't register $WANTED.workers.dev: $(oneline "$resp")"; exit 1 ;;
               esac ;;
-            *) echo "::error::couldn't read the account's workers.dev subdomain from Cloudflare"; exit 1 ;;
+            *) echo "::error::couldn't read the account's workers.dev subdomain from Cloudflare: $(oneline "$(curl -sS "$api" -H "$auth" 2>&1 || true)")"; exit 1 ;;
           esac
           echo "::notice::The Worker is https://safe-bikes-reports.$have.workers.dev/report"
       - name: The KV namespace, created the first time
@@ -119,6 +122,14 @@ jobs:
           [ -n "$id" ] || { echo "::error::no KV namespace"; exit 1; }
           sed -i "s/^id = \"KV_ID\"$/id = \"$id\"/" wrangler.toml
           grep -q "id = \"$id\"" wrangler.toml
+      # The label the issues are filed under, which the Worker refuses to file
+      # without (an issue without it could never be found again). Idempotent.
+      - name: The "error report" label
+        if: steps.ready.outputs.go == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.REPORTS_GITHUB_TOKEN }}
+        run: gh label create "error report" --repo "$GITHUB_REPOSITORY" --color B60205 --description "Filed by the app's error reporting" --force
+        working-directory: .
       - name: Deploy
         if: steps.ready.outputs.go == 'true'
         env:

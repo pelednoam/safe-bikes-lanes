@@ -194,6 +194,17 @@ describe("filing", () => {
     expect((await seen(e, sample({ message: "one" }))).pending).toBe(1);
   });
 
+  it("doesn't count a create that failed against the day's new issues", async () => {
+    const e = env({ DAILY_NEW_CAP: "1" });
+    const failing = { ...fakeGitHub(), create: () => Promise.reject(new Error("no label")) };
+    await expect(file(sample({ message: "one" }), e, failing, day1)).rejects.toThrow("no label");
+    await expect(file(sample({ message: "two" }), e, failing, day1)).rejects.toThrow("no label");
+    // the cap of one is still unspent when GitHub works again
+    const gh = fakeGitHub();
+    await file(sample({ message: "three" }), e, gh, day1);
+    expect(gh.calls.filter((c) => c.startsWith("create"))).toHaveLength(1);
+  });
+
   it("stops for the day at the cap", async () => {
     const e = env({ DAILY_CAP: "2" });
     const gh = fakeGitHub();

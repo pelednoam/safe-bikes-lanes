@@ -140,8 +140,10 @@ export async function file(r: Report, env: Env, gh: GitHub, now: Date): Promise<
       const newKey = `new:${day}`;
       const opened = Number((await env.REPORTS.get(newKey)) ?? "0");
       if (opened >= capOf(env.DAILY_NEW_CAP, DEFAULT_DAILY_NEW_CAP)) return;
-      await env.REPORTS.put(newKey, String(opened + 1), { expirationTtl: DAY_TTL_S });
       const issue = await gh.create(issueTitle(r), issueBody(r, fp, day));
+      // counted once it is filed: a create that fails (a missing label, a revoked
+      // token) used to use up the day's few new issues without making one
+      await env.REPORTS.put(newKey, String(opened + 1), { expirationTtl: DAY_TTL_S });
       await env.REPORTS.put(key, JSON.stringify({ issue, day, pending: 0 } satisfies Seen), {
         expirationTtl: SEEN_TTL_S,
       });

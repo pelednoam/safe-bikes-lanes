@@ -17,6 +17,12 @@ describe("the format", () => {
     expect(check(sample())).toEqual({ ok: true, report: sample() });
   });
 
+  it("takes the builds the app really has: a tag, a branch build with its commit, the site, a dev build", () => {
+    for (const build of ["app-v55 d649c79", "app-v52-dev.1a2b3c4 1a2b3c4", "web 04d064d", "dev unknown", "web"]) {
+      expect(check(sample({ build })).ok, build).toBe(true);
+    }
+  });
+
   it("refuses a field it doesn't know, rather than passing it on", () => {
     const r = check({ ...sample(), location: [-71.1, 42.38] });
     expect(r).toEqual({ ok: false, why: "unknown fields: location" });
@@ -33,6 +39,7 @@ describe("the format", () => {
     ["frames", { frames: [42] }],
     ["build", { build: "<script>" }],
     ["build", { build: "www.example.com" }],
+    ["build", { build: "app-v52-dev.1a2b3c4.evil" }],
     ["build", { build: "app-v55 d649c79 extra" }],
     ["page", { page: "../etc" }],
     ["browser", { browser: "Chrome <140>" }],
@@ -70,7 +77,9 @@ describe("the scrubbing", () => {
     expect(
       scrub("Failed to fetch https://pelednoam.github.io/safe-bikes-lanes/#s=-71.12,42.39&e=-71.08,42.36"),
     ).toBe("Failed to fetch ‹url›");
-    expect(scrub("at https://localhost/app-BrmPk3gH.js?v=3:1:200")).toBe("at app-BrmPk3gH.js:1:200");
+    // in a message a position is a pair of numbers like any other; the frames
+    // (below) are where positions are kept
+    expect(scrub("at https://localhost/app-BrmPk3gH.js?v=3:1:200")).toBe("at app-BrmPk3gH.js:‹n›");
     expect(scrub("GET https://nominatim.openstreetmap.org/search?q=12+Elm+St+Somerville&format=json failed")).toBe(
       "GET ‹url›",
     );
@@ -99,13 +108,76 @@ describe("the scrubbing", () => {
     expect(scrub("Fatal\u202e error\u200b!\u2060")).toBe("Fatal error!");
   });
 
-  it("scrubs the frames as well as the message", () => {
-    const r = scrubbed(sample({ frames: ["onFix (https://localhost/ride-x.js:4:5) at 42.38123"] }));
-    expect(r.frames).toEqual(["onFix (ride-x.js:4:5) at ‹n›"]);
+  it("scrubs the frames as well as the message, and leaves a frame's position alone", () => {
+    const r = scrubbed(
+      sample({
+        frames: [
+          "onFix (app-AbCd1234.js:1:23456)",
+          "geocode (https://nominatim.example/search?q=12 Elm Street:4:5)",
+          "near 42.38123 (app-AbCd1234.js:9:9)",
+        ],
+      }),
+    );
+    expect(r.frames).toEqual([
+      // a column past five digits is a position, not an id
+      "onFix (app-AbCd1234.js:1:23456)",
+      "geocode (‹url›:4:5)",
+      "near ‹n› (app-AbCd1234.js:9:9)",
+    ]);
+  });
+
+  it("takes out a control character first, so one inside a coordinate doesn't hide it", () => {
+    expect(scrub("at 42\u0001.3967,-71\u001b.1223")).toBe("at ‹n›,‹n›");
+    expect(scrub("https\u0000://x.example/search?q=Elm")).toBe("‹url›");
+    expect(scrub("42\u200b.3967")).toBe("‹n›");
+  });
+
+  it("takes out the characters that render as nothing, whichever script they come from", () => {
+    expect(scrub("a\u034fb\u3164c\ufe0fd\u{E0041}e")).toBe("abcde");
+  });
+
+  it("takes out tile and coordinate forms with other separators, labels, degrees, and other digits", () => {
+    expect(scrub("14-4953-6060.pbf")).toBe("‹n›.pbf");
+    expect(scrub("14:4953:6060")).toBe("‹n›");
+    expect(scrub("tile z=14 x=4953 y=6060")).toBe("tile ‹n› ‹n› ‹n›");
+    expect(scrub("tile 4953 6060")).toBe("tile ‹n›");
+    expect(scrub("POINT(-71 42)")).toBe("POINT(‹n›)");
+    expect(scrub(`at 42°23'48"N 71°7'20"W`)).toBe("at ‹n› ‹n›");
+    // Arabic-Indic digits and decimal separator, as a phone set to Arabic writes
+    expect(scrub("٤٢٫٣٩٦٧")).toBe("‹n›");
+  });
+
+  it("keeps a bundle's name and nothing else from a URL, so a feed's file name can't carry an address", () => {
+    expect(scrub("GET https://api.example/routes/12_Elm_St.json failed")).toBe("GET ‹url› failed");
+    expect(scrub("GET https://localhost/app-BrmPk3gH.js failed")).toBe("GET app-BrmPk3gH.js failed");
+    expect(scrub("https://localhost/sw.js")).toBe("sw.js");
   });
 });
 
+
 describe("one problem, one issue", () => {
+  it("is the same problem at a different column of the minified line", async () => {
+    // scrubbed as a report is filed, a frame's column keeps its digits: it used
+    // to become ‹n› from five digits, which differs from a shorter column
+    const a = scrubbed(sample({ frames: ["f (app-AbCd1234.js:1:9876)"] }));
+    const b = scrubbed(sample({ frames: ["f (app-ZyXw5678.js:1:12345)"] }));
+    expect(a.frames[0]).toBe("f (app-AbCd1234.js:1:9876)");
+    expect(b.frames[0]).toBe("f (app-ZyXw5678.js:1:12345)");
+    expect(await fingerprint(a)).toBe(await fingerprint(b));
+  });
+
+  it("is the same problem whether its number was short enough to survive the scrubbing or not", async () => {
+    const a = scrubbed(sample({ message: "no tile 12 at z14" }));
+    const b = scrubbed(sample({ message: "no tile 12345 at z14" }));
+    expect(await fingerprint(a)).toBe(await fingerprint(b));
+  });
+
+  it("is the same problem with a URL that has a query and one that has none", async () => {
+    const a = scrubbed(sample({ message: "GET https://api.example/search failed with 404" }));
+    const b = scrubbed(sample({ message: "GET https://api.example/search?q=Elm failed with 404" }));
+    expect(await fingerprint(a)).toBe(await fingerprint(b));
+  });
+
   it("is the same problem in the next build, whose bundle has a new name", async () => {
     const next = sample({
       frames: ["renderRibbon (app-Zq81LmP0.js:1:23511)"],

@@ -27,8 +27,10 @@ deploys it from main.
    ID on the Workers overview page.
 2. **GitHub token for the issues**: a fine-grained personal access token for
    this repository only, with *Issues: Read and write* and nothing else.
-   And the label the issues go under:
-   `gh label create "error report" --color B60205 --description "Filed by the app's error reporting"`.
+   The label the issues go under, `error report`, is created by the deploy. The
+   Worker refuses to file an issue without it, since one without could never be
+   found again, so the token needs enough access to label issues (Issues:
+   Read and write is enough on your own repository).
 3. **Repository secrets** (*Settings → Secrets and variables → Actions*):
    `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `REPORTS_GITHUB_TOKEN`.
 4. Run the workflow: `gh workflow run reports.yml --ref main`. The first

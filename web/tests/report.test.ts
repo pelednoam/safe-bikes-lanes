@@ -94,6 +94,10 @@ describe("the browser", () => {
       "Edge 140",
     ],
     ["curl/8.5.0", ""],
+    // no version to read: still a name the endpoint takes, not "Edge "
+    ["Mozilla/5.0 Gecko/20100101 Firefox/", "Firefox"],
+    ["Mozilla/5.0 AppleWebKit/537.36 Chrome/ Safari/537.36", "Chrome"],
+    ["Mozilla/5.0 Chrome/140.0 Safari/537.36 Edg/", "Edge"],
   ])("names %s as %j, and nothing more", (ua, name) => {
     expect(browserOf(ua)).toBe(name);
   });
@@ -224,7 +228,24 @@ describe("when reporting starts", () => {
 });
 
 describe("reporting is off", () => {
-  it("a caught error goes nowhere, and says nothing, before anything has started", () => {
-    expect(() => reportCaught("worker", new Error("the route finder didn't start"))).not.toThrow();
+  it("a caught error goes nowhere once reporting has been stopped, however it was started before", () => {
+    // an earlier start leaves its reporter behind, and a later, disabled one used
+    // to leave it sending: this checks that a report really isn't sent, which
+    // "doesn't throw" never did
+    const sent: string[] = [];
+    const base: Setup = {
+      endpoint: "https://reports.example/report",
+      automated: false,
+      target: { addEventListener: (() => undefined) as Window["addEventListener"] },
+      send: (b) => sent.push(b),
+      userAgent: "Mozilla/5.0 (X11; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0",
+      android: false,
+    };
+    expect(startReporting("planner", base)).not.toBeNull();
+    reportCaught("worker", new Error("first"));
+    expect(sent).toHaveLength(1);
+    expect(startReporting("planner", { ...base, automated: true })).toBeNull();
+    reportCaught("worker", new Error("second"));
+    expect(sent, "a report was sent after reporting was switched off").toHaveLength(1);
   });
 });

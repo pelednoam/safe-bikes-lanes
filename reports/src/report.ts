@@ -79,9 +79,12 @@ export function check(body: unknown): Checked {
   ) {
     return { ok: false, why: "frames" };
   }
-  // Words and one commit-ish token, no dots: "www.example.com" in a public issue
-  // is a link, and a build is "app-v55 d649c79", never a host.
-  if (!shortString(o["build"], LIMITS.build) || !/^[A-Za-z0-9_-]{1,24}( [A-Za-z0-9_-]{1,16})?$/.test(o["build"])) {
+  // A version, with the commit a branch build adds to it ("app-v52-dev.1a2b3c4"),
+  // and the commit: "app-v55 d649c79", never a host. Anything else is refused.
+  if (
+    !shortString(o["build"], LIMITS.build) ||
+    !/^[A-Za-z0-9_-]{1,24}(\.[0-9a-f]{7})?( [A-Za-z0-9_-]{1,16})?$/.test(o["build"])
+  ) {
     return { ok: false, why: "build" };
   }
   if (!shortString(o["page"], LIMITS.page) || !/^[a-z][a-z-]*$/.test(o["page"])) {
@@ -110,9 +113,14 @@ export function check(body: unknown): Checked {
  * precision it was cut to, and a decimal in an error message is almost never
  * what the bug is. */
 const DECIMAL = /-?\d+\.\d+/g;
-/** Two numbers set side by side: "42,-71", "14/4953/6060" (a tile), "12_34"
- * (a grid cell). Counts and sizes stand alone; these are positions. */
-const NUMBER_RUN = /\d+(?:\s*[,/_;]\s*-?\d+)+/g;
+/** Numbers set side by side: "42,-71", "14/4953/6060" (a tile), "12_34" (a grid
+ * cell), "14:4953:6060", "14-4953-6060", "POINT(-71 42)", "tile 4953 6060".
+ * Counts and sizes stand alone; these are positions. */
+const NUMBER_RUN = /-?\d+(?:(?:\s*[,/_;:x×-]\s*|\s+)-?\d+)+/g;
+/** "z=14 x=4953 y=6060": tile axes and coordinates with their names. */
+const LABELLED = /\b[xyz]\s*[=:]\s*-?\d+/gi;
+/** Degrees, minutes, seconds: 42°23'48"N 71°7'20"W. */
+const DMS = /\d+\s*°(?:\s*\d+(?:\.\d+)?\s*['′’])?(?:\s*\d+(?:\.\d+)?\s*(?:"|″|''))?\s*[NSEW]?/gi;
 /** A long run of digits: a tile index, an id, a phone number. Statuses (404),
  * line numbers and small counts are shorter. */
 const LONG_DIGITS = /\d{5,}/g;
@@ -126,44 +134,82 @@ const ADDRESS =
  * included: "…/search?q=12 Elm St Somerville&format=json" has spaces in the
  * query, and stopping at the first would publish the rest. */
 const URL_TEXT = /\b[a-z][a-z0-9+.-]*:\/\/[^\s"'`<>)?#]*(?:[?#][^"'`<>)\n]*)?/gi;
+/** Control characters, which have to go before anything is matched: one inside
+ * a coordinate ("42\u0001.3967") stops it matching, and taking it out afterwards
+ * leaves the coordinate whole. */
+const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f]/g;
 /** Characters that change how text reads without showing: direction overrides
- * and isolates, zero-width and joiner characters, the soft hyphen, line and
- * paragraph separators, the byte-order mark. In a public issue's title they make
- * one report look like another. */
-// eslint-disable-next-line no-misleading-character-class
-const INVISIBLE = /[\u00ad\u061c\u180e\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]/g;
+ * and isolates, zero-width and joiner characters, the soft hyphen, fillers and
+ * variation selectors, tag characters, line and paragraph separators, the
+ * byte-order mark. In a public issue's title they make one report look like
+ * another, and, like control characters, they hide a coordinate from a match. */
+const INVISIBLE =
+  /[\u00ad\u034f\u061c\u115f\u1160\u180e\u200b-\u200f\u2028-\u202e\u2060-\u2069\u3164\ufe00-\ufe0f\ufeff\uffa0]|[\u{E0000}-\u{E007F}]/gu;
 
-/** A URL down to its file's name, if it has one (a name with an extension): the
- * host is ours, and the path, query and hash are where a trip's ends and a
- * searched address would be. A path ending in anything else ("…/14/4953/6060")
- * is an address, not a file, and goes whole. */
+/** The bundles this app builds, by name: "app-BrmPk3gH.js" (a name and Vite's
+ * eight-character hash), and the few files that keep theirs. The only file
+ * names that stay in a report: any other, "12_Elm_St.json" for one, is
+ * whatever a feed or a rider put in a URL. */
+const BUNDLE = /^(?:[a-z][a-z0-9-]*-[A-Za-z0-9_-]{8}|sw|compat|maplibre-gl(?:-[a-z]+)?)\.m?js$/;
+
+/** A URL down to its bundle's name, if it names one: the host is ours, and the
+ * path, query and hash are where a trip's ends and a searched address would be.
+ * A frame's position after it stays. */
 function urlToFile(url: string): string {
   // a stack frame's position comes after everything, query included
   const at = /(:\d+(?::\d+)?)$/.exec(url)?.[1] ?? "";
   const bare = url.slice(0, url.length - at.length);
   const path = bare.replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]*/i, "").replace(/[?#].*$/s, "");
   const file = path.split("/").filter((p) => p !== "").pop();
-  return file !== undefined && /^[\w-]+(\.[\w-]+)*\.[A-Za-z]\w{0,7}$/.test(file) ? file + at : "‹url›" + at;
+  return (file !== undefined && BUNDLE.test(file) ? file : "‹url›") + at;
+}
+
+/** Digits and separators from other scripts as ASCII, so "٤٢٫٣٩٦٧" is matched
+ * as the coordinate it is: `\d` is ASCII-only, and a phone set to Arabic or
+ * Persian writes its numbers this way. The digits' values don't matter, only
+ * that they are digits. */
+function ascii(text: string): string {
+  return text
+    .replace(/\p{Nd}/gu, (d) => (/[0-9]/.test(d) ? d : "0"))
+    .replace(/[\u066b\u2396]/g, ".")
+    .replace(/[\u066c\u060c]/g, ",");
 }
 
 /** Text with anything that could say where someone is, or who, taken out. */
 export function scrub(text: string): string {
-  return text
+  return ascii(text)
+    .replace(CONTROL, "")
     .replace(INVISIBLE, "")
     .replace(URL_TEXT, (u) => urlToFile(u))
     .replace(EMAIL, "‹email›")
     .replace(ADDRESS, "‹address›")
+    .replace(DMS, "‹n›")
+    .replace(LABELLED, "‹n›")
     .replace(DECIMAL, "‹n›")
     .replace(NUMBER_RUN, "‹n›")
-    .replace(LONG_DIGITS, "‹n›")
-    .replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, "");
+    .replace(LONG_DIGITS, "‹n›");
+}
+
+/** A frame as the app writes it, "fn (file:line:col)": the function and the file
+ * are scrubbed, the position is not. A column past five digits is what a minified
+ * bundle's one long line has, and is where the bug is: it would be taken for an
+ * id and the frame made useless (and a fingerprint of it, different for each
+ * build). A bundle's own name stays as it is for the same reason. */
+const FRAME = /^(.*) \(([^()]*?)((?::\d+){0,2})\)$/;
+function scrubFrame(frame: string): string {
+  const m = FRAME.exec(frame);
+  if (m === null) return scrub(frame);
+  const fn = m[1] ?? "";
+  const file = m[2] ?? "";
+  const pos = m[3] ?? "";
+  return `${scrub(fn)} (${BUNDLE.test(file) ? file : scrub(file)}${pos})`;
 }
 
 export function scrubbed(r: Report): Report {
   return {
     ...r,
     message: scrub(r.message).slice(0, LIMITS.message),
-    frames: r.frames.map((f) => scrub(f).slice(0, LIMITS.frame)),
+    frames: r.frames.map((f) => scrubFrame(f).slice(0, LIMITS.frame)),
   };
 }
 
@@ -172,7 +218,14 @@ export function scrubbed(r: Report): Report {
  * renamed by every build (app-BrmPk3gH.js), so a file's hash is left out too,
  * or each build would open a new issue for the same bug. */
 export function signature(r: Report): string {
-  const message = r.message.replace(/\d+/g, "#").replace(/\s+/g, " ").trim();
+  const message = r.message
+    // what follows a URL was swallowed by the scrubber when the URL had a query
+    // and not when it hadn't, so the same failure read two ways
+    .replace(/‹url›[\s\S]*/, "‹url›")
+    // a number is a number whether the scrubber took it out or it was short
+    .replace(/‹n›|\d+/g, "#")
+    .replace(/\s+/g, " ")
+    .trim();
   const frame = (r.frames[0] ?? "")
     .replace(/:\d+(:\d+)?\)?$/, "")
     .replace(/-[\w-]{6,12}\.(m?js)\b/, ".$1");
