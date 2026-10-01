@@ -59,6 +59,7 @@ export async function readLimited(req: Request, max: number): Promise<string | n
 export interface Store {
   get(key: string): Promise<string | null>;
   put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void>;
+  delete(key: string): Promise<void>;
 }
 
 /** A Workers rate-limiting binding. */
@@ -89,6 +90,10 @@ export interface Ctx {
 
 /** What is kept per problem: its issue, and the repeats not yet commented. */
 export interface Seen {
+  /** The issue has no "error report" label (GitHub dropped it): find() can't see
+   * it, so its record is all that stops a repeat filing another, and it must not
+   * expire. Every write of the record has to keep it that way. */
+  unlabelled?: boolean;
   issue: number;
   /** The day of the issue or of its last comment. */
   day: string;
@@ -96,6 +101,10 @@ export interface Seen {
 }
 
 const SEEN_TTL_S = 180 * 24 * 3600;
+/** How a problem's record is stored: a labelled issue's expires (find() will see it
+ * again), an unlabelled one's doesn't (find() never will). */
+const ttlOf = (seen: { unlabelled?: boolean }): { expirationTtl: number } | undefined =>
+  seen.unlabelled === true ? undefined : { expirationTtl: SEEN_TTL_S };
 const DAY_TTL_S = 3 * 24 * 3600;
 
 function today(now: Date): string {
@@ -157,10 +166,10 @@ export async function file(r: Report, env: Env, gh: GitHub, now: Date): Promise<
         // now, not by writing back what was read: other reports have taken slots
         // since, and restoring the old count would erase theirs.
         if (err instanceof GitHubError && err.status >= 400 && err.status < 500) {
-          const now = Number((await env.REPORTS.get(newKey)) ?? "1");
-          await env.REPORTS.put(newKey, String(Math.max(0, now - 1)), { expirationTtl: DAY_TTL_S }).catch(
-            () => undefined,
-          );
+          await (async () => {
+            const current = Number((await env.REPORTS.get(newKey)) ?? "1");
+            await env.REPORTS.put(newKey, String(Math.max(0, current - 1)), { expirationTtl: DAY_TTL_S });
+          })().catch(() => undefined); // a KV failure here mustn't replace GitHub's error
         }
         throw err;
       }
@@ -171,12 +180,12 @@ export async function file(r: Report, env: Env, gh: GitHub, now: Date): Promise<
       // again and the error would file a fresh one every SEEN_TTL_S.
       await env.REPORTS.put(
         key,
-        JSON.stringify({ issue: made.number, day, pending: 0 } satisfies Seen),
-        made.labelled ? { expirationTtl: SEEN_TTL_S } : undefined,
+        JSON.stringify({ issue: made.number, day, pending: 0, ...(made.labelled ? {} : { unlabelled: true }) } satisfies Seen),
+        ttlOf(made.labelled ? {} : { unlabelled: true }),
       );
       if (!made.labelled) {
         throw new Error(
-          `issue #${made.number} was filed without the "${LABEL}" label: the token needs Issues: Read and write on this repository (fine-grained), or triage access (classic), and the label must exist`,
+          `issue #${made.number} was filed without the "${LABEL}" label: the token needs Issues: Read and write on this repository (fine-grained), or triage access (classic)`,
         );
       }
       return;
@@ -185,7 +194,7 @@ export async function file(r: Report, env: Env, gh: GitHub, now: Date): Promise<
   }
   if (seen.day === day) {
     seen.pending += 1;
-    await env.REPORTS.put(key, JSON.stringify(seen), { expirationTtl: SEEN_TTL_S });
+    await env.REPORTS.put(key, JSON.stringify(seen), ttlOf(seen));
     return;
   }
   // The record first, then the comment: if the comment fails the day's count is
@@ -195,10 +204,23 @@ export async function file(r: Report, env: Env, gh: GitHub, now: Date): Promise<
   // otherwise reopen a closed issue by sending one report.)
   const count = seen.pending + 1;
   const since = seen.day;
-  await env.REPORTS.put(key, JSON.stringify({ issue: seen.issue, day, pending: 0 } satisfies Seen), {
-    expirationTtl: SEEN_TTL_S,
-  });
-  await gh.comment(seen.issue, repeatComment(count, since, r));
+  await env.REPORTS.put(
+    key,
+    JSON.stringify({ issue: seen.issue, day, pending: 0, ...(seen.unlabelled === true ? { unlabelled: true } : {}) } satisfies Seen),
+    ttlOf(seen),
+  );
+  try {
+    await gh.comment(seen.issue, repeatComment(count, since, r));
+  } catch (err) {
+    // An issue that is gone (deleted, transferred) or locked would be commented on
+    // for ever by a record that never expires, and the error never filed again. A
+    // 404 or 410 is the issue gone: the record goes with it, so the next report
+    // files it afresh.
+    if (err instanceof GitHubError && (err.status === 404 || err.status === 410)) {
+      await env.REPORTS.delete(key).catch(() => undefined);
+    }
+    throw err;
+  }
 }
 
 /** What the tests put in place of GitHub and the clock. */

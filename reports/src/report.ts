@@ -111,23 +111,40 @@ export function check(body: unknown): Checked {
 /** Any decimal number. Three places was once the line (about 100 m), but
  * "42.38" is a kilometre and "42.4" ten: a coordinate is found at whatever
  * precision it was cut to, and a decimal in an error message is almost never
- * what the bug is. */
+ * what the bug is. Space around the point is allowed ("42 .3967", "42. 3967"),
+ * which also takes the end of a sentence and the number after it ("line 5. 404
+ * returned"): over-scrubbing, accepted, since the other way a coordinate
+ * written with a space is published. */
 const DECIMAL = /-?\d+\s*\.\s*\d+/g;
 /** Numbers set side by side: "42,-71", "14/4953/6060" (a tile), "12_34" (a grid
  * cell), "14:4953:6060", "14-4953-6060", "POINT(-71 42)", "tile 4953 6060".
  * Counts and sizes stand alone; these are positions. */
-const NUMBER_RUN = /-?\d+(?:(?:\s*[,/_;:x×-]\s*|\s+)-?\d+)+/g;
-/** "z=14 x=4953 y=6060", "lat=42 lon=-71", '"lat":42', "tile_x=4953", "lat 42":
- * tile axes and coordinates with their names, whole numbers too (a decimal is
- * taken anyway). The name must not be the end of a longer word ("max 5"), but may
- * follow an underscore or a quote, which is how JSON.stringify and snake_case
- * write them. */
-const LABELLED = /(?<![A-Za-z])(?:[xyz]|lat(?:itude)?|lon(?:gitude)?|lng)["']?\s*[=:]?\s*-?\d+(?:\.\d+)?/gi;
+const NUMBER_RUN = /-?\d+(?:(?:\s*[,/_;:-]\s*|\s+)-?\d+)+/g;
+/** Tile axes and coordinates with their names, whole numbers too: "z=14 x=4953
+ * y=6060", "lat=42 lon=-71", '"lat":42', "tile_x=4953", "tileX=4953",
+ * '{\"x\":4953}' (JSON inside JSON), "lat 42", "lat=+42", "lon=\u221271". Decimals
+ * are taken before this runs (DECIMAL, so "lat=42.3967" keeps its label as
+ * "lat=‹n›"); a whole number loses its label with it ("lat=42" is "‹n›"). The
+ * single-letter axes need their separator, or "0x1F", "x64" and "1920x1080" are
+ * taken as coordinates and different failures fold together; the long names don't
+ * ("lat 42"). Not the end of a longer word ("max 5", "latency 200"), except a
+ * capital after lowercase, which is how camelCase writes it. */
+const QUOTE = `(?:\\\\*["'])?`;
+/** A word in either case, written out: the `i` flag would make the camelCase
+ * lookbehinds ("a capital after a lowercase letter") match "max=5" as "ma" + "x=5". */
+const either = (word: string): string =>
+  [...word].map((c) => `[${c.toLowerCase()}${c.toUpperCase()}]`).join("");
+const AXIS = `(?:(?<![A-Za-z0-9])[xyzXYZ]${QUOTE}\\s*[=:]|(?<=[a-z])[XYZ]${QUOTE}\\s*[=:])`;
+const NAMED =
+  `(?:(?<![A-Za-z0-9])(?:${either("lat")}(?:${either("itude")})?|${either("lon")}(?:${either("gitude")})?|${either("lng")})` +
+  `|(?<=[a-z])(?:Lat(?:itude)?|Lon(?:gitude)?|Lng))${QUOTE}\\s*[=:]?`;
+const LABELLED = new RegExp(`(?:${AXIS}|${NAMED})\\s*${QUOTE}\\s*[-+]?\\d+(?:\\.\\d+)?`, "g");
 /** Degrees, minutes, seconds: 42°23'48"N 71°7'20"W. */
 const DMS = /\d+\s*°(?:\s*\d+(?:\.\d+)?\s*['′’])?(?:\s*\d+(?:\.\d+)?\s*(?:"|″|''))?\s*[NSEW]?/gi;
 /** A long run of digits: a tile index, an id, a phone number. Statuses (404),
- * line numbers and small counts are shorter. */
-const LONG_DIGITS = /\d{5,}/g;
+ * line numbers and small counts are shorter, and so are not taken; nor are the
+ * digits of a hex code ("0x80070005"), which is what tells two failures apart. */
+const LONG_DIGITS = /(?<!\b0[xX][0-9a-fA-F]*)\d{5,}/g;
 const EMAIL = /[\w.+-]+@[\w-]+(\.[\w-]+)+/g;
 /** A house number and street: "12 Elm Street", "1600 Mass. Ave". Free text
  * can't be fully recognised; this takes the usual written forms. */
@@ -147,34 +164,35 @@ const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f]/g;
  * the soft hyphen, interlinear annotation marks, tag characters), every
  * variation selector, fillers, line and paragraph separators. In a public
  * issue's title they make one report look like another, and, like control
- * characters, they hide a coordinate from a match. Combining marks go too
- * ("42\u0301.3967" reads as the coordinate it is). By class, not by list: a
- * hand-picked list had gaps (U+FFF9, the Mongolian selectors), each one a way to
- * split "42.3967" so that nothing matched it. */
+ * characters, they hide a coordinate from a match. Every combining mark goes
+ * too, spacing ones included ("42\u0301.3967", "42\u093e.3967" read as the
+ * coordinate they are); the cost is that accents and vowel signs are lost from the
+ * whole message, in any script, which is accepted for an error report. By class
+ * where there is one: a hand-picked list had gaps (U+FFF9, the Mongolian
+ * selectors), each a way to split "42.3967" so that nothing matched it. What is
+ * listed by hand is what no class covers: fillers that render as blank (the Hangul
+ * ones, U+3164 and U+FFA0, the Khmer inherent vowels) and the braille blank U+2800,
+ * which looks like a space. */
 // eslint-disable-next-line no-misleading-character-class
 const INVISIBLE =
-  /[\p{Cf}\p{Mn}\p{Me}\p{Variation_Selector}\u115f\u1160\u17b4\u17b5\u2028\u2029\u2800\u3164\uffa0]/gu;
+  /[\p{Cf}\p{M}\p{Variation_Selector}\u115f\u1160\u17b4\u17b5\u2028\u2029\u2800\u3164\uffa0]/gu;
 
-/** The bundles this app builds, by name: "app-BrmPk3gH.js" (a name and Vite's
- * eight-character hash), and the few files that keep theirs. The only file
- * names that stay in a report: any other, "12_Elm_St.json" for one, is
- * whatever a feed or a rider put in a URL. */
-const BUNDLE_NAME =
-  /^(?:[A-Za-z][A-Za-z-]*(?:\.worker)?-([A-Za-z0-9_-]{8})|sw|compat|maplibre-gl(?:-[a-z]+)?)\.m?js$/;
-/** A name of this shape, with a hash that has a capital in it, as Vite's nearly
- * always does (all but one in sixty, which loses its frame's file name). A
- * geohash ("home-dr5regw3.js", a place to within tens of metres) is lowercase
- * and digits only. */
+/** The chunks this app builds, by name: the base of "app-BrmPk3gH.js". A shape
+ * ("a word, a hyphen, eight characters") can't tell a bundle from "home-drkrqkrr-…",
+ * a place to within tens of metres in a name an attacker or a feed chose, so a name
+ * is kept only if it is one of these, and web/scripts/check-dist.mjs fails the build
+ * when it makes a chunk that isn't on the list (add its name here, or its frames
+ * lose their file name until someone does). */
+export const BUNDLE_BASES = ["app", "build", "city", "report", "routing.worker", "SegmentCard", "segment", "units"];
+/** Files that keep their names from build to build: no hash to check. */
+const FIXED_FILES = new Set(["sw.js", "compat.js", "maplibre-gl.mjs", "maplibre-gl-shared.mjs", "maplibre-gl-worker.mjs"]);
+const HASHED = new RegExp(`^(?:${BUNDLE_BASES.map((b) => b.replace(/\./g, "\\.")).join("|")})-([A-Za-z0-9_-]{8})\\.m?js$`);
+/** Vite's hash has a capital in it all but about once in sixty (a frame that loses
+ * its file name then, which is the safe way to be wrong); a geohash is lowercase. */
 function isBundle(file: string): boolean {
-  const m = BUNDLE_NAME.exec(file);
-  if (m === null) return false;
-  const hash = m[1];
-  if (hash !== undefined && !/[A-Z]/.test(hash)) return false;
-  // The name part has no digits, which is where a coordinate would sit
-  // ("p42.3967-71.1223-AbCdEfGh.js"), and, as a last check, a name that scrubbing
-  // would change is not kept: whatever the pattern lets through, this can't be
-  // made to publish what the rest of the scrubber would take out.
-  return scrub(file) === file;
+  if (FIXED_FILES.has(file)) return true;
+  const hash = HASHED.exec(file)?.[1];
+  return hash !== undefined && /[A-Z]/.test(hash);
 }
 
 /** A URL down to its bundle's name, if it names one: the host is ours, and the
@@ -194,10 +212,21 @@ function urlToFile(url: string): string {
  * Persian writes its numbers this way. The digits' values don't matter, only
  * that they are digits. */
 function ascii(text: string): string {
-  return text
-    .replace(/\p{Nd}/gu, (d) => (/[0-9]/.test(d) ? d : "0"))
-    .replace(/[\u066b\u2396\uff0e\u2024\u2027\ufe52\u00b7\u3002\uff61]/g, ".")
-    .replace(/[\u066c\u060c\uff0c\ufe50\uff64\u3001]/g, ",");
+  return (
+    text
+      // compatibility forms first: fullwidth digits and signs, superscripts, and the
+      // like come out as the ASCII they stand for
+      .normalize("NFKC")
+      .replace(/\p{Nd}/gu, (d) => (/[0-9]/.test(d) ? d : "0"))
+      // minus signs: "lon=\u221271" is a negative number
+      .replace(/[\u2212\u2796\ufe63\uff0d]/g, "-")
+      .replace(/[\u066b\u2396\uff0e\u2024\u2027\ufe52\u00b7\u3002\uff61\u2219\u22c5]/g, ".")
+      .replace(/[\u066c\u060c\uff0c\ufe50\uff64\u3001]/g, ",")
+      // and any other punctuation set between two digits is a decimal point, by
+      // class and not by list (U+2219, U+22C5, U+0387, U+2E31 ...), keeping the
+      // separators NUMBER_RUN already knows
+      .replace(/(?<=\d)[\p{Po}](?=\d)/gu, (c) => (",/:;".includes(c) ? c : "."))
+  );
 }
 
 /** Text with anything that could say where someone is, or who, taken out. */

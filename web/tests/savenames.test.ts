@@ -63,7 +63,9 @@ public class Check {
 `;
 
 describe.skipIf(!hasJavac)("the names the Android app saves files under", () => {
-  it("are plain, never a folder, and never replace a file of the same name", () => {
+  // javac starts a JVM twice (compile, run): seconds on a quiet machine and well past
+  // the default five on a loaded one, which is how CI runners and this box are
+  it("are plain, never a folder, and never replace a file of the same name", { timeout: 120_000 }, () => {
     const dir = mkdtempSync(join(tmpdir(), "savenames-"));
     const check = join(dir, "Check.java");
     writeFileSync(check, CHECK);

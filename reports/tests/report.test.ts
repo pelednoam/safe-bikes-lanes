@@ -6,6 +6,7 @@ import {
   fingerprint,
   issueBody,
   issueTitle,
+  BUNDLE_BASES,
   scrub,
   scrubbed,
   signature,
@@ -158,6 +159,35 @@ describe("the scrubbing", () => {
     expect(scrub("lat 42 .3967")).toBe("lat ‹n›");
   });
 
+  it("takes out labelled numbers in escaped JSON, camelCase, upper case, and with a sign", () => {
+    // JSON inside JSON writes a backslash before each quote
+    expect(scrub('{\\"x\\":4953,\\"y\\":6060,\\"z\\":14}')).not.toMatch(/4953|6060/);
+    expect(scrub("tileX=4953 tileY=6060")).toBe("tile‹n› tile‹n›");
+    expect(scrub('{"centerLat":42}')).toBe('{"center‹n›}');
+    expect(scrub("LAT=42 LON=-71")).toBe("‹n› ‹n›");
+    expect(scrub('{"lat":+42,"lon":\u221271}')).toBe('{"‹n›,"‹n›}');
+  });
+
+  it("doesn't take the x and z in hex, sizes and architectures for coordinates: different failures stay apart", () => {
+    for (const text of ["HRESULT 0x80070005 on x64", "1920x1080", "max=5", "app-X4bCdEfG.js", "app-Ab_x1CdE.js"]) {
+      expect(scrub(text), text).toBe(text);
+    }
+    // "x86_64" is the cost of reading "86_64" as a pair of numbers: over-scrubbed, accepted
+    expect(scrub("x86_64")).toBe("x‹n›");
+  });
+
+  it("takes out a coordinate set with any combining mark, spacing ones too", () => {
+    expect(scrub("42\u093e.3967")).toBe("‹n›");
+    expect(scrub("42\u0301.3967")).toBe("‹n›");
+  });
+
+  it("takes out compatibility forms: fullwidth digits and any punctuation between digits as a decimal point", () => {
+    expect(scrub("４２．３９６７")).toBe("‹n›");
+    for (const dot of ["\u2219", "\u22c5", "\u0387", "\u2e31"]) {
+      expect(scrub(`42${dot}3967,-71${dot}1223`), dot).toBe("‹n›,‹n›");
+    }
+  });
+
   it("takes out latitude and longitude written as JSON keys, snake_case, or with no separator", () => {
     expect(scrub('{"lat":42,"lon":-71}')).toBe('{"‹n›,"‹n›}');
     expect(scrub("tile_x=4953 user_lat=42")).toBe("tile_‹n› user_‹n›");
@@ -207,6 +237,17 @@ describe("the scrubbing", () => {
   it("doesn't keep a name whose suffix could be a geohash: a place to within tens of metres", () => {
     // eight lowercase characters and digits: Vite's hash has a capital in it
     expect(scrub("https://example.test/home-dr5regw3.js")).toBe("‹url›");
+  });
+
+  it("keeps a name only if it is one of the app's chunks, whatever shape a geohash or a coordinate gives it", () => {
+    for (const name of ["home-drkrqkrr-AbCdEfGh.js", "drkrqkrr-AbCdEfGh.js", "Broadway-AbCdEfGh.js", "lat42-AbCdEfGh.js"]) {
+      expect(scrub(`https://example.test/${name}`), name).toBe("‹url›");
+    }
+  });
+
+  it("the list of chunk names is the one the build checks", () => {
+    expect(BUNDLE_BASES).toContain("app");
+    expect(BUNDLE_BASES).toContain("routing.worker");
   });
 
   it("keeps the names of the bundles this app really builds", () => {

@@ -101,6 +101,30 @@ for (const f of readdirSync(DIST).filter((f) => f.endsWith(".js"))) {
   }
 }
 
+// The chunks' names, against the list the error-report Worker keeps them by
+// (reports/src/report.ts BUNDLE_BASES). A file name in a report's stack is kept
+// only if it is on that list, since a name can carry a place and a pattern can't
+// tell the app's from one that does; a chunk the build makes that isn't on it
+// would have its frames reported with no file name, quietly, until someone
+// noticed. So the build says so instead.
+{
+  const worker = readFileSync(join(DIST, "..", "..", "reports", "src", "report.ts"), "utf8");
+  const listed = new Set(
+    [...(/export const BUNDLE_BASES = \[(?<body>[^\]]*)\]/.exec(worker)?.groups?.["body"] ?? "").matchAll(/"([^"]+)"/g)].map(
+      (m) => m[1],
+    ),
+  );
+  if (listed.size === 0) problems.push("reports/src/report.ts: no BUNDLE_BASES list to check the chunks against");
+  for (const f of readdirSync(DIST)) {
+    const m = /^(?<base>.+)-[A-Za-z0-9_-]{8}\.m?js$/.exec(f);
+    const base = m?.groups?.["base"];
+    if (base === undefined || /^maplibre-gl/.test(f)) continue;
+    if (!listed.has(base)) {
+      problems.push(`${f}: "${base}" is not in BUNDLE_BASES (reports/src/report.ts), so its frames would be reported without a file name`);
+    }
+  }
+}
+
 if (problems.length > 0) {
   console.error(`dist/ is not fit to serve:\n  ${problems.join("\n  ")}`);
   process.exit(1);

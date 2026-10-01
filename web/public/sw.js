@@ -46,6 +46,9 @@ function cacheNameFor(url) {
 // own (not a shell's or data's prefix, so nothing below deletes it).
 const ORDER_CACHE = "bike-cache-order";
 const ORDER_KEY = new URL("__order-shell", self.location).href;
+/** The data order an earlier version kept; nothing reads it now. Deleted at each
+ * activation until every phone has been through one (remove this after app-v60). */
+const LEGACY_DATA_ORDER_KEY = new URL("__order-data", self.location).href;
 
 async function readOrder() {
   try {
@@ -187,8 +190,12 @@ self.addEventListener("activate", (event) => {
       );
       await Promise.all(stale.map((k) => caches.delete(k)));
       await writeOrder([CACHE, ...order.filter((n) => n !== CACHE)]);
-      // the data order an earlier version of this kept, which nothing reads now
-      await (await caches.open(ORDER_CACHE)).delete(new URL("__order-data", self.location).href);
+      // housekeeping: failing at it (storage pressure) must not stop the new worker
+      // taking control of open pages, which is the next line
+      await caches
+        .open(ORDER_CACHE)
+        .then((c) => c.delete(LEGACY_DATA_ORDER_KEY))
+        .catch(() => undefined);
       // take control of open pages so the update reaches them at once
       await self.clients.claim();
     })(),

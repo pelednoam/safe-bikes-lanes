@@ -20,6 +20,11 @@ function memoryStore(): Store & { data: Map<string, string>; ttl: Map<string, nu
       ttl.set(k, options?.expirationTtl);
       return Promise.resolve();
     },
+    delete: (k) => {
+      data.delete(k);
+      ttl.delete(k);
+      return Promise.resolve();
+    },
   };
 }
 
@@ -205,7 +210,7 @@ describe("filing", () => {
     await expect(file(sample(), e, gh, day1)).rejects.toThrow(/issue #42 was filed without the "error report" label/);
     // the issue is counted against the day, and remembered
     expect(await e.REPORTS.get("new:2026-09-29")).toBe("1");
-    expect(await seen(e, sample())).toEqual({ issue: 42, day: "2026-09-29", pending: 0 });
+    expect(await seen(e, sample())).toEqual({ issue: 42, day: "2026-09-29", pending: 0, unlabelled: true });
     // so the same error again is a repeat of #42, not a new issue
     const again = fakeGitHub();
     await file(sample(), e, again, day1);
@@ -276,6 +281,64 @@ describe("filing", () => {
     const gh = fakeGitHub();
     await file(sample({ message: "three" }), e, gh, day1);
     expect(gh.calls.filter((c) => c.startsWith("create"))).toHaveLength(1);
+  });
+
+  it("keeps an unlabelled issue's record from ever expiring through every later write of it", async () => {
+    // creation wrote it without an expiry, and the repeats, same-day and next-day,
+    // wrote it back with one: after which find() (labelled issues only) couldn't see
+    // the issue and the error filed another
+    const e = env({ DAILY_NEW_CAP: "5" });
+    const store = e.REPORTS as ReturnType<typeof memoryStore>;
+    const fp = `fp:${await fingerprint(sample())}`;
+    const gh = { ...fakeGitHub(), create: () => Promise.resolve({ number: 42, labelled: false }) };
+    await expect(file(sample(), e, gh, day1)).rejects.toThrow();
+    expect(store.ttl.get(fp)).toBeUndefined();
+    await file(sample(), e, fakeGitHub(), day1); // the same day: counted
+    expect(store.ttl.get(fp), "still no expiry after a repeat the same day").toBeUndefined();
+    const next = fakeGitHub();
+    await file(sample(), e, next, day2); // the next day: commented on
+    expect(next.calls[0]).toMatch(/^comment 42 /);
+    expect(store.ttl.get(fp), "still no expiry after the comment").toBeUndefined();
+    expect(JSON.parse(store.data.get(fp) ?? "{}")).toMatchObject({ issue: 42, unlabelled: true });
+  });
+
+  it("forgets the record of an issue that is gone, so the error is filed again instead of commented on for ever", async () => {
+    const e = env({ DAILY_NEW_CAP: "5" });
+    const gh1 = { ...fakeGitHub(), create: () => Promise.resolve({ number: 42, labelled: false }) };
+    await expect(file(sample(), e, gh1, day1)).rejects.toThrow();
+    // the maintainer deleted #42
+    const gone = {
+      ...fakeGitHub(),
+      comment: () => Promise.reject(new GitHubError("GitHub comment: 404 Not Found", 404)),
+    };
+    await expect(file(sample(), e, gone, day2)).rejects.toBeInstanceOf(GitHubError);
+    expect(await seen(e, sample())).toBeNull();
+    // so the next report starts it again
+    const again = fakeGitHub();
+    await file(sample(), e, again, day2);
+    expect(again.calls.at(-1)).toMatch(/^create /);
+  });
+
+  it("keeps the record when a comment fails for any other reason", async () => {
+    const e = env();
+    await file(sample(), e, fakeGitHub(), day1);
+    const flaky = { ...fakeGitHub(), comment: () => Promise.reject(new GitHubError("GitHub comment: 502", 502)) };
+    await expect(file(sample(), e, flaky, day2)).rejects.toBeInstanceOf(GitHubError);
+    expect((await seen(e, sample()))?.issue).toBe(7);
+  });
+
+  it("reports GitHub's refusal, not a KV failure, when giving the slot back goes wrong", async () => {
+    const e = env({ DAILY_NEW_CAP: "5" });
+    const store = e.REPORTS as ReturnType<typeof memoryStore>;
+    const refuse = { ...fakeGitHub(), create: () => Promise.reject(new GitHubError("GitHub create: 422", 422)) };
+    const realGet = store.get.bind(store);
+    let failing = false;
+    store.get = (k) => (failing && k.startsWith("new:") ? Promise.reject(new Error("KV unavailable")) : realGet(k));
+    const attempt = file(sample(), e, { ...refuse, create: () => {
+      failing = true; // from the moment GitHub is asked, reading the count back fails
+      return Promise.reject(new GitHubError("GitHub create: 422", 422));
+    } }, day1);
+    await expect(attempt).rejects.toThrow("GitHub create: 422");
   });
 
   it("never lets an unlabelled issue's record expire, so find() not seeing it can't file another", async () => {

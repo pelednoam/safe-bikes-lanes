@@ -91,32 +91,35 @@ jobs:
           # not ours, so a "::" at the start of one of its lines is not a command.
           oneline() { printf '%s' "$1" | tr '\r\n' '  ' | cut -c1-300 | sed 's/::/: :/g'; }
           state='let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{let r;try{r=JSON.parse(s)}catch{process.stdout.write("error");return}const n=r.success&&r.result&&r.result.subdomain;const none=(r.success&&!n)||(r.errors||[]).some(e=>e.code===10007);process.stdout.write(n?"have:"+n:none?"missing":"error")})'
-          # curl's own messages (a retry it made, the reason it gave up) go to a file,
-          # not into the body: with 2>&1 a retry that then succeeded put a warning
-          # in front of the JSON, and the JSON failed to parse. The body is parsed
-          # only if curl succeeded; both are kept for what an error says.
-          err=$(mktemp)
-          if body=$(curl -sS --retry 3 --retry-all-errors -H "$auth" "$api" 2>"$err"); then
-            got=$(printf '%s' "$body" | node -e "$state") || got=error
-          else
-            got=error
-            body="$body $(cat "$err")"
-          fi
+          # One call, used for both requests. curl writes its body to a FILE (-o),
+          # not to a variable: on a retry it starts the file again, where captured
+          # output could hold a failed attempt's body in front of the good one and
+          # fail to parse. Its own messages (a retry, the reason it gave up) go to
+          # another file, not in front of the JSON. The body is parsed only if curl
+          # succeeded; on failure both are what the error says (or "no answer").
+          work=$(mktemp -d)
+          trap 'rm -rf "$work"' EXIT
+          cf() {
+            : > "$work/body"; : > "$work/err"
+            if curl -sS --retry 3 --retry-all-errors -H "$auth" -o "$work/body" "$@" 2> "$work/err"; then
+              got=$(node -e "$state" < "$work/body") || got=error
+              reply=$(cat "$work/body")
+            else
+              got=error
+              reply="$(cat "$work/body") $(cat "$work/err")"
+            fi
+            [ -n "${reply// /}" ] || reply="no answer"
+          }
+          cf "$api"
           case "$got" in
             have:*) have="${got#have:}" ;;
             missing)
-              if resp=$(curl -sS --retry 3 --retry-all-errors -X PUT -H "$auth" -H "content-type: application/json" \
-                --data "{\"subdomain\":\"$WANTED\"}" "$api" 2>"$err"); then
-                got=$(printf '%s' "$resp" | node -e "$state") || got=error
-              else
-                got=error
-                resp="$resp $(cat "$err")"
-              fi
+              cf -X PUT -H "content-type: application/json" --data "{\"subdomain\":\"$WANTED\"}" "$api"
               case "$got" in
                 have:*) have="${got#have:}"; echo "registered $have.workers.dev" ;;
-                *) echo "::error::couldn't register $WANTED.workers.dev: $(oneline "$resp")"; exit 1 ;;
+                *) echo "::error::couldn't register $WANTED.workers.dev: $(oneline "$reply")"; exit 1 ;;
               esac ;;
-            *) echo "::error::couldn't read the account's workers.dev subdomain from Cloudflare: $(oneline "$body")"; exit 1 ;;
+            *) echo "::error::couldn't read the account's workers.dev subdomain from Cloudflare: $(oneline "$reply")"; exit 1 ;;
           esac
           echo "::notice::The Worker is https://safe-bikes-reports.$have.workers.dev/report"
       - name: The KV namespace, created the first time
