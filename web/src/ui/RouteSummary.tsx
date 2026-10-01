@@ -21,6 +21,8 @@ export function ClassBar({ parts, colors, labels }: ClassBreakdownProps) {
     <>
       {parts.map(({ cls, meters }) => (
         <i
+          // one segment per kind, so the kind is its identity
+          key={cls}
           // the class's mark as a pattern, so the bar reads without its colours
           class={`pat-${cls}`}
           style={{ flex: meters, backgroundColor: colors[cls] ?? "#999" }}
@@ -45,7 +47,7 @@ export function ClassKey({
         const pct = total > 0 ? Math.round((100 * meters) / total) : 0;
         if (pct < 1) return null;
         return (
-          <span>
+          <span key={cls}>
             {/* the swatch is this app's own SVG, drawn from its class table */}
             <span dangerouslySetInnerHTML={{ __html: swatch(cls) }} />{" "}
             {`${labels[cls] ?? cls} ${pct}%`}
@@ -69,8 +71,8 @@ export function Cautions({ cautions, labels, photos, onPhoto }: CautionsProps) {
   if (cautions.length === 0) return <div class="all-clear">✓ no stressful segments</div>;
   return (
     <>
-      {cautions.map((c) => (
-        <div class="caution">
+      {cautions.map((c, i) => (
+        <div class="caution" key={`${i}|${c.name}|${c.cls}`}>
           {`⚠ ${c.name}: ${fmtDist(c.meters)} of ${labels[c.cls] ?? c.cls} `}
           {c.lon !== undefined && c.lat !== undefined && (
             <>
@@ -108,8 +110,8 @@ export function Cautions({ cautions, labels, photos, onPhoto }: CautionsProps) {
 export function WhyList({ reasons }: { reasons: string[] }) {
   return (
     <>
-      {reasons.map((r) => (
-        <li>{r}</li>
+      {reasons.map((r, i) => (
+        <li key={`${i}|${r}`}>{r}</li>
       ))}
     </>
   );

@@ -88,8 +88,9 @@ export interface ShareEnv {
   copy(text: string): Promise<void>;
   /** Save the picture; a result, where saving can fail (in the app). */
   download(blob: Blob, filename: string): void | Promise<SaveResult>;
-  /** Say, visibly, what happened instead of the share sheet. */
-  tell(message: string): void;
+  /** Say, visibly, what happened instead of the share sheet. `ok` is whether
+   * what the rider asked for happened, so a refusal isn't dressed as a success. */
+  tell(message: string, ok: boolean): void;
 }
 
 function isCancel(err: unknown): boolean {
@@ -113,11 +114,10 @@ export function shareImage(
     await env.copy(text).catch(() => undefined);
     // one message, and a true one: "saved" over a refused save is how a rider
     // finds out later that it never was
-    if (blob === null) env.tell("Text copied");
+    if (blob === null) env.tell("Text copied", true);
     else if (typeof saved === "object" && "error" in saved) {
-      env.tell(`Picture not saved (${saved.error}); text copied`);
-    }
-    else env.tell("Picture saved, text copied");
+      env.tell(`Picture not saved (${saved.error}); text copied`, false);
+    } else env.tell("Picture saved, text copied", true);
   };
   const blob = image.blob;
   if (blob !== null && env.share !== undefined) {

@@ -44,7 +44,7 @@ function env(over: Partial<ShareEnv> = {}): ShareEnv & { log: string[] } {
     download: (_b, f) => {
       log.push(`download ${f}`);
     },
-    tell: (m) => log.push(`tell ${m}`),
+    tell: (m, ok) => log.push(`tell ${ok ? "ok" : "failed"} ${m}`),
     ...over,
   };
 }
@@ -69,7 +69,7 @@ describe("shareImage", () => {
       share: () => Promise.reject(new DOMException("not in a gesture", "NotAllowedError")),
     });
     await shareImage("I rode 5 km", await drawn(), "ride.png", e);
-    expect(e.log).toEqual(["download ride.png", "copy I rode 5 km", "tell Picture saved, text copied"]);
+    expect(e.log).toEqual(["download ride.png", "copy I rode 5 km", "tell ok Picture saved, text copied"]);
   });
 
   it("cancelling the share sheet is left alone", async () => {
@@ -85,7 +85,7 @@ describe("shareImage", () => {
     const done = shareImage("x", img, "ride.png", e);
     finish?.(new Blob(["png"]));
     await done;
-    expect(e.log).toEqual(["download ride.png", "copy x", "tell Picture saved, text copied"]);
+    expect(e.log).toEqual(["download ride.png", "copy x", "tell ok Picture saved, text copied"]);
   });
 
   it("with no share sheet at all, and no picture, the text is still copied", async () => {
@@ -95,7 +95,7 @@ describe("shareImage", () => {
     const img = new PreparedImage(Promise.reject(new Error("no canvas")));
     await img.ready;
     await shareImage("x", img, "ride.png", e);
-    expect(e.log).toEqual(["copy x", "tell Text copied"]);
+    expect(e.log).toEqual(["copy x", "tell ok Text copied"]);
   });
 });
 
@@ -103,15 +103,16 @@ describe("sharing when the save is refused", () => {
   it("says the picture wasn't saved, and only that", async () => {
     // in the app a save can fail; "Picture saved" over it, then an error
     // flashed on top, left the button saying whichever came last
-    const told: string[] = [];
+    const told: [string, boolean][] = [];
     const image = new PreparedImage(Promise.resolve(new Blob(["png"])));
     await image.ready;
     await shareImage("12 km!", image, "card.png", {
       copy: async () => undefined,
       download: async () => ({ error: "Downloads refused the file" }),
-      tell: (m) => told.push(m),
+      tell: (m, ok) => told.push([m, ok]),
     });
-    expect(told).toEqual(["Picture not saved (Downloads refused the file); text copied"]);
+    // and not as a success: the button put a tick in front of whatever it was told
+    expect(told).toEqual([["Picture not saved (Downloads refused the file); text copied", false]]);
   });
 });
 

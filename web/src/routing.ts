@@ -119,10 +119,16 @@ export function createRoutingApi(
    * the bundle's: the two builds' tiles don't join. The bundle's whole set
    * does, so routing goes on there, a little older, rather than stopping. */
   const onSite = async <T>(work: () => Promise<T>): Promise<T> => {
+    // Which tiles this request is on, taken before it starts: a request that began
+    // on the site's and fails with its tiles missing is for the bundle to answer,
+    // whether or not another request got there first, but one that was already on
+    // the bundle's, which has failed, is not. Asked afterwards, "are we on the
+    // bundle" said yes to the second request to fail, and it gave up.
+    const startedOnBundle = onBundle;
     try {
       return await work();
     } catch (err) {
-      if (!(err instanceof SiteTileMissing) || onBundle) throw err;
+      if (!(err instanceof SiteTileMissing) || startedOnBundle) throw err;
       // one switch, however many loads failed together
       switching ??= (async () => {
         onBundle = true;

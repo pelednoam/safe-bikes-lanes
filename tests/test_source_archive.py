@@ -138,3 +138,41 @@ def test_a_downloaded_copy_is_the_gzipped_geojson(monkeypatch: Any) -> None:
 
     monkeypatch.setattr(urllib.request, "urlopen", lambda *_a, **_k: Resp())
     assert source_archive.download(_copy("pois.geojson", D(2026, 9, 26))) == {"features": [1]}
+
+
+def test_upload_asks_github_for_the_release_once_before_it_uploads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # it asked for the release to find out whether there was one, and again, in
+    # list_copies(), for what was in it: two requests for one answer
+    (tmp_path / "pois.geojson").write_text("{}")
+    asked: list[str] = []
+    ran: list[tuple[str, ...]] = []
+
+    def get_json(url: str) -> Any:
+        asked.append(url)
+        return {"id": 7} if url.endswith("/tags/source-archive") else []
+
+    monkeypatch.setattr(source_archive, "_gh", lambda *args: ran.append(args))
+    fresh = [(tmp_path / "pois.geojson", D(2026, 9, 29))]
+    monkeypatch.setattr(source_archive, "fresh_sources", lambda raw: fresh)
+    source_archive.upload(tmp_path, get_json)
+    releases = [u for u in asked if u.endswith("/tags/source-archive")]
+    # once to look, and once more after uploading to see what is there to prune
+    assert len(releases) == 2, asked
+    assert ran[0][:2] == ("release", "upload")
+
+
+def test_upload_makes_the_release_when_there_is_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ran: list[tuple[str, ...]] = []
+
+    def get_json(url: str) -> Any:
+        raise urllib.error.HTTPError(url, 404, "Not Found", Message(), None)
+
+    monkeypatch.setattr(source_archive, "_gh", lambda *args: ran.append(args))
+    monkeypatch.setattr(source_archive, "fresh_sources", lambda raw: [])
+    source_archive.upload(tmp_path, get_json)
+    assert ran[0][:3] == ("release", "create", source_archive.TAG)
+

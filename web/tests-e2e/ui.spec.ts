@@ -702,12 +702,20 @@ test("a map opened outside the area says what it covers, and goes there", async 
   expect(lng).toBeLessThan(-70.78);
 });
 
-test("the notice about the area stays away inside it", async ({ page }) => {
-  test.slow(); // a planner boot, then a move: most of a minute on a loaded runner
+test("the notice about the area stays away while any of it is in view", async ({ page }) => {
+  test.slow(); // a planner boot, then two moves: most of a minute on a loaded runner
   await page.goto("/");
   await page.waitForFunction(() => window._map?.isStyleLoaded() === true, null, { timeout: budget(60_000) });
-  // and at the edge of it, where half the view is outside
+  const notice = page.locator("#outside");
+  // First somewhere the notice does show. "Hidden" asserted after a fixed wait
+  // proves nothing by itself: it is also what a notice that never ran, or one
+  // that shows late, looks like. Shown and then hidden is the notice running.
+  await page.evaluate(() => window._map?.jumpTo({ center: [-122.08, 37.39], zoom: 14 }));
+  await expect(notice).toBeVisible({ timeout: budget(20_000) });
+  // and at the edge of the area, where half the view is outside it, it goes
   await page.evaluate(() => window._map?.jumpTo({ center: [-71.62, 42.3], zoom: 13 }));
-  await page.waitForTimeout(500);
-  await expect(page.locator("#outside")).toBeHidden();
+  await expect(notice).toBeHidden({ timeout: budget(20_000) });
+  // and stays so: it was shown a moment ago, so this is not a notice that never ran
+  await page.waitForTimeout(1000);
+  await expect(notice).toBeHidden();
 });

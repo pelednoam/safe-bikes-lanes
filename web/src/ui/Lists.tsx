@@ -37,7 +37,7 @@ export function RideTotalsLine({ totals }: { totals: RideTotals | null }) {
   }
   return (
     <>
-      <b>{totals.count}</b> rides · <b>{fmtDist(totals.km * 1000)}</b> total · <b>{totals.movingHours} h</b>{" "}
+      <b>{totals.count}</b> {totals.count === 1 ? "ride" : "rides"} · <b>{fmtDist(totals.km * 1000)}</b> total · <b>{totals.movingHours} h</b>{" "}
       moving · longest <b>{fmtDist(totals.longestKm * 1000)}</b> · this month{" "}
       <b>{fmtDist(totals.thisMonthKm * 1000)}</b> · avg <b>{totals.avgProtectedPct}%</b> protected
     </>

@@ -13,7 +13,9 @@ declare global {
   }
 }
 
-function aRide(id: string, day: string, meters: number): Record<string, unknown> {
+type LngLat = [number, number];
+
+function aRide(id: string, day: string, meters: number, polyline: LngLat[]): Record<string, unknown> {
   return {
     id,
     startedAt: `2026-09-${day}T10:00:00.000Z`,
@@ -24,12 +26,19 @@ function aRide(id: string, day: string, meters: number): Record<string, unknown>
     pctProtected: 80,
     pctQuiet: 20,
     profile: "young_kids",
-    polyline: [
-      [-71.12, 42.39],
-      [-71.1, 42.38],
-    ],
+    polyline,
   };
 }
+
+// two rides that differ in everything a row shows, and on the map
+const RIDE_A: LngLat[] = [
+  [-71.12, 42.39],
+  [-71.1, 42.38],
+];
+const RIDE_B: LngLat[] = [
+  [-71.2, 42.4],
+  [-71.18, 42.41],
+];
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(
@@ -45,7 +54,7 @@ test.beforeEach(async ({ page }) => {
       );
       localStorage.setItem("rideHistory", JSON.stringify(rides));
     },
-    [[aRide("a", "01", 5200), aRide("b", "02", 9100)]],
+    [[aRide("a", "01", 5200, RIDE_A), aRide("b", "02", 9100, RIDE_B)]],
   );
   await page.goto("/");
   await page.waitForFunction(() => window._map !== undefined, null, { timeout: budget(60_000) });
@@ -70,19 +79,36 @@ test("a marked spot is listed, and removing it removes that one", async ({ page 
   await expect(page.locator("#sketchy-list .sketchy-row")).toHaveCount(1);
 });
 
-test("the rides are listed with their totals, and one can be deleted or shown", async ({ page }) => {
+test("the rides are listed with their totals; each row deletes and shows its own ride", async ({ page }) => {
   await page.locator("#rides-btn").click();
   await expect(page.locator("#ride-totals")).toContainText("2 rides");
   const rows = page.locator("#ride-list tr:has(td)");
   await expect(rows).toHaveCount(2);
+  const [first, second] = await rows.allTextContents();
+  expect(first, "the two rides read the same").not.toBe(second);
+
+  // ✕ on the first row removes the first ride, and only that one
   await rows.nth(0).locator("button", { hasText: "✕" }).click();
   await expect(rows).toHaveCount(1);
-  await expect(page.locator("#ride-totals")).toContainText("1 rides");
+  expect(await rows.nth(0).textContent(), "the wrong row was deleted").toBe(second);
   const left = await page.evaluate(
     () => (JSON.parse(localStorage.getItem("rideHistory") ?? "[]") as { id: string }[]).map((r) => r.id),
   );
-  expect(left).toHaveLength(1);
-  // showing a ride puts it on the map and gets the dialog out of the way
+  expect(left, "the wrong ride was deleted").toEqual(["b"]);
+  // one is "1 ride", not "1 rides"
+  await expect(page.locator("#ride-totals")).toContainText(/\b1 ride\b(?!s)/);
+
+  // "map" draws that ride's own line, and gets the dialog out of the way
   await rows.nth(0).locator("button", { hasText: "map" }).click();
   await expect(page.locator("#rides")).not.toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate(async () => {
+        const src = window._map?.getSource("history") as
+          | { getData(): Promise<GeoJSON.Feature<GeoJSON.LineString>> }
+          | undefined;
+        return JSON.stringify((await src?.getData())?.geometry?.coordinates ?? null);
+      }),
+    )
+    .toBe(JSON.stringify(RIDE_B));
 });

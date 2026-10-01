@@ -106,6 +106,21 @@ export interface ConstructionCardProps {
   end: string;
 }
 
+/** What the card says, from a permit feature's properties: each field the feed
+ * may have sent as null, a number, or spaces. One place, so the hover and the tap
+ * can't read the same permit two ways. */
+export function constructionProps(p: Record<string, unknown>): ConstructionCardProps {
+  return {
+    name: textOf(p["name"]),
+    kind: textOf(p["kind"]),
+    address: textOf(p["address"]),
+    detail: textOf(p["detail"]),
+    src: textOf(p["src"]),
+    start: textOf(p["start"]),
+    end: textOf(p["end"]),
+  };
+}
+
 /** A construction site, the same whether hovered or tapped: the two cards
  * worded the same permit differently, and only one of them escaped it. */
 export function ConstructionCard(p: ConstructionCardProps) {

@@ -927,6 +927,57 @@ test("picking a start doesn't get graded as if it were a destination", async ({ 
   }
 });
 
+test("a destination list's grading doesn't land on the start list that replaced it", async ({ page }) => {
+  // Grading starts 400 ms after a list is drawn, and clearing a list stopped a
+  // run in flight but not that timer: switch to the start field in the interval
+  // and the timer went on to grade the start list, which names the same places,
+  // and put letters on it for a route nobody is taking.
+  // a saved place: a candidate the page has by itself, so the list is drawn the
+  // moment the field is typed in, with no geocoder answer to wait for
+  await page.addInitScript(() => {
+    localStorage.setItem("savedPlaces", JSON.stringify([{ name: "Danehy Park", lon: -71.1215, lat: 42.3894 }]));
+  });
+  // a start, so that grading has somewhere to route from and a stray run would
+  // end in letters; without one it gives up and hides the badges again
+  await page.goto("/#s=-71.0995,42.3875");
+  await page.waitForFunction(() => window._map !== undefined, null, { timeout: budget(60_000) });
+  await page.waitForTimeout(2500);
+
+  // Both lists in one task, so the interval can't pass between them: typed one
+  // after the other through the page, the first list's 400 ms can be over (a
+  // loaded runner) before the second field is touched, and the test then
+  // exercises nothing.
+  const firstList = await page.evaluate(() => {
+    // Recorded, not looked at afterwards: the stray letter shows for a second or
+    // so (until the geocoder's answer redraws the list) and is gone by the time
+    // a test that waits and then looks would look.
+    const w = window as unknown as { __gradeSeen?: string[] };
+    w.__gradeSeen = [];
+    const box = document.getElementById("search-results") as HTMLElement;
+    new MutationObserver(() => {
+      for (const g of box.querySelectorAll<HTMLElement>(".search-grade")) {
+        if (g.style.visibility !== "hidden") w.__gradeSeen?.push(g.getAttribute("aria-label") ?? g.textContent ?? "");
+      }
+    }).observe(box, { childList: true, subtree: true, attributes: true, characterData: true });
+    const type = (id: string, text: string): void => {
+      const field = document.getElementById(id) as HTMLInputElement;
+      field.focus();
+      field.value = text;
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+    };
+    type("search", "danehy");
+    const drawn = document.querySelectorAll("#search-results .search-row").length;
+    type("from-field", "danehy");
+    return drawn;
+  });
+  expect(firstList, "no destination list was up to be graded").toBeGreaterThan(0);
+  await expect(page.locator(".search-row").first()).toBeVisible();
+  // long enough for the 400 ms timer, and for a route to be worked out after it
+  await page.waitForTimeout(6000);
+  const seen = await page.evaluate(() => (window as unknown as { __gradeSeen?: string[] }).__gradeSeen ?? []);
+  expect(seen, "the start list showed a grade, from the destination list's timer").toEqual([]);
+});
+
 test("searching before setting a start still gets grades once there is one", async ({
   page,
 }) => {

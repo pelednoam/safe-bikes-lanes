@@ -130,10 +130,12 @@ import { RideList, RideTotalsLine, SketchyList } from "./ui/Lists.js";
 import { chipViews, paintChip } from "./chips.js";
 import { BuildList, type BuildListStatus } from "./ui/BuildList.js";
 import { SegmentCardView } from "./ui/SegmentCard.js";
+import { PhotoUrls } from "./photourls.js";
 import {
   BlockCard,
   cardElement,
   ConstructionCard,
+  constructionProps,
   CrossingCard,
   ElevationCard,
   HazardCard,
@@ -1388,21 +1390,21 @@ function renderOptionChips(): void {
   for (const v of views) {
     let chip = optionChips.get(v.id);
     if (chip === undefined) {
-      const el = document.createElement("div");
+      const badge = document.createElement("div");
       // reachable and pressable from a keyboard, like the cards they mirror
-      el.tabIndex = 0;
-      el.setAttribute("role", "button");
-      el.addEventListener("click", (ev: Event) => {
+      badge.tabIndex = 0;
+      badge.setAttribute("role", "button");
+      badge.addEventListener("click", (ev: Event) => {
         ev.stopPropagation();
         selectOption(v.id);
       });
-      el.addEventListener("keydown", (ev: KeyboardEvent) => {
+      badge.addEventListener("keydown", (ev: KeyboardEvent) => {
         if (ev.key !== "Enter" && ev.key !== " ") return;
         ev.preventDefault();
         ev.stopPropagation();
         selectOption(v.id);
       });
-      chip = new maplibregl.Marker({ element: el }).setLngLat(v.at).addTo(map);
+      chip = new maplibregl.Marker({ element: badge }).setLngLat(v.at).addTo(map);
       optionChips.set(v.id, chip);
     } else {
       chip.setLngLat(v.at);
@@ -2007,12 +2009,18 @@ let avoidRevision = 0;
 /** The rows currently on screen, so their letters can be withdrawn and redone
  * when the answer they state stops being true. */
 let gradedRows: { key: string; lngLat: [number, number] }[] = [];
+/** The timer that starts grading shortly after a list is drawn. */
+let gradeTimer: number | undefined;
 
 /** The letters on screen describe routes from a particular start under
  * particular settings. When either changes they are answers to a question
  * nobody asked any more, so withdraw them and work them out again. */
 function regradeVisible(): void {
   if (gradedRows.length === 0) return;
+  // Never the start-picker list, even when it names the same places as the
+  // destination list that was graded: a letter there would describe the route
+  // from the current start to a candidate start, which nobody takes.
+  if (searchView.target !== "end") return;
   // Never mid-ride. The "avoid this street" chip writes through saveSketchy,
   // which lands here, and grading is up to five routing runs on the main thread
   // — a stall in guidance while someone is riding, to refresh a search list
@@ -2206,7 +2214,7 @@ function paintSearch(): void {
 
 /** Nothing listed: the list is going away. */
 function clearSearchResults(): void {
-  gradeLane.cancel(); // stop routing for a list that is gone
+  dropGrading(); // stop routing for a list that is gone, and the timer to start it
   searchView.rows = [];
   searchView.message = null;
   searchView.active = null;
@@ -2219,8 +2227,18 @@ function searchListShown(): boolean {
   return searchView.rows.length > 0 || searchView.message !== null;
 }
 
+/** Everything about grading the list that was here: the run in flight, the
+ * timer that would start one (clearing the run alone left the timer, which
+ * went on to grade whatever list was there when it fired, a start-picker
+ * list included), and which rows were being graded. */
+function dropGrading(): void {
+  gradeLane.cancel();
+  window.clearTimeout(gradeTimer);
+  gradedRows = [];
+}
+
 function renderSearchResults(rows: Ranked[], target: "start" | "end" = "end"): void {
-  gradeLane.cancel(); // abandon grading for whatever list was here before
+  dropGrading(); // abandon grading for whatever list was here before
   searchView.target = target;
   if (rows.length === 0) {
     searchView.rows = [];
@@ -2282,7 +2300,6 @@ function chooseSearchRow(row: SearchRowView): void {
   leaveSearchMode(true);
 }
 
-let gradeTimer: number | undefined;
 
 /** Grade the list once it has stopped changing.
  *
@@ -2295,6 +2312,9 @@ let gradeTimer: number | undefined;
 function scheduleGrading(rows: { key: string; lngLat: [number, number] }[]): void {
   window.clearTimeout(gradeTimer);
   gradeTimer = window.setTimeout(() => {
+    // still the list these rows were drawn in, and still a list of destinations
+    const here = new Set(searchView.rows.map((r) => r.key));
+    if (searchView.target !== "end" || !rows.every((r) => here.has(r.key))) return;
     void gradeSearchResults(rows);
   }, 400);
 }
@@ -2746,15 +2766,7 @@ map.on("load", () => {
         .setLngLat(e.lngLat)
         .setDOMContent(
           cardElement(
-            h(ConstructionCard, {
-              name: textOf(p["name"]),
-              kind: textOf(p["kind"]),
-              address: textOf(p["address"]),
-              detail: textOf(p["detail"]),
-              src: textOf(p["src"]),
-              start: textOf(p["start"]),
-              end: textOf(p["end"]),
-            }),
+            h(ConstructionCard, constructionProps(p)),
           ),
         )
         .addTo(map);
@@ -2984,18 +2996,7 @@ map.on("load", () => {
     });
   };
   const constructionCard = (p: Record<string, unknown>): ComponentChild =>
-    h(ConstructionCard, {
-      name: textOf(p["name"]),
-      kind: textOf(p["kind"]),
-      address: textOf(p["address"]),
-      detail: textOf(p["detail"]),
-      src: textOf(p["src"]),
-      start: textOf(p["start"]),
-      end: textOf(p["end"]),
-    });
-  /** A hazard report's photo, read from the device once per report. Read on
-   * every mousemove before, each time into a new object URL never let go. */
-  const hazardPhotos = new Map<string, string | null>();
+    h(ConstructionCard, constructionProps(p));
   const hazardPhotoId = (p: Record<string, unknown>): string | null =>
     (p["hasPhoto"] === true || p["hasPhoto"] === "true") && textOf(String(p["id"] ?? "")) !== ""
       ? String(p["id"])
@@ -3010,7 +3011,7 @@ map.on("load", () => {
         label: cat !== null ? HAZARD_LABELS[cat] : "hazard",
         note: textOf(p["note"]),
         when: typeof p["t"] === "number" ? new Date(p["t"]).toLocaleDateString() : null,
-        photo: id !== null ? (hazardPhotos.get(id) ?? null) : null,
+        photo: id !== null ? hazardPhotos.get(id) : null,
       });
     },
     "construction-pts": constructionCard,
@@ -3022,7 +3023,7 @@ map.on("load", () => {
       const f = e.features?.[0];
       if (!f) return;
       const props = f.properties as Record<string, unknown>;
-      const el = cardElement(card(props));
+      const content = cardElement(card(props));
       hoverPopup?.remove();
       hoverPopup = new maplibregl.Popup({
         closeButton: false,
@@ -3030,16 +3031,13 @@ map.on("load", () => {
         offset: 10,
       })
         .setLngLat(e.lngLat)
-        .setDOMContent(el)
+        .setDOMContent(content)
         .addTo(map);
       // hazard photos live in IndexedDB: read once, then drawn from memory
       const photoId = layer === "hazardpts" ? hazardPhotoId(props) : null;
-      if (photoId !== null && !hazardPhotos.has(photoId)) {
-        hazardPhotos.set(photoId, null);
-        void getHazardPhoto(photoId).then((blob) => {
-          if (!blob) return;
-          hazardPhotos.set(photoId, URL.createObjectURL(blob));
-          if (el.isConnected) render(card(props), el);
+      if (photoId !== null) {
+        void hazardPhotos.ensure(photoId).then((arrived) => {
+          if (arrived && content.isConnected) render(card(props), content);
         });
       }
     });
@@ -4098,6 +4096,11 @@ function fillAbout(): void {
 // hazard reports (category + note + photo), stored on-device
 // ---------------------------------------------------------------------------
 
+/** The hazard reports' photos as the hover card shows them (src/photourls.ts):
+ * read from the device once per report, tried again if a read failed, and let
+ * go with the report. */
+const hazardPhotos = new PhotoUrls(getHazardPhoto);
+
 async function refreshHazards(): Promise<void> {
   try {
     hazards = await listHazards();
@@ -4105,6 +4108,7 @@ async function refreshHazards(): Promise<void> {
     hazards = [];
   }
   applyAvoidPoints();
+  hazardPhotos.prune(new Set(hazards.filter((h) => h.hasPhoto).map((h) => h.id)));
   const features = hazards.map((h) => ({
     type: "Feature",
     geometry: { type: "Point", coordinates: [h.lon, h.lat] },
@@ -4307,9 +4311,10 @@ function shareCard(text: string, image: PreparedImage, filename: string, btn: HT
     copy: (t) => navigator.clipboard.writeText(t),
     // in the app a save can fail, and shareImage says so
     download: (b, f) => saveBlob(b, f),
-    tell: (message) => {
+    tell: (message, ok) => {
       const prev = btn.textContent;
-      btn.textContent = `✓ ${message}`;
+      // a tick over "Picture not saved" said two opposite things at once
+      btn.textContent = `${ok ? "✓" : "⚠"} ${message}`;
       window.setTimeout(() => {
         btn.textContent = prev;
       }, 2500);

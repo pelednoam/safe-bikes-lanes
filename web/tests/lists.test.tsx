@@ -79,6 +79,10 @@ describe("the ride totals", () => {
       /^3 rides · \S+ \w+ total · 1\.2 h moving · longest \S+ \w+ · this month \S+ \w+ · avg 64% protected$/,
     );
     expect(html).toContain("<b>3</b> rides");
+    // and one is not "1 rides"
+    const one = renderToString(<RideTotalsLine totals={{ ...totals, count: 1 }} />);
+    expect(one).toContain("<b>1</b> ride ·");
+    expect(one).not.toContain("rides");
     expect(html).toContain("<b>64%</b> protected");
   });
 });

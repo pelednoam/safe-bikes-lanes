@@ -7,6 +7,7 @@ import {
   BlockCard,
   ConstructionCard,
   type ConstructionCardProps,
+  constructionProps,
   CrossingCard,
   ElevationCard,
   HazardCard,
@@ -90,6 +91,14 @@ describe("a construction site", () => {
     expect(html).not.toContain("<img");
     expect(html).not.toContain("<script>");
     expect(html).toContain("&lt;img");
+  });
+});
+
+describe("a permit's properties", () => {
+  it("become the card's fields, each as text a feed may not have sent", () => {
+    expect(
+      constructionProps({ name: " Main ", kind: null, address: 7, detail: "  ", src: "massdot_wzdx", start: "a", end: "b" }),
+    ).toEqual({ name: "Main", kind: "", address: "", detail: "", src: "massdot_wzdx", start: "a", end: "b" });
   });
 });
 

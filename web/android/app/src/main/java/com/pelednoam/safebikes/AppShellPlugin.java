@@ -7,6 +7,7 @@ import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.database.Cursor;
 import android.location.LocationManager;
 import android.net.Uri;
 import android.os.Build;
@@ -229,13 +230,15 @@ public class AppShellPlugin extends Plugin {
         String name = call.getString("name");
         String mime = call.getString("mime", "application/octet-stream");
         String data = call.getString("data");
-        if (name == null || !name.matches("[A-Za-z0-9._-]{1,120}") || data == null) {
+        if (!SaveNames.isPlain(name) || data == null) {
             call.reject("nothing to save, or not a plain file name");
             return;
         }
         try {
             byte[] bytes = Base64.decode(data, Base64.DEFAULT);
             String where;
+            // the name it ends up with: Downloads renames a repeat ("x (1).gpx")
+            String savedName = name;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 ContentResolver resolver = getContext().getContentResolver();
                 ContentValues values = new ContentValues();
@@ -271,6 +274,18 @@ public class AppShellPlugin extends Plugin {
                     }
                     throw e;
                 }
+                // Ask what it was called, rather than tell what it was asked to be.
+                // Outside the try above, which deletes the file on any failure: the
+                // file is saved by now, and failing to read its name back is no
+                // reason to remove it.
+                try (Cursor named = resolver.query(
+                        uri, new String[] {MediaStore.MediaColumns.DISPLAY_NAME}, null, null, null)) {
+                    if (named != null && named.moveToFirst() && named.getString(0) != null) {
+                        savedName = named.getString(0);
+                    }
+                } catch (RuntimeException unreadable) {
+                    // keep the name it was asked for
+                }
                 where = "Downloads";
             } else {
                 // Before Android 10 public Downloads needs a storage permission the
@@ -280,14 +295,16 @@ public class AppShellPlugin extends Plugin {
                 if (dir == null) {
                     throw new IOException("no Downloads folder on this phone");
                 }
-                try (FileOutputStream out = new FileOutputStream(new File(dir, name))) {
+                File target = SaveNames.uniqueIn(dir, name);
+                try (FileOutputStream out = new FileOutputStream(target)) {
                     out.write(bytes);
                 }
+                savedName = target.getName();
                 where = "the app's own folder (Android/data/" + getContext().getPackageName()
                         + "/files/" + Environment.DIRECTORY_DOWNLOADS + ")";
             }
             JSObject result = new JSObject();
-            result.put("name", name);
+            result.put("name", savedName);
             result.put("where", where);
             call.resolve(result);
         } catch (IOException | RuntimeException e) {

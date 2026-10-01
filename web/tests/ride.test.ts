@@ -736,6 +736,54 @@ describe("a round trip", () => {
     expect(r.engine.loopDoneM).toBeLessThan(done + 100);
   });
 
+  it("doesn't count a poor fix, landing on the far side after a gap, as ridden", () => {
+    // After a gap the next fix is the one that would have earned the ground
+    // covered unseen, and a poor one (a tower's guess of the position) says
+    // nothing: it was read as a rider turning up on the far side of the loop.
+    const r = new Ride(route(LOOP));
+    r.engine.setRoute(r.payload, { legM: 0, resumeM: 0 });
+    r.ride({ untilM: 300 });
+    const done = r.engine.loopDoneM;
+    r.now += 90_000;
+    const far = pointAlong(pathOf(r.payload), 1100).at;
+    r.fix({ lon: far[0], lat: far[1], accuracy: 60, speed: 4, heading: 270 });
+    expect(r.engine.loopDoneM).toBeLessThan(done + 100);
+    // and the good fixes that follow, back where the rider is, don't have it
+    // counted either
+    r.ride({ fromM: 305, untilM: 330 });
+    expect(r.engine.loopDoneM).toBeLessThan(done + 150);
+  });
+
+  it("gives a gap that began off the loop no allowance for the ground it covered", () => {
+    // a wrong turn, then the phone loses its signal: the rider was not on the
+    // loop when the gap began, so the straight line across it isn't ground
+    // ridden round the loop, and a snap onto the far side afterwards earns none
+    const r = new Ride(route(LOOP));
+    r.engine.setRoute(r.payload, { legM: 0, resumeM: 0 });
+    r.onReroute = () => null;
+    r.ride({ untilM: 300 });
+    const done = r.engine.loopDoneM;
+    const start = pointAlong(pathOf(r.payload), 300).at;
+    for (let i = 0; i < 8; i++) r.fix({ ...offsetFix(start, 180, 70 + i), speed: 4 });
+    r.now += 90_000;
+    // 600 m round the loop from the rider's furthest point, and inside the
+    // jump the engine would dismiss as the phone re-finding itself
+    const far = pointAlong(pathOf(r.payload), 900).at;
+    const step = r.fix({ lon: far[0], lat: far[1], accuracy: 8, speed: 5, heading: 0 });
+    expect(step?.alongM ?? 0).toBeGreaterThan(850);
+    expect(r.engine.loopDoneM).toBeLessThan(done + 100);
+  });
+
+  it("still counts a gap that began on the loop, which is what the allowance is for", () => {
+    const r = new Ride(route(LOOP));
+    r.engine.setRoute(r.payload, { legM: 0, resumeM: 0 });
+    r.ride({ untilM: 300 });
+    r.now += 90_000;
+    const far = pointAlong(pathOf(r.payload), 700).at;
+    r.fix({ lon: far[0], lat: far[1], accuracy: 8, speed: 5, heading: 0 });
+    expect(r.engine.loopDoneM).toBeGreaterThan(650);
+  });
+
   it("rides on after a gap round a corner of the loop", () => {
     // the straight line across a gap is shorter than the way round: here
     // 450 m of it for 1200 m round, which the winding allowance covers

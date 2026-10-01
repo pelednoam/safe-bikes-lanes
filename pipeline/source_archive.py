@@ -78,16 +78,18 @@ def _release(get_json: Callable[[str], Any]) -> Any:
         raise
 
 
-def list_copies(get_json: Callable[[str], Any] = _get_json) -> list[Copy]:
-    """Every archived copy, or none if the archive doesn't exist yet.
+def archive(get_json: Callable[[str], Any] = _get_json) -> list[Copy] | None:
+    """Every archived copy, or None if the archive release doesn't exist yet.
 
-    Only a missing release is "none". Any other failure to ask (a rate limit, the
+    Only a missing release is None. Any other failure to ask (a rate limit, the
     network) is raised: read as "no archive", it made upload() create a release
-    that already exists, which fails, and failed the refresh's archive step."""
+    that already exists, which fails, and failed the refresh's archive step.
+    One call answers both "is there an archive" and "what is in it", so upload()
+    asks GitHub for the release once, not twice."""
     try:
         release = _release(get_json)
     except NoArchive:
-        return []
+        return None
     copies: list[Copy] = []
     page = 1
     while True:
@@ -109,6 +111,11 @@ def list_copies(get_json: Callable[[str], Any] = _get_json) -> list[Copy]:
         if len(assets) < 100:
             return copies
         page += 1
+
+
+def list_copies(get_json: Callable[[str], Any] = _get_json) -> list[Copy]:
+    """Every archived copy, or none if the archive doesn't exist yet."""
+    return archive(get_json) or []
 
 
 def newest(copies: list[Copy], name: str) -> Copy | None:
@@ -168,15 +175,11 @@ def _gh(*args: str) -> None:
     subprocess.run(["gh", *args], check=True)
 
 
-def upload(raw_dir: Path) -> None:
+def upload(raw_dir: Path, get_json: Callable[[str], Any] = _get_json) -> None:
     """Archive what this refresh fetched, then keep only the newest KEEP of each."""
-    try:
-        _release(_get_json)
-        exists = True
-    except NoArchive:
-        exists = False
-    have = {(c.name, c.retrieved) for c in list_copies()} if exists else set()
-    if not exists:
+    existing = archive(get_json)
+    have = {(c.name, c.retrieved) for c in existing} if existing is not None else set()
+    if existing is None:
         _gh(
             "release", "create", TAG, "--repo", REPO, "--latest=false", "--prerelease",
             "--title", "Source archive",
@@ -191,7 +194,7 @@ def upload(raw_dir: Path) -> None:
             gz.write_bytes(gzip.compress(data.read_bytes(), compresslevel=9))
             _gh("release", "upload", TAG, str(gz), "--repo", REPO, "--clobber")
             print(f"  archived {gz.name} ({gz.stat().st_size / 1e6:.1f} MB)")
-    for old in to_prune(list_copies()):
+    for old in to_prune(list_copies(get_json)):
         _gh("api", "-X", "DELETE", f"repos/{REPO}/releases/assets/{old.asset_id}")
         print(f"  pruned {old.name} of {old.retrieved}")
 

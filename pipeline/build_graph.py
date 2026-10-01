@@ -1029,23 +1029,26 @@ def build() -> None:
         matches = overlay_match(edges, lts, radius=15)
         ex_lts = lts.explode(index_parts=False)["lts"].tolist()
         escalated = 0
-        rc = edges.columns.get_loc("road_cls")
-        rb = edges.columns.get_loc("road_busy")
+        # positions of the columns written below, looked up once each
+        cls_col = edges.columns.get_loc("cls")
+        lts_col = edges.columns.get_loc("lts")
+        road_cls_col = edges.columns.get_loc("road_cls")
+        road_busy_col = edges.columns.get_loc("road_busy")
         for i, pos in enumerate(matches):
             if pos is None:
                 continue
             score = int(ex_lts[pos])
-            edges.iat[i, edges.columns.get_loc("lts")] = score
+            edges.iat[i, lts_col] = score
             if score >= 3:
-                cur = edges.iat[i, edges.columns.get_loc("cls")]
+                cur = edges.iat[i, cls_col]
                 new = LTS_ESCALATION.get(cur)
                 if new:
-                    edges.iat[i, edges.columns.get_loc("cls")] = new
+                    edges.iat[i, cls_col] = new
                     escalated += 1
                 # and the street under any paint: a painted lane on a street
                 # MassDOT rates LTS 3 must not be priced as a quiet street
-                edges.iat[i, rc], edges.iat[i, rb] = escalate_road(
-                    edges.iat[i, rc], bool(edges.iat[i, rb])
+                edges.iat[i, road_cls_col], edges.iat[i, road_busy_col] = escalate_road(
+                    edges.iat[i, road_cls_col], bool(edges.iat[i, road_busy_col])
                 )
         print(f"  escalated {escalated} edges via LTS>=3")
 
@@ -1055,15 +1058,20 @@ def build() -> None:
         print(f"applying {len(ov)} manual overrides ...")
         matches = overlay_match(edges, ov, radius=config.FACILITY_JOIN_RADIUS_M)
         exploded = ov.explode(index_parts=False).reset_index(drop=True)
-        cc = edges.columns.get_loc("cls")
-        rc = edges.columns.get_loc("road_cls")
-        rb = edges.columns.get_loc("road_busy")
+        cls_col = edges.columns.get_loc("cls")
+        road_cls_col = edges.columns.get_loc("road_cls")
+        road_busy_col = edges.columns.get_loc("road_busy")
+        source_col = edges.columns.get_loc("source")
         for i, pos in enumerate(matches):
             if pos is not None:
-                edges.iat[i, cc], edges.iat[i, rc], edges.iat[i, rb] = apply_override(
-                    exploded.iloc[pos]["cls"], edges.iat[i, rc], bool(edges.iat[i, rb])
+                edges.iat[i, cls_col], edges.iat[i, road_cls_col], edges.iat[i, road_busy_col] = (
+                    apply_override(
+                        exploded.iloc[pos]["cls"],
+                        edges.iat[i, road_cls_col],
+                        bool(edges.iat[i, road_busy_col]),
+                    )
                 )
-                edges.iat[i, edges.columns.get_loc("source")] = "override"
+                edges.iat[i, source_col] = "override"
 
     # crash density
     crash_frames: list[gpd.GeoDataFrame] = []
@@ -1090,9 +1098,9 @@ def build() -> None:
             crashes.geometry, predicate="dwithin", distance=config.CRASH_JOIN_RADIUS_M
         )
         counts = Counter(edge_pos)
-        cc = edges.columns.get_loc("crash_count")
+        crash_col = edges.columns.get_loc("crash_count")
         for pos, n in counts.items():
-            edges.iat[pos, cc] = n
+            edges.iat[pos, crash_col] = n
         by_edge: dict[int, list[int]] = {}
         for cid, pos in zip(_crash_idx.tolist(), edge_pos.tolist(), strict=True):
             by_edge.setdefault(pos, []).append(cid)

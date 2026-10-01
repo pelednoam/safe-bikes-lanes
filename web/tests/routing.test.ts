@@ -266,6 +266,46 @@ describe.skipIf(skipRouting)("routing in the worker, on the pinned data", () => 
     expect(served.filter((l) => l.name !== "tiles/manifest.json").every((l) => l.from === null)).toBe(true);
   });
 
+  it("moves every request that was waiting on the site's tiles to the bundle, not only the first", async () => {
+    // Grading the search results and planning the route ask for the same tiles
+    // at once; offline, both fail together. The first to notice switched to the
+    // bundle and set the flag, and the second, finding it set, took it to mean
+    // that the bundle itself had failed, and gave up: the very case the
+    // fallback is for, failing for whoever came second.
+    const served: { name: string; from: string | null }[] = [];
+    const offlineSite = async (src: DataSource, name: string): Promise<unknown> => {
+      if (src.remoteId !== null && name.startsWith("tiles/") && name !== "tiles/manifest.json") {
+        await new Promise((r) => setTimeout(r, 5));
+        throw new SiteTileMissing(name);
+      }
+      served.push({ name, from: src.remoteId });
+      return load(src, name);
+    };
+    const phone = channel(createRoutingApi(offlineSite));
+    await phone.configure({ remoteId: "2026-09-27", bundled: `${DATA}/` }, "imperial");
+    await phone.loadManifest();
+    const both = await Promise.all([
+      phone.ensure([DAVIS, KENDALL], 1),
+      phone.ensure([DAVIS, KENDALL], 1),
+      phone.ensure([DAVIS, [-71.2, 42.42]], 1),
+    ]);
+    expect(both.map((r) => r.ready)).toEqual([true, true, true]);
+    expect((await phone.plan(DAVIS, KENDALL, prefs)).length).toBeGreaterThan(0);
+  });
+
+  it("still fails, when the bundle itself can't give a tile, rather than looping", async () => {
+    const broken = async (src: DataSource, name: string): Promise<unknown> => {
+      if (name.startsWith("tiles/") && name !== "tiles/manifest.json") {
+        throw src.remoteId !== null ? new SiteTileMissing(name) : new Error(`bundle lost ${name}`);
+      }
+      return load(src, name);
+    };
+    const phone = channel(createRoutingApi(broken));
+    await phone.configure({ remoteId: "2026-09-27", bundled: `${DATA}/` }, "imperial");
+    await phone.loadManifest();
+    await expect(phone.ensure([DAVIS, KENDALL], 1)).rejects.toThrow(/bundle lost/);
+  });
+
   it("falls back to the bundle when the site's tile manifest itself can't be had", async () => {
     const noManifest = async (src: DataSource, name: string): Promise<unknown> => {
       if (src.remoteId !== null && name.startsWith("tiles/")) throw new SiteTileMissing(name);

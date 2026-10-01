@@ -218,6 +218,9 @@ export class RideEngine {
   /** Ground covered unseen, in gaps between fixes, since the last fix on the
    * loop: each gap's straight line, capped at a bicycle's speed. */
   private unseenM = 0;
+  /** Whether the last good fix was on the route. A gap that began off it covered
+   * ground nobody can say was round the loop. */
+  private lastGoodOnRoute = true;
 
   /** Good fixes on the route in a row, for believing the rider is back on it. */
   private onRouteFixes = 0;
@@ -244,6 +247,7 @@ export class RideEngine {
     this.alertUntilM = 0;
     this.loopDoneM = 0;
     this.unseenM = 0;
+    this.lastGoodOnRoute = true;
     this.rejoinAt = null;
     this.awaitingReroute = false;
     this.onRouteFixes = 0;
@@ -375,7 +379,12 @@ export class RideEngine {
     // wrong turn is fixes a second apart, all off the loop, and earns nothing.
     const stepM = prev === null ? 0 : distM(prev, here);
     const stepS = prev !== null && prevAt > 0 ? Math.max(0, (now - prevAt) / 1000) : 0;
-    if (stepS > LOOP_GAP_S) this.unseenM += Math.min(stepM, LOOP_FASTEST_MPS * stepS);
+    // ...and only when the rider was on the loop as the gap began: one that began
+    // off it (a wrong turn, then the signal went) covered ground that can't be
+    // called round the loop, however it ends.
+    if (stepS > LOOP_GAP_S && this.lastGoodOnRoute) {
+      this.unseenM += Math.min(stepM, LOOP_FASTEST_MPS * stepS);
+    }
     // travel direction: GPS heading when moving, else derived from movement
     const gpsHeading = fix.heading;
     const moving = (fix.speed ?? 0) > 0.7;
@@ -387,6 +396,12 @@ export class RideEngine {
     if (!this.prevPos || distM(this.prevPos, here) > 3) this.prevPos = here;
 
     const snap = snapToTrack(track, fix.lon, fix.lat, this.hint);
+    if (fix.accuracy <= MAX_GPS_ACCURACY_M) {
+      this.lastGoodOnRoute = snap.offM <= OFF_ROUTE_M;
+      // the ground a gap covered is for the first good fix after it to spend; if
+      // that fix is off the loop, it was never round it
+      if (!this.lastGoodOnRoute) this.unseenM = 0;
+    }
     const step: RideStep = {
       // Draw the dot ON the route while we're plausibly on it — raw bike GPS
       // wanders 5-15 m, which visibly drifts the dot into buildings and across
@@ -473,7 +488,10 @@ export class RideEngine {
     // loop a kilometre ahead of the rider. What is lost the other way (a gap
     // on a loop that winds more than LOOP_WINDING reckons) is progress left
     // behind, which a later way back only rides again.
-    if (this.loopLeg !== null && snap.alongM >= this.loopLeg.legM) {
+    // Only by a good fix: a poor one is a position the phone isn't sure of, and
+    // is no evidence that the rider got there, least of all across a gap, where
+    // it would be the fix to earn the ground covered unseen.
+    if (good && this.loopLeg !== null && snap.alongM >= this.loopLeg.legM) {
       const round = this.loopLeg.resumeM + snap.alongM - this.loopLeg.legM;
       const reach = LOOP_PROGRESS_MAX_STEP_M + LOOP_WINDING * this.unseenM;
       const rejoining =

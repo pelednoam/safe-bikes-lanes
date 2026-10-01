@@ -230,8 +230,9 @@ export function routeTiles(line: [number, number][], zooms: number[]): TileXYZ[]
   };
   for (const z of zooms) {
     const spread = z === deepest ? 1 : 0;
-    // well under a tile's width at this zoom (about 2.4 km at z14 here), so
-    // no tile the line crosses is stepped over
+    // a quarter of a tile's width at this zoom, which at this latitude is about
+    // 1.8 km at z14 (2.4 km is the width at the equator, which the cosine takes
+    // down), so no tile the line crosses is stepped over
     const stepM = (40_075_000 / 2 ** z) * Math.cos((42.4 * Math.PI) / 180) / 4;
     const visit = (p: [number, number]): void => {
       const [x, y] = tileXY(p[0], p[1], z);

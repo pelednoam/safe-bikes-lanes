@@ -174,6 +174,29 @@ test("tapping install actually requests the APK", async ({ page }) => {
   expect(said, "claimed the download succeeded without knowing").not.toMatch(/^downloading/i);
 });
 
+/** The index of the "}" closing the block whose "{" is at `open`. */
+function blockEnd(src: string, open: number): number {
+  let depth = 0;
+  for (let i = open; i < src.length; i++) {
+    if (src[i] === "{") depth++;
+    else if (src[i] === "}" && --depth === 0) return i;
+  }
+  return src.length;
+}
+
+/** The index of the "{" of the innermost block `at` is inside. */
+function enclosingBrace(src: string, at: number): number {
+  let depth = 0;
+  for (let i = at - 1; i >= 0; i--) {
+    if (src[i] === "}") depth++;
+    else if (src[i] === "{") {
+      if (depth === 0) return i;
+      depth--;
+    }
+  }
+  return -1;
+}
+
 test("the Android side asks for a real download, not for something to open the link", async () => {
   // Not runnable in a browser: this is the Java that decides what tapping
   // "install" does, and it is where the bug was. The WebView's DownloadListener
@@ -218,18 +241,42 @@ test("the Android side asks for a real download, not for something to open the l
   expect(java).toContain('name.endsWith(".apk")');
   expect(java, "a link nothing can open still crashes the app").toContain("catch (ActivityNotFoundException");
   expect(plugin).toContain("public void saveFile(PluginCall call)");
+  // a name that is a folder ("." / ".."), and a second file under a name already
+  // taken, are the helper's to handle (tests/savenames.test.ts runs it); the
+  // plugin has to use it, and to report the name the file ended up with
+  expect(plugin).toContain("SaveNames.isPlain(name)");
+  expect(plugin).toContain("SaveNames.uniqueIn(dir, name)");
+  expect(plugin).toContain('result.put("name", savedName)');
   expect(plugin, "saved files must land where the rider looks").toContain("MediaStore.Downloads");
-  // ACTION_VIEW survives only as the fallback, inside a catch
-  // (indexOf is -1 for a missing piece, which compared as "before" anything:
-  // with no catch at all, an ACTION_VIEW on the main path passed)
-  const listener = java.indexOf("setDownloadListener");
-  expect(listener, "MainActivity sets no download listener").toBeGreaterThan(-1);
-  const listenerBody = java.slice(listener);
-  const firstCatch = listenerBody.indexOf("catch (");
-  expect(firstCatch, "the download listener has no fallback at all").toBeGreaterThan(-1);
-  const firstView = listenerBody.indexOf("ACTION_VIEW");
-  if (firstView !== -1) {
-    expect(firstView, "ACTION_VIEW is back on the main path").toBeGreaterThan(firstCatch);
+  // ACTION_VIEW survives only as the fallback, inside a catch. It used to be
+  // checked by looking for it after the first "catch (" in the listener, and
+  // once it moved into the openElsewhere helper that looked at nothing: a call to
+  // the helper on the main path passed. So, as written now: ACTION_VIEW is in
+  // that one helper and nowhere else, and every call to the helper is inside a
+  // catch.
+  expect(java.indexOf("setDownloadListener"), "MainActivity sets no download listener").toBeGreaterThan(-1);
+  // the code alone, comments blanked out in place so every index still means
+  // the same thing: the comments talk about ACTION_VIEW and openElsewhere too
+  const code = java
+    .replace(/\/\*[\s\S]*?\*\//g, (m) => " ".repeat(m.length))
+    .replace(/\/\/.*$/gm, (m) => " ".repeat(m.length));
+  const helper = code.indexOf("private void openElsewhere(");
+  expect(helper, "no openElsewhere helper").toBeGreaterThan(-1);
+  const helperEnd = blockEnd(code, code.indexOf("{", helper));
+  const views = [...code.matchAll(/ACTION_VIEW/g)].map((m) => m.index ?? -1);
+  expect(views.length).toBeGreaterThan(0);
+  for (const at of views) {
+    expect(at > helper && at < helperEnd, "ACTION_VIEW outside the openElsewhere helper").toBe(true);
+  }
+  const calls = [...code.matchAll(/openElsewhere\(/g)]
+    .map((m) => m.index ?? -1)
+    .filter((i) => i !== helper + "private void ".length);
+  expect(calls.length, "nothing falls back to opening the link elsewhere").toBeGreaterThan(0);
+  for (const at of calls) {
+    const open = enclosingBrace(code, at);
+    expect(code.slice(Math.max(0, open - 60), open), `openElsewhere at ${at} is not in a catch`).toMatch(
+      /catch\s*\([^)]*\)\s*$/,
+    );
   }
 });
 
