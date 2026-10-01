@@ -23,27 +23,85 @@ const CACHE = "family-bike-router-" + /* BUILD_ID */ "dev";
 const DATA_CACHE = "family-bike-data-" + /* DATA_ID */ "dev";
 const DATA_PREFIX = "family-bike-data-";
 
-/** Whether a URL is the site's data, and so belongs in the data cache. */
-function isData(url) {
-  return url.pathname.includes("/data/");
+/** Whether a path is the site's data, and so belongs in the data cache: for a
+ * request's pathname ("/safe-bikes-lanes/data/tiles/1_1.json") and for the
+ * precache list's own entries ("data/meta.json") alike, from one rule. */
+function isDataPath(path) {
+  return path.startsWith("data/") || path.includes("/data/");
 }
 
 /** The cache a same-origin response is kept in. */
 function cacheNameFor(url) {
-  return isData(url) ? DATA_CACHE : CACHE;
+  return isDataPath(url.pathname) ? DATA_CACHE : CACHE;
 }
 
-/** What is cached for a request, current build first. `caches.match` alone
- * searches every cache oldest first, so with the last build's shell still
- * kept (below) an unhashed name like index.html would answer with the OLD one
- * whenever the network was slow: the page a rider had, not the one just
- * deployed. The older caches are only for what the current ones lack: the
- * hashed bundles of a page still running the build before. */
-async function fromCaches(request) {
-  for (const name of [CACHE, DATA_CACHE]) {
-    const hit = await (await caches.open(name)).match(request);
-    if (hit !== undefined) return hit;
+// Which builds were live, newest first, for the shell caches and for the data
+// caches. caches.keys() is in creation order, which isn't the order they were
+// used in: deploy A, then B, then A again (a rollback) leaves A's cache first,
+// and "the newest of the others" would then be B and A would be deleted while
+// pages still run it. Kept in a cache of its own (neither prefix, so nothing
+// below deletes it) as one small response per kind.
+const ORDER_CACHE = "bike-cache-order";
+const orderKey = (kind) => new URL(`__order-${kind}`, self.location).href;
+
+async function readOrder(kind) {
+  try {
+    const hit = await (await caches.open(ORDER_CACHE)).match(orderKey(kind));
+    const names = hit === undefined ? [] : await hit.json();
+    return Array.isArray(names) ? names.filter((n) => typeof n === "string") : [];
+  } catch {
+    return [];
   }
+}
+
+async function writeOrder(kind, names) {
+  const cache = await caches.open(ORDER_CACHE);
+  await cache.put(orderKey(kind), new Response(JSON.stringify(names.slice(0, 8))));
+}
+
+/** The cache used before `current`, if there is one: the one activated last
+ * before it, or, for any the order doesn't know (the first run after it was
+ * added), the newest created. */
+function previousOf(keys, prefix, current, order) {
+  const others = keys.filter((k) => k.startsWith(prefix) && k !== current);
+  const known = order.filter((n) => others.includes(n));
+  const unknown = others.filter((n) => !order.includes(n)).reverse();
+  return [...known, ...unknown][0];
+}
+
+/** Pages open when this worker took over: they are running the build before
+ * it, so their data is that build's too (see fromCaches). In memory, so a
+ * restarted worker has forgotten them, which falls back to the new data. */
+let openAtUpdate = new Set();
+
+/** What is cached for a request, current build first.
+ *
+ * The site's data comes from the data caches only. The old shell caches may
+ * still hold data from before it had a cache of its own, and `caches.match`
+ * would find it there, beside a manifest it doesn't belong to. A page that was
+ * already open when the worker took over is on the build before, with that
+ * build's manifest in hand, and gets that build's data first, from the cache
+ * kept for it; the new data would join its manifest no better.
+ *
+ * Everything else: the current shell, then any other cache. Asking
+ * `caches.match` alone searches oldest first, so with the last build's shell
+ * still kept an unhashed name like index.html would answer with the OLD one
+ * whenever the network was slow. The older caches are for what the current one
+ * lacks: the hashed bundles of a page still running the build before. */
+async function fromCaches(request, clientId) {
+  const url = new URL(request.url);
+  if (isDataPath(url.pathname)) {
+    if (clientId && openAtUpdate.has(clientId)) {
+      const previous = previousOf(await caches.keys(), DATA_PREFIX, DATA_CACHE, await readOrder("data"));
+      if (previous !== undefined) {
+        const hit = await (await caches.open(previous)).match(request);
+        if (hit !== undefined) return hit;
+      }
+    }
+    return (await caches.open(DATA_CACHE)).match(request);
+  }
+  const mine = await (await caches.open(CACHE)).match(request);
+  if (mine !== undefined) return mine;
   return caches.match(request);
 }
 // Precache the shell + the tile manifests + eager POIs. The routing graph
@@ -94,10 +152,20 @@ self.addEventListener("install", (event) => {
   self.skipWaiting();
   event.waitUntil(
     (async () => {
+      const existed = (await caches.keys()).includes(CACHE);
       const shell = await caches.open(CACHE);
       const data = await caches.open(DATA_CACHE);
-      await shell.addAll(ASSETS.filter((a) => !a.startsWith("data/")));
-      await data.addAll(ASSETS.filter((a) => a.startsWith("data/")));
+      try {
+        await shell.addAll(ASSETS.filter((a) => !isDataPath(a)));
+        await data.addAll(ASSETS.filter((a) => isDataPath(a)));
+      } catch (err) {
+        // A shell that didn't finish installing is not a build: left, it would be
+        // the newest of the others at the next update, and kept in place of the
+        // one a page is running. (The data cache isn't deleted: it may be last
+        // week's, which is what the rider has been browsing.)
+        if (!existed) await caches.delete(CACHE);
+        throw err;
+      }
     })(),
   );
 });
@@ -110,30 +178,36 @@ const SHELL_PREFIX = "family-bike-router-";
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
-    caches
-      .keys()
+    (async () => {
       // Only older shells, and older data. This used to delete everything that
-      // was not the current shell, so every deploy silently threw away the
-      // offline maps riders had downloaded — found on the road, with no signal.
-      .then((keys) => {
-        // The last build's shell stays too (caches.keys() is in creation order,
-        // so it is the newest of the others): a page open since before the
-        // update, a rider mid-ride, is still running that build's code, and
-        // loads the bundles it imports, lazily, from there. Without it the page
-        // lost its own files the moment the new worker took over. Two builds
-        // back and older are gone, which is what stops a phone collecting every
-        // deploy.
-        const shells = keys.filter((k) => k.startsWith(SHELL_PREFIX) && k !== CACHE);
-        const previous = shells[shells.length - 1];
-        const stale = [
-          ...shells.filter((k) => k !== previous),
-          // another data build: its tiles don't join this one's
-          ...keys.filter((k) => k.startsWith(DATA_PREFIX) && k !== DATA_CACHE),
-        ];
-        return Promise.all(stale.map((k) => caches.delete(k)));
-      })
+      // was not the current shell, so every deploy silently threw away the offline
+      // maps riders had downloaded: found on the road, with no signal.
+      const keys = await caches.keys();
+      const shellOrder = await readOrder("shell");
+      const dataOrder = await readOrder("data");
+      // The last build's shell stays too: a page open since before the update, a
+      // rider mid-ride, is still running that build's code, and loads the bundles
+      // it imports, lazily, from there. Its data stays for the same page (see
+      // fromCaches). Two builds back and older are gone, which is what stops a
+      // phone collecting every deploy.
+      const keepShell = previousOf(keys, SHELL_PREFIX, CACHE, shellOrder);
+      const keepData = previousOf(keys, DATA_PREFIX, DATA_CACHE, dataOrder);
+      const stale = keys.filter(
+        (k) =>
+          (k.startsWith(SHELL_PREFIX) && k !== CACHE && k !== keepShell) ||
+          (k.startsWith(DATA_PREFIX) && k !== DATA_CACHE && k !== keepData),
+      );
+      await Promise.all(stale.map((k) => caches.delete(k)));
+      await writeOrder("shell", [CACHE, ...shellOrder.filter((n) => n !== CACHE)]);
+      await writeOrder("data", [DATA_CACHE, ...dataOrder.filter((n) => n !== DATA_CACHE)]);
+      // who is running the build before, to be told apart from pages that load
+      // from this one on (windows, and the workers they started)
+      openAtUpdate = new Set(
+        (await self.clients.matchAll({ includeUncontrolled: true, type: "all" })).map((c) => c.id),
+      );
       // take control of open pages so the update reaches them at once
-      .then(() => self.clients.claim()),
+      await self.clients.claim();
+    })(),
   );
 });
 
@@ -228,7 +302,7 @@ function networkFirst(event, req) {
       })
       .catch(() => undefined),
   );
-  const cached = () => fromCaches(event.request);
+  const cached = () => fromCaches(event.request, event.clientId);
   return new Promise((resolve) => {
     let answered = false;
     const answer = (resp) => {
@@ -267,7 +341,7 @@ self.addEventListener("fetch", (event) => {
     const shell = event.request.mode === "navigate" || isShell(url);
     if (shell && event.clientId && staleClients.has(event.clientId)) {
       event.respondWith(
-        fromCaches(event.request).then((hit) => hit ?? networkFirst(event, event.request)),
+        fromCaches(event.request, event.clientId).then((hit) => hit ?? networkFirst(event, event.request)),
       );
       return;
     }
