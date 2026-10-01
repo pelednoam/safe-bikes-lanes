@@ -31,11 +31,11 @@ const json = (o: unknown, status = 200): Response => new Response(JSON.stringify
 const REPO = "pelednoam/safe-bikes-lanes";
 
 describe("the issues", () => {
-  it("finds one by its marker, in this repository only", async () => {
+  it("finds one by its marker, among this repository's labelled issues only", async () => {
     const f = fakeFetch([json({ items: [{ number: 12 }] })]);
     expect(await github(REPO, "tok", f.fetchFn).find("fp-abc")).toBe(12);
     const q = decodeURIComponent(new URL(f.calls[0]?.url ?? "").searchParams.get("q") ?? "");
-    expect(q).toBe(`repo:${REPO} is:issue in:body "fp-abc"`);
+    expect(q).toBe(`repo:${REPO} is:issue label:"${LABEL}" in:body "fp-abc"`);
     expect(f.calls[0]?.auth).toBe("Bearer tok");
   });
 
@@ -44,25 +44,16 @@ describe("the issues", () => {
     expect(await github(REPO, "tok", f.fetchFn).find("fp-abc")).toBeNull();
   });
 
-  it("opens one under its label, and without it if the label can't be made", async () => {
+  it("opens one under its label", async () => {
     const f = fakeFetch([json({ number: 3 }, 201)]);
     expect(await github(REPO, "tok", f.fetchFn).create("t", "b")).toBe(3);
     expect(f.calls[0]).toMatchObject({ method: "POST", body: { title: "t", body: "b", labels: [LABEL] } });
-
-    const g = fakeFetch([json({ message: "Validation Failed" }, 422), json({ number: 4 }, 201)]);
-    expect(await github(REPO, "tok", g.fetchFn).create("t", "b")).toBe(4);
-    expect(g.calls[1]?.body).toEqual({ title: "t", body: "b" });
   });
 
-  it("reopens only a closed one", async () => {
-    const closed = fakeFetch([json({ state: "closed" }), json({ state: "open" })]);
-    await github(REPO, "tok", closed.fetchFn).reopen(9);
-    expect(closed.calls.map((c) => c.method)).toEqual(["GET", "PATCH"]);
-    expect(closed.calls[1]?.body).toEqual({ state: "open" });
-
-    const open = fakeFetch([json({ state: "open" })]);
-    await github(REPO, "tok", open.fetchFn).reopen(9);
-    expect(open.calls.map((c) => c.method)).toEqual(["GET"]);
+  it("doesn't fall back to an issue without the label, which find() could never see again", async () => {
+    const f = fakeFetch([json({ message: "Validation Failed" }, 422)]);
+    await expect(github(REPO, "tok", f.fetchFn).create("t", "b")).rejects.toThrow("GitHub create: 422");
+    expect(f.calls).toHaveLength(1);
   });
 
   it("says what failed, and how", async () => {

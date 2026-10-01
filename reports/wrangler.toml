@@ -21,8 +21,9 @@ DAILY_NEW_CAP = "20"
 binding = "REPORTS"
 id = "KV_ID"
 
-# Per sender: a page reports at most five errors a load (web/src/report.ts),
-# so ten a minute from one address is a loop, or not the app.
+# Per sender. The app sends at most five reports a page load (MAX_PER_LOAD in
+# web/src/report.ts), so ten in a minute from one address is a loop, or not the
+# app. A shared address (an office, a carrier's NAT) is why it isn't lower.
 [[ratelimits]]
 name = "LIMITER"
 namespace_id = "1001"

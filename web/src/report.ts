@@ -46,8 +46,14 @@ function fileOf(url: string): string {
  * (the message Chrome repeats first) are left out. */
 export function framesOf(stack: string | undefined): string[] {
   const frames: string[] = [];
-  for (const line of (stack ?? "").split("\n")) {
-    const m = CHROME_AT.exec(line) ?? GECKO.exec(line.trim());
+  const lines = (stack ?? "").split("\n");
+  // Chrome opens a stack with the error's message, which can itself look like
+  // "something@somewhere:1:2" and pass for a Firefox frame (and so put the
+  // message in the frames). A stack with any "at" line is Chrome's, and only
+  // those lines are frames.
+  const chrome = lines.some((l) => /^\s*at /.test(l));
+  for (const line of lines) {
+    const m = CHROME_AT.exec(line) ?? (chrome ? null : GECKO.exec(line.trim()));
     const bare = m === null ? CHROME_BARE.exec(line) : null;
     const [fn, url, row, col] =
       m !== null ? [m[1], m[2], m[3], m[4]] : bare !== null ? ["", bare[1], bare[2], bare[3]] : [];
@@ -74,16 +80,20 @@ export function browserOf(ua: string): string {
   return "";
 }
 
-function describe(error: unknown): { message: string; stack: string | undefined } {
+/** What is said of an error. An Error says its name and message (the Worker
+ * takes anything locating out of them before they are public). A browser's
+ * message for an uncaught error is a string too. But a promise rejected with a
+ * bare value says nothing of its contents: it could be any object the app had
+ * to hand, a place, a name, a token, and a serialised copy of it would go into a
+ * public issue; the fact of the rejection, and its stack if it has one, is what
+ * can be acted on. */
+function describe(kind: Kind, error: unknown): { message: string; stack: string | undefined } {
   if (error instanceof Error) {
     return { message: `${error.name}: ${error.message}`, stack: error.stack };
   }
-  if (typeof error === "string") return { message: error, stack: undefined };
-  try {
-    return { message: JSON.stringify(error) ?? String(error), stack: undefined };
-  } catch {
-    return { message: String(error), stack: undefined };
-  }
+  if (typeof error === "string" && kind !== "rejection") return { message: error, stack: undefined };
+  const what = error === null ? "null" : Array.isArray(error) ? "an array" : typeof error;
+  return { message: `Rejected with ${what}, not an Error`, stack: undefined };
 }
 
 /** Noise every site gets: not errors in this app's code. */
@@ -108,7 +118,7 @@ export function createReporter(o: ReporterOptions): Reporter {
   return {
     report(kind, error) {
       if (sent.size >= MAX_PER_LOAD) return;
-      const { message, stack } = describe(error);
+      const { message, stack } = describe(kind, error);
       if (message.trim() === "" || isNoise(message) || fromExtension(stack)) return;
       const frames = framesOf(stack);
       const body: ReportBody = {
@@ -161,21 +171,50 @@ function sender(endpoint: string): (body: string) => void {
 // typeof, so that a module importing this outside a build (the unit tests)
 // finds reporting off rather than an undefined name
 const ENDPOINT = typeof __REPORT_URL__ === "string" ? __REPORT_URL__ : "";
+const BUILD =
+  typeof __BUILD_VERSION__ === "string" && typeof __BUILD_COMMIT__ === "string"
+    ? `${__BUILD_VERSION__} ${__BUILD_COMMIT__}`.slice(0, 40)
+    : "dev unknown";
 
 let active: Reporter | null = null;
 
-/** Start reporting for this page. Null, and nothing is sent, in a build
- * without an endpoint and under test automation. */
-export function startReporting(page: string): Reporter | null {
-  if (ENDPOINT === "" || navigator.webdriver) return null;
-  active = createReporter({
-    build: `${__BUILD_VERSION__} ${__BUILD_COMMIT__}`.slice(0, 40),
-    page,
-    platform: isNativeApp() ? "android" : "web",
-    browser: browserOf(navigator.userAgent),
+/** What reporting needs from the page: where to send, whether a test is driving
+ * the browser, and the page it can listen on. Real values by default; a test
+ * says its own. */
+export interface Setup {
+  endpoint: string;
+  /** navigator.webdriver: set by Playwright, Selenium, and other automation. */
+  automated: boolean;
+  target: Pick<Window, "addEventListener">;
+  send(body: string): void;
+  userAgent: string;
+  android: boolean;
+}
+
+function pageSetup(): Setup {
+  return {
+    endpoint: ENDPOINT,
+    automated: navigator.webdriver === true,
+    target: window,
     send: sender(ENDPOINT),
+    userAgent: navigator.userAgent,
+    android: isNativeApp(),
+  };
+}
+
+/** Start reporting for this page. Null, and nothing is sent, in a build
+ * without an endpoint and under test automation, so that no test run files an
+ * issue. */
+export function startReporting(page: string, setup: Setup = pageSetup()): Reporter | null {
+  if (setup.endpoint === "" || setup.automated) return null;
+  active = createReporter({
+    build: BUILD,
+    page,
+    platform: setup.android ? "android" : "web",
+    browser: browserOf(setup.userAgent),
+    send: setup.send,
   });
-  reportUncaught(window, active);
+  reportUncaught(setup.target, active);
   return active;
 }
 

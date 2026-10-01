@@ -80,22 +80,33 @@ jobs:
         env:
           WANTED: ${{ vars.WORKERS_SUBDOMAIN || 'pelednoam' }}
         run: |
+          set -o pipefail
           case "$WANTED" in *[!a-z0-9-]*|"") echo "::error::bad subdomain '$WANTED'"; exit 1;; esac
           api="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain"
           auth="Authorization: Bearer $CLOUDFLARE_API_TOKEN"
-          field='let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const r=JSON.parse(s);process.stdout.write(r.success&&r.result&&r.result.subdomain?r.result.subdomain:"")})'
-          have=$(curl -sS -H "$auth" "$api" | node -e "$field")
-          if [ -z "$have" ]; then
-            resp=$(curl -sS -X PUT -H "$auth" -H "content-type: application/json" \
-              --data "{\"subdomain\":\"$WANTED\"}" "$api")
-            have=$(printf '%s' "$resp" | node -e "$field")
-            [ -n "$have" ] || { echo "::error::couldn't register $WANTED.workers.dev: $resp"; exit 1; }
-            echo "registered $have.workers.dev"
-          fi
+          # have:<name>, missing (Cloudflare's own 10007, "not found"), or error.
+          # Only "missing" registers one: an API that couldn't be reached or
+          # refused the token is not "nothing there yet".
+          state='let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{let r;try{r=JSON.parse(s)}catch{process.stdout.write("error");return}const n=r.success&&r.result&&r.result.subdomain;process.stdout.write(n?"have:"+n:(r.errors||[]).some(e=>e.code===10007)?"missing":"error")})'
+          read_state() { curl -sS --retry 3 --retry-all-errors -H "$auth" "$api" | node -e "$state"; }
+          got=$(read_state) || got=error
+          case "$got" in
+            have:*) have="${got#have:}" ;;
+            missing)
+              resp=$(curl -sS --retry 3 --retry-all-errors -X PUT -H "$auth" -H "content-type: application/json" \
+                --data "{\"subdomain\":\"$WANTED\"}" "$api") || resp=""
+              got=$(printf '%s' "$resp" | node -e "$state") || got=error
+              case "$got" in
+                have:*) have="${got#have:}"; echo "registered $have.workers.dev" ;;
+                *) echo "::error::couldn't register $WANTED.workers.dev: $resp"; exit 1 ;;
+              esac ;;
+            *) echo "::error::couldn't read the account's workers.dev subdomain from Cloudflare"; exit 1 ;;
+          esac
           echo "::notice::The Worker is https://safe-bikes-reports.$have.workers.dev/report"
       - name: The KV namespace, created the first time
         if: steps.ready.outputs.go == 'true'
         run: |
+          set -o pipefail
           find_id() {
             npx wrangler kv namespace list |
               node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const l=JSON.parse(s.slice(s.indexOf("[")));const n=l.find(x=>x.title==="safe-bikes-reports"||x.title.endsWith("-safe-bikes-reports"));process.stdout.write(n?n.id:"")})'

@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { GitHub } from "../src/github.js";
 import { fingerprint, type Report } from "../src/report.js";
-import { type Ctx, type Env, file, handle, type Seen, type Store } from "../src/worker.js";
+import { capOf, type Ctx, type Env, file, handle, readLimited, type Seen, type Store } from "../src/worker.js";
 import { sample } from "./sample.js";
 
 const SITE = "https://pelednoam.github.io";
@@ -47,10 +47,6 @@ function fakeGitHub(existing: number | null = null): GitHub & { calls: string[] 
     },
     comment: (n, body) => {
       calls.push(`comment ${n} ${body}`);
-      return Promise.resolve();
-    },
-    reopen: (n) => {
-      calls.push(`reopen ${n}`);
       return Promise.resolve();
     },
   };
@@ -174,9 +170,9 @@ describe("filing", () => {
     expect((await seen(e, sample())).pending).toBe(2);
 
     await file(sample({ build: "app-v56 1234567" }), e, gh, day2);
+    // a comment, never a reopened issue: a fingerprint is public text
     expect(gh.calls.slice(2)).toEqual([
-      "comment 7 Seen 3 more times since 2026-09-29, most recently on the planner page · web · build app-v56 1234567.",
-      "reopen 7",
+      "comment 7 Seen 3 more times since 2026-09-29, most recently on the `planner` page, `web`, build `app-v56 1234567`.",
     ]);
     expect(await seen(e, sample())).toEqual({ issue: 7, day: "2026-09-30", pending: 0 });
   });
@@ -208,5 +204,61 @@ describe("filing", () => {
     // and starts again the next
     await file(sample({ message: "a third" }), e, gh, day2);
     expect(gh.calls.filter((c) => c.startsWith("create"))).toHaveLength(3);
+  });
+});
+
+describe("the caps", () => {
+  it("fall back to their defaults when the setting is missing or isn't a number", () => {
+    expect(capOf("50", 200)).toBe(50);
+    expect(capOf("0", 200)).toBe(0);
+    for (const bad of [undefined, "", "  ", "many", "-3", "NaN", "Infinity"]) expect(capOf(bad, 200)).toBe(200);
+  });
+
+  it("still limit a day when the setting is broken, instead of limiting nothing", async () => {
+    const e = env({ DAILY_CAP: "lots", DAILY_NEW_CAP: "few" });
+    const gh = fakeGitHub();
+    for (let i = 0; i < 40; i++) await file(sample({ message: `error ${"x".repeat(i)}` }), e, gh, new Date("2026-09-29T12:00:00Z"));
+    // the default of twenty new issues a day
+    expect(gh.calls.filter((c) => c.startsWith("create"))).toHaveLength(20);
+  });
+});
+
+describe("reading a body", () => {
+  const chunked = (parts: string[]): Request =>
+    new Request("https://r.example/report", {
+      method: "POST",
+      body: new ReadableStream({
+        start(c) {
+          for (const p of parts) c.enqueue(new TextEncoder().encode(p));
+          c.close();
+        },
+      }),
+      // @ts-expect-error: Node's fetch wants this for a streamed body
+      duplex: "half",
+    });
+
+  it("returns the text, whole, when it fits", async () => {
+    expect(await readLimited(chunked(["{\"a\":", "1}"]), 100)).toBe('{"a":1}');
+    expect(await readLimited(new Request("https://r.example/", { method: "POST" }), 100)).toBe("");
+  });
+
+  it("gives up at the limit, without a Content-Length to tell it so", async () => {
+    expect(await readLimited(chunked(["x".repeat(60), "x".repeat(60)]), 100)).toBeNull();
+  });
+
+  it("refuses an oversized streamed body at the endpoint", async () => {
+    const big = new Request("https://r.example/report", {
+      method: "POST",
+      headers: { origin: SITE },
+      body: new ReadableStream({
+        start(c) {
+          c.enqueue(new TextEncoder().encode("x".repeat(20_000)));
+          c.close();
+        },
+      }),
+      // @ts-expect-error: Node's fetch wants this for a streamed body
+      duplex: "half",
+    });
+    expect((await handle(big, env(), ctx(), { gh: fakeGitHub() })).status).toBe(413);
   });
 });

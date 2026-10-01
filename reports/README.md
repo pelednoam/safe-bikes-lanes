@@ -5,11 +5,15 @@ files each new problem as a GitHub issue (label `error report`) and counts
 repeats on it in a comment, at most once a day.
 
 - `src/report.ts`: the report format, the checks and the scrubbing. A field
-  outside the format is refused, not dropped. Coordinates, URLs and emails are
-  taken out of the message and the stack before anything is filed.
+  outside the format is refused, not dropped. Before anything is filed, the
+  message and the stack lose every decimal number (a coordinate at any
+  precision), numbers written as pairs or tile addresses, long digit runs,
+  URLs (their query too, spaces and all), emails, street addresses and
+  invisible direction characters. It takes too much out rather than too little.
 - `src/worker.ts`: `POST /report`, from the site and the Android app only
   (`ALLOWED_ORIGINS`), rate-limited per sender, with a daily cap across everyone.
-- `src/github.ts`: the issues.
+- `src/github.ts`: the issues. Repeats are a comment, at most one a day, never a
+  reopened issue: a fingerprint is public text.
 - The app side is `web/src/report.ts`. It is off in a build without
   `REPORT_URL`, and under test automation (`navigator.webdriver`).
 

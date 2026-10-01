@@ -37,3 +37,14 @@ updates:
         update-types: ["version-update:semver-major"]
       - dependency-name: "@capacitor-community/*"
         update-types: ["version-update:semver-major"]
+
+  # The error-report Worker's own package: wrangler, typescript and vitest,
+  # pinned exactly like the web app's, and just as stale without this.
+  - package-ecosystem: npm
+    directory: /reports
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      minor-and-patch:
+        update-types: ["minor", "patch"]

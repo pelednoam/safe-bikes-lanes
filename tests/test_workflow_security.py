@@ -19,7 +19,9 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
 # Every workflow, found rather than listed: a list of three was already two
 # short when basemap.yml (which can write releases) and python.yml were added.
-PINNED = sorted(p.name for p in WORKFLOWS.glob("*.yml"))
+# Both extensions: GitHub runs a workflow saved as .yaml, and a glob for .yml alone
+# would never have looked at it.
+PINNED = sorted(p.name for ext in ("*.yml", "*.yaml") for p in WORKFLOWS.glob(ext))
 
 
 def test_the_workflows_are_found() -> None:
@@ -91,8 +93,17 @@ def test_pages_deploys_from_a_job_that_runs_no_third_party_code() -> None:
 
 def test_dependabot_keeps_the_pins_moving() -> None:
     config = yaml.safe_load((ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8"))
-    ecosystems = {u["package-ecosystem"]: u for u in config["updates"]}
-    assert "github-actions" in ecosystems, "nothing updates the pinned action SHAs"
-    assert ecosystems["npm"]["directory"] == "/web"
-    # the web app's lockfile is where Dependabot has to look
-    assert (ROOT / "web" / "package-lock.json").exists()
+    updates = config["updates"]
+    assert "github-actions" in {u["package-ecosystem"] for u in updates}, (
+        "nothing updates the pinned action SHAs"
+    )
+    # Every npm package in the repository, found rather than listed: the error-report
+    # Worker (reports/) was added with exact pins and nothing to move them.
+    npm_dirs = {u["directory"] for u in updates if u["package-ecosystem"] == "npm"}
+    packages = {f"/{p.parent.relative_to(ROOT).as_posix()}" for p in ROOT.glob("*/package.json")}
+    packages -= {"/node_modules"}
+    assert packages <= npm_dirs, f"no Dependabot entry for {sorted(packages - npm_dirs)}"
+    assert {"/web", "/reports"} <= npm_dirs
+    # and the lockfile is where Dependabot has to look
+    for d in npm_dirs:
+        assert (ROOT / d.lstrip("/") / "package-lock.json").exists(), d

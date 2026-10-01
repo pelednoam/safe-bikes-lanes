@@ -13,6 +13,7 @@ import {
   type ReportBody,
   reportCaught,
   reportUncaught,
+  type Setup,
   startReporting,
 } from "../src/report.js";
 
@@ -49,6 +50,11 @@ describe("the stack", () => {
       "showSummary (app-BrmPk3gH.js:1:24000)",
       "<anonymous> (app-BrmPk3gH.js:3:10)",
     ]);
+  });
+
+  it("doesn't take Chrome's message line for a frame, however it is written", () => {
+    const stack = `Error: failed@https://x.example/a.js:1:2\n    at real (https://localhost/app-X.js:3:4)`;
+    expect(framesOf(stack)).toEqual(["real (app-X.js:3:4)"]);
   });
 
   it("and from Firefox's and Safari's, dropping a query and a hash", () => {
@@ -112,12 +118,26 @@ describe("a report", () => {
     expect(check(body)).toEqual({ ok: true, report: body });
   });
 
-  it("describes a rejection that isn't an Error", () => {
+  it("says only the fact of a rejection with something that isn't an Error, never its contents", () => {
     const { sent, r } = reporter();
-    r.report("rejection", "no tiles");
-    r.report("rejection", { code: 7 });
-    expect(sent.map((b) => b.message)).toEqual(["no tiles", '{"code":7}']);
+    r.report("rejection", "no tiles for Home at 42.38,-71.1");
+    r.report("rejection", { place: "Home", lngLat: [-71.1, 42.38], token: "secret" });
+    r.report("rejection", null);
+    r.report("rejection", [1, 2]);
+    expect(sent.map((b) => b.message)).toEqual([
+      "Rejected with string, not an Error",
+      "Rejected with object, not an Error",
+      "Rejected with null, not an Error",
+      "Rejected with an array, not an Error",
+    ]);
+    expect(JSON.stringify(sent)).not.toMatch(/Home|secret|42\.38/);
     expect(sent.every((b) => check(b).ok)).toBe(true);
+  });
+
+  it("still sends a browser's own message for an error nothing caught", () => {
+    const { sent, r } = reporter();
+    r.report("error", "Uncaught TypeError: x is not a function");
+    expect(sent.map((b) => b.message)).toEqual(["Uncaught TypeError: x is not a function"]);
   });
 
   it("cuts a long message to what the endpoint takes", () => {
@@ -168,12 +188,43 @@ describe("what nobody caught", () => {
   });
 });
 
-describe("reporting is off", () => {
-  it("in a build that names no endpoint, as every test build does", () => {
-    expect(startReporting("planner")).toBeNull();
+describe("when reporting starts", () => {
+  const listeners: string[] = [];
+  const sent: string[] = [];
+  const setup = (over: Partial<Setup> = {}): Setup => ({
+    endpoint: "https://reports.example/report",
+    automated: false,
+    target: { addEventListener: ((type: string) => listeners.push(type)) as Window["addEventListener"] },
+    send: (b) => sent.push(b),
+    userAgent: "Mozilla/5.0 (X11; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0",
+    android: false,
+    ...over,
   });
 
-  it("and then a caught error goes nowhere, and says nothing", () => {
+  it("is not at all under test automation, whatever the endpoint: no test run files an issue", () => {
+    listeners.length = 0;
+    expect(startReporting("planner", setup({ automated: true }))).toBeNull();
+    expect(listeners).toEqual([]);
+  });
+
+  it("is not at all without an endpoint", () => {
+    expect(startReporting("planner", setup({ endpoint: "" }))).toBeNull();
+  });
+
+  it("is on in a real browser with one: it listens, and a report says which page and platform", () => {
+    listeners.length = 0;
+    sent.length = 0;
+    const r = startReporting("build", setup({ android: true }));
+    expect(r).not.toBeNull();
+    expect(listeners).toEqual(["error", "unhandledrejection"]);
+    r?.report("error", new Error("boom"));
+    const body = JSON.parse(sent[0] ?? "{}") as { page: string; platform: string; browser: string };
+    expect(body).toMatchObject({ page: "build", platform: "android", browser: "Firefox 131" });
+  });
+});
+
+describe("reporting is off", () => {
+  it("a caught error goes nowhere, and says nothing, before anything has started", () => {
     expect(() => reportCaught("worker", new Error("the route finder didn't start"))).not.toThrow();
   });
 });
