@@ -245,7 +245,7 @@ test("the Android side asks for a real download, not for something to open the l
   // taken, are the helper's to handle (tests/savenames.test.ts runs it); the
   // plugin has to use it, and to report the name the file ended up with
   expect(plugin).toContain("SaveNames.isPlain(name)");
-  expect(plugin).toContain("SaveNames.uniqueIn(dir, name)");
+  expect(plugin).toContain("SaveNames.reserveIn(dir, name)");
   expect(plugin).toContain('result.put("name", savedName)');
   expect(plugin, "saved files must land where the rider looks").toContain("MediaStore.Downloads");
   // ACTION_VIEW survives only as the fallback, inside a catch. It used to be

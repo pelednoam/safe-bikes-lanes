@@ -388,7 +388,6 @@ function el<T extends HTMLElement>(id: string): T {
   return node as T;
 }
 
-
 function emptyFC(): GeoJSON.FeatureCollection {
   return { type: "FeatureCollection", features: [] };
 }
@@ -2300,7 +2299,6 @@ function chooseSearchRow(row: SearchRowView): void {
   leaveSearchMode(true);
 }
 
-
 /** Grade the list once it has stopped changing.
  *
  * The list is now rebuilt on every keystroke, and grading it is up to five routing
@@ -2407,7 +2405,6 @@ function renderSketchy(): void {
 // ---------------------------------------------------------------------------
 // layers + interaction wiring
 // ---------------------------------------------------------------------------
-
 
 /**
  * Run `fn` once the browser is idle, or after `timeout` regardless.

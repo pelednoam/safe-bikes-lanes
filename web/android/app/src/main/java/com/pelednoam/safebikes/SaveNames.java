@@ -1,6 +1,7 @@
 package com.pelednoam.safebikes;
 
 import java.io.File;
+import java.io.IOException;
 
 /**
  * The names the app saves files under, kept apart from Android so they can be
@@ -18,26 +19,38 @@ final class SaveNames {
         return name != null && name.matches("[A-Za-z0-9._-]{1,120}") && !name.matches("\\.+");
     }
 
+    /** How many numbered names are tried before giving up. */
+    static final int MAX_COPIES = 9999;
+
     /**
-     * A file in `dir` called `name`, or, if there is one already, "name (1).ext",
-     * "name (2).ext" and so on: what Downloads does with a repeated name on
-     * Android 10 and later, so the older phones do the same and a second GPX of
-     * the same ride doesn't replace the first.
+     * Makes, and returns, a new empty file in `dir` called `name`, or, if there is
+     * one already, "name (1).ext", "name (2).ext" and so on: what Downloads does
+     * with a repeated name on Android 10 and later, so the older phones do the
+     * same and a second GPX of the same ride doesn't replace the first.
+     *
+     * The file is created by this call, atomically ({@link File#createNewFile}),
+     * and not looked for and then written: two saves at once both found the same
+     * name free, and the second truncated the first. It never returns a file that
+     * was there already; with all the names taken it fails.
      */
-    static File uniqueIn(File dir, String name) {
+    static File reserveIn(File dir, String name) throws IOException {
+        return reserveIn(dir, name, MAX_COPIES);
+    }
+
+    static File reserveIn(File dir, String name, int copies) throws IOException {
         File file = new File(dir, name);
-        if (!file.exists()) {
+        if (file.createNewFile()) {
             return file;
         }
         int dot = name.lastIndexOf('.');
         String stem = dot > 0 ? name.substring(0, dot) : name;
         String ext = dot > 0 ? name.substring(dot) : "";
-        for (int n = 1; n < 10_000; n++) {
+        for (int n = 1; n <= copies; n++) {
             File next = new File(dir, stem + " (" + n + ")" + ext);
-            if (!next.exists()) {
+            if (next.createNewFile()) {
                 return next;
             }
         }
-        return file;
+        throw new IOException("too many files called " + name);
     }
 }

@@ -221,6 +221,10 @@ export class RideEngine {
   /** Whether the last good fix was on the route. A gap that began off it covered
    * ground nobody can say was round the loop. */
   private lastGoodOnRoute = true;
+  /** Where and when the last good fix was: a gap is measured between good fixes,
+   * never to or from a position the phone wasn't sure of. */
+  private goodPos: [number, number] | null = null;
+  private goodAt = 0;
 
   /** Good fixes on the route in a row, for believing the rider is back on it. */
   private onRouteFixes = 0;
@@ -248,6 +252,8 @@ export class RideEngine {
     this.loopDoneM = 0;
     this.unseenM = 0;
     this.lastGoodOnRoute = true;
+    this.goodPos = null;
+    this.goodAt = 0;
     this.rejoinAt = null;
     this.awaitingReroute = false;
     this.onRouteFixes = 0;
@@ -348,8 +354,6 @@ export class RideEngine {
     } else {
       this.implausibleFixes = 0;
     }
-    const prev = this.lastPos;
-    const prevAt = this.lastFixAt;
     this.lastPos = here;
     const effects: RideEffect[] = [{ type: "clearGpsAlert" }];
     const say = (text: string, priority: SpeakPriority = "turn"): void => {
@@ -377,13 +381,22 @@ export class RideEngine {
     this.lastFixAt = now;
     // Only what no fix saw can have been ridden round the loop unseen: a
     // wrong turn is fixes a second apart, all off the loop, and earns nothing.
-    const stepM = prev === null ? 0 : distM(prev, here);
-    const stepS = prev !== null && prevAt > 0 ? Math.max(0, (now - prevAt) / 1000) : 0;
-    // ...and only when the rider was on the loop as the gap began: one that began
-    // off it (a wrong turn, then the signal went) covered ground that can't be
-    // called round the loop, however it ends.
-    if (stepS > LOOP_GAP_S && this.lastGoodOnRoute) {
-      this.unseenM += Math.min(stepM, LOOP_FASTEST_MPS * stepS);
+    // Measured between good fixes: a poor one is a position the phone isn't sure
+    // of, and as the end of a gap it would earn the distance to somewhere the
+    // rider may never have been (and a good fix back where they were, after it,
+    // would find the allowance already spent). And only when the rider was on the
+    // loop as the gap began: one that began off it (a wrong turn, then the
+    // signal went) covered ground that can't be called round the loop.
+    const good = fix.accuracy <= MAX_GPS_ACCURACY_M;
+    if (good) {
+      if (this.goodPos !== null && this.goodAt > 0) {
+        const gapS = Math.max(0, (now - this.goodAt) / 1000);
+        if (gapS > LOOP_GAP_S && this.lastGoodOnRoute) {
+          this.unseenM += Math.min(distM(this.goodPos, here), LOOP_FASTEST_MPS * gapS);
+        }
+      }
+      this.goodPos = here;
+      this.goodAt = now;
     }
     // travel direction: GPS heading when moving, else derived from movement
     const gpsHeading = fix.heading;
@@ -396,12 +409,6 @@ export class RideEngine {
     if (!this.prevPos || distM(this.prevPos, here) > 3) this.prevPos = here;
 
     const snap = snapToTrack(track, fix.lon, fix.lat, this.hint);
-    if (fix.accuracy <= MAX_GPS_ACCURACY_M) {
-      this.lastGoodOnRoute = snap.offM <= OFF_ROUTE_M;
-      // the ground a gap covered is for the first good fix after it to spend; if
-      // that fix is off the loop, it was never round it
-      if (!this.lastGoodOnRoute) this.unseenM = 0;
-    }
     const step: RideStep = {
       // Draw the dot ON the route while we're plausibly on it — raw bike GPS
       // wanders 5-15 m, which visibly drifts the dot into buildings and across
@@ -423,6 +430,15 @@ export class RideEngine {
       if (fix.accuracy > MAX_GPS_ACCURACY_M) return step;
       this.onRouteFixes = 0;
       this.offCount++;
+      // A wrong turn, once it is sure to be one (the same strikes as a reroute),
+      // takes the allowance with it: ground covered unseen before it wasn't round
+      // the loop from where the rider has ended up. One fix 40 m out on picking
+      // the signal up again is multipath, not a wrong turn, and it doesn't: the
+      // first fix after a tunnel is often that far off while claiming to be good.
+      if (this.offCount >= OFF_ROUTE_STRIKES) {
+        this.lastGoodOnRoute = false;
+        this.unseenM = 0;
+      }
       // instant feedback while we make sure it's a real deviation
       effects.push({ type: "offRoute" });
       // keep the trip line live instead of freezing on the last on-route value:
@@ -459,11 +475,11 @@ export class RideEngine {
     }
     // A poor fix is no evidence either way: it neither ends a deviation being
     // made sure of (the strikes stand) nor counts towards rejoining.
-    const good = fix.accuracy <= MAX_GPS_ACCURACY_M;
     if (good) {
       this.offCount = 0;
       this.rerouteTries = 0;
       this.onRouteFixes++;
+      this.lastGoodOnRoute = true;
     }
     // The rider found the way back before the new one arrived: switching to it
     // now would send them off the line they are on, to follow a way back from

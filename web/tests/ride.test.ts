@@ -774,6 +774,41 @@ describe("a round trip", () => {
     expect(r.engine.loopDoneM).toBeLessThan(done + 100);
   });
 
+  it("doesn't let a poor fix far away spend the allowance for a good fix back where the rider is", () => {
+    // After a gap, a poor fix (a tower's guess) far round the loop must not earn
+    // the distance to it: the good fixes that follow, where the rider really
+    // is, would then find the allowance already added and a snap to the far side
+    // would count.
+    const r = new Ride(route(LOOP));
+    r.engine.setRoute(r.payload, { legM: 0, resumeM: 0 });
+    r.ride({ untilM: 300 });
+    const done = r.engine.loopDoneM;
+    r.now += 90_000;
+    const far = pointAlong(pathOf(r.payload), 900).at;
+    r.fix({ lon: far[0], lat: far[1], accuracy: 60, speed: 4, heading: 0 });
+    r.ride({ fromM: 305, untilM: 330 });
+    // now a good fix on the far side, a second later: seen, so unearned
+    r.fix({ lon: far[0], lat: far[1], accuracy: 8, speed: 4, heading: 0 });
+    expect(r.engine.loopDoneM).toBeLessThan(done + 200);
+  });
+
+  it("keeps the allowance through one good fix that lands off the line on picking the signal up", () => {
+    // the first fix after a tunnel is often tens of metres out while claiming to
+    // be good: one such fix is multipath, not a wrong turn, and the ground
+    // covered unseen in the gap is still ground ridden round the loop
+    const r = new Ride(route(LOOP));
+    r.engine.setRoute(r.payload, { legM: 0, resumeM: 0 });
+    r.onReroute = () => null;
+    r.ride({ untilM: 300 });
+    r.now += 90_000;
+    const at700 = pointAlong(pathOf(r.payload), 700).at;
+    // 45 m from the line (past OFF_ROUTE_M) ...
+    r.fix({ ...offsetFix(at700, 90, 45), speed: 5 });
+    // ... and then on it, a little further round
+    r.ride({ fromM: 710, untilM: 730 });
+    expect(r.engine.loopDoneM).toBeGreaterThan(650);
+  });
+
   it("still counts a gap that began on the loop, which is what the allowance is for", () => {
     const r = new Ride(route(LOOP));
     r.engine.setRoute(r.payload, { legM: 0, resumeM: 0 });

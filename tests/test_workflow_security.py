@@ -100,8 +100,11 @@ def test_dependabot_keeps_the_pins_moving() -> None:
     # Every npm package in the repository, found rather than listed: the error-report
     # Worker (reports/) was added with exact pins and nothing to move them.
     npm_dirs = {u["directory"] for u in updates if u["package-ecosystem"] == "npm"}
-    packages = {f"/{p.parent.relative_to(ROOT).as_posix()}" for p in ROOT.glob("*/package.json")}
-    packages -= {"/node_modules"}
+    packages = {
+        f"/{p.parent.relative_to(ROOT).as_posix()}"
+        for p in ROOT.glob("**/package.json")
+        if "node_modules" not in p.parts and ".venv" not in p.parts
+    }
     assert packages <= npm_dirs, f"no Dependabot entry for {sorted(packages - npm_dirs)}"
     assert {"/web", "/reports"} <= npm_dirs
     # and the lockfile is where Dependabot has to look

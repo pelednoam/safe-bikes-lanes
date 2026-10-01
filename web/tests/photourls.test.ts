@@ -41,14 +41,42 @@ describe("a hazard's photo", () => {
     expect(s.made).toHaveLength(1);
   });
 
-  it("isn't read twice at once, by a card hovered again before the first answered", async () => {
+  it("isn't read twice at once, and every card waiting on it hears when it arrives", async () => {
+    // the popup is made afresh as the pointer moves: the card that started the
+    // read is gone when it finishes, and the card there then must be told
     let finish: (b: Blob) => void = () => undefined;
     const s = setup(() => new Promise<Blob>((r) => (finish = r)));
     const first = s.photos.ensure("a");
-    expect(await s.photos.ensure("a")).toBe(false);
+    const second = s.photos.ensure("a");
     finish(blob);
-    expect(await first).toBe(true);
+    expect([await first, await second]).toEqual([true, true]);
     expect(s.reads).toEqual(["a"]);
+  });
+
+  it("leaves no URL behind for a report that went while its photo was being read", async () => {
+    let finish: (b: Blob) => void = () => undefined;
+    const s = setup((_id, n) => (n === 1 ? new Promise<Blob>((r) => (finish = r)) : Promise.resolve(blob)));
+    const read = s.photos.ensure("a");
+    s.photos.prune(new Set()); // the report is deleted mid-read
+    finish(blob);
+    expect(await read).toBe(false);
+    expect(s.made).toEqual([]);
+    expect(s.photos.get("a")).toBeNull();
+    // and a report that comes back is read afresh
+    expect(await s.photos.ensure("a")).toBe(true);
+  });
+
+  it("counts the wait before trying again from when the read failed, not from when it began", async () => {
+    let fail: () => void = () => undefined;
+    const s = setup((_id, n) => (n === 1 ? new Promise<Blob>((_, no) => (fail = () => no(new Error("busy")))) : Promise.resolve(blob)));
+    const first = s.photos.ensure("a");
+    s.advance(4000); // a slow read
+    fail();
+    expect(await first).toBe(false);
+    s.advance(4000); // 4 s since it failed: too soon, though 8 since it began
+    expect(await s.photos.ensure("a")).toBe(false);
+    s.advance(1500);
+    expect(await s.photos.ensure("a")).toBe(true);
   });
 
   it("is tried again after a failed read, though not on the very next mouse move", async () => {

@@ -85,7 +85,8 @@ def archive(get_json: Callable[[str], Any] = _get_json) -> list[Copy] | None:
     network) is raised: read as "no archive", it made upload() create a release
     that already exists, which fails, and failed the refresh's archive step.
     One call answers both "is there an archive" and "what is in it", so upload()
-    asks GitHub for the release once, not twice."""
+    no longer asks for the release twice before it has uploaded anything (it asks
+    again afterwards, for what there then is to prune)."""
     try:
         release = _release(get_json)
     except NoArchive:

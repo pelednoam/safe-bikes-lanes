@@ -99,6 +99,47 @@ describe("shareImage", () => {
   });
 });
 
+describe("sharing when the clipboard is refused", () => {
+  const refuseCopy = async (): Promise<void> => {
+    throw new DOMException("Document is not focused", "NotAllowedError");
+  };
+
+  it("says the text wasn't copied, not that it was", async () => {
+    const told: [string, boolean][] = [];
+    const image = new PreparedImage(Promise.resolve(new Blob(["png"])));
+    await image.ready;
+    await shareImage("12 km!", image, "card.png", {
+      copy: refuseCopy,
+      download: () => undefined,
+      tell: (m, ok) => told.push([m, ok]),
+    });
+    expect(told).toEqual([["Picture saved; couldn't copy the text", false]]);
+  });
+
+  it("says so when there was no picture either", async () => {
+    const told: [string, boolean][] = [];
+    const image = new PreparedImage(Promise.reject(new Error("canvas")));
+    await shareImage("x", image, "card.png", {
+      copy: refuseCopy,
+      download: () => undefined,
+      tell: (m, ok) => told.push([m, ok]),
+    });
+    expect(told).toEqual([["Couldn't copy the text", false]]);
+  });
+
+  it("says both things when neither the save nor the copy worked", async () => {
+    const told: [string, boolean][] = [];
+    const image = new PreparedImage(Promise.resolve(new Blob(["png"])));
+    await image.ready;
+    await shareImage("x", image, "card.png", {
+      copy: refuseCopy,
+      download: async () => ({ error: "Downloads refused the file" }),
+      tell: (m, ok) => told.push([m, ok]),
+    });
+    expect(told).toEqual([["Picture not saved (Downloads refused the file); text not copied", false]]);
+  });
+});
+
 describe("sharing when the save is refused", () => {
   it("says the picture wasn't saved, and only that", async () => {
     // in the app a save can fail; "Picture saved" over it, then an error

@@ -295,9 +295,13 @@ public class AppShellPlugin extends Plugin {
                 if (dir == null) {
                     throw new IOException("no Downloads folder on this phone");
                 }
-                File target = SaveNames.uniqueIn(dir, name);
+                File target = SaveNames.reserveIn(dir, name);
                 try (FileOutputStream out = new FileOutputStream(target)) {
                     out.write(bytes);
+                } catch (IOException e) {
+                    // an empty file under the rider's name is not a saved file
+                    target.delete();
+                    throw e;
                 }
                 savedName = target.getName();
                 where = "the app's own folder (Android/data/" + getContext().getPackageName()

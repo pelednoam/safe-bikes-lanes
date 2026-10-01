@@ -175,4 +175,3 @@ def test_upload_makes_the_release_when_there_is_none(
     monkeypatch.setattr(source_archive, "fresh_sources", lambda raw: [])
     source_archive.upload(tmp_path, get_json)
     assert ran[0][:3] == ("release", "create", source_archive.TAG)
-

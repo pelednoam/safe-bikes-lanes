@@ -111,13 +111,24 @@ export function shareImage(
   const fallBack = async (): Promise<void> => {
     const blob = image.blob ?? (await image.ready);
     const saved = blob !== null ? await env.download(blob, filename) : undefined;
-    await env.copy(text).catch(() => undefined);
-    // one message, and a true one: "saved" over a refused save is how a rider
-    // finds out later that it never was
-    if (blob === null) env.tell("Text copied", true);
-    else if (typeof saved === "object" && "error" in saved) {
-      env.tell(`Picture not saved (${saved.error}); text copied`, false);
-    } else env.tell("Picture saved, text copied", true);
+    // whether it really was copied: browsers refuse the clipboard as a matter of
+    // course (no permission, the page not focused), and "text copied" over a
+    // refusal is how a rider finds out later that they have nothing to paste
+    const copied = await env.copy(text).then(
+      () => true,
+      () => false,
+    );
+    // one message, and a true one: "saved" over a refused save is the same trap
+    if (blob === null) {
+      if (copied) env.tell("Text copied", true);
+      else env.tell("Couldn't copy the text", false);
+    } else if (typeof saved === "object" && "error" in saved) {
+      env.tell(`Picture not saved (${saved.error}); text ${copied ? "copied" : "not copied"}`, false);
+    } else if (copied) {
+      env.tell("Picture saved, text copied", true);
+    } else {
+      env.tell("Picture saved; couldn't copy the text", false);
+    }
   };
   const blob = image.blob;
   if (blob !== null && env.share !== undefined) {
