@@ -121,7 +121,7 @@ describe("a report", () => {
   it("says only the fact of a rejection with something that isn't an Error, never its contents", () => {
     const { sent, r } = reporter();
     r.report("rejection", "no tiles for Home at 42.38,-71.1");
-    r.report("rejection", { place: "Home", lngLat: [-71.1, 42.38], token: "secret" });
+    r.report("rejection", { place: "Home", lngLat: [-71.1, 42.38], rider: "Noam" });
     r.report("rejection", null);
     r.report("rejection", [1, 2]);
     expect(sent.map((b) => b.message)).toEqual([
@@ -130,7 +130,7 @@ describe("a report", () => {
       "Rejected with null, not an Error",
       "Rejected with an array, not an Error",
     ]);
-    expect(JSON.stringify(sent)).not.toMatch(/Home|secret|42\.38/);
+    expect(JSON.stringify(sent)).not.toMatch(/Home|Noam|42\.38/);
     expect(sent.every((b) => check(b).ok)).toBe(true);
   });
 
