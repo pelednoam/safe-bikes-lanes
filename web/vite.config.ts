@@ -108,9 +108,12 @@ function precache(): Plugin {
       const sorted = [...files].sort();
       const list = sorted.map((f) => JSON.stringify(f)).join(",\n  ");
       // The shell cache is named for exactly what it holds: a new build is a
-      // new cache, and the old one is deleted when it activates (public/sw.js).
+      // new cache, and the one before it is deleted when it activates
+      // (public/sw.js). The site's data has its own, named by the data.
       const idMarker = '/* BUILD_ID */ "dev"';
       if (!sw.includes(idMarker)) throw new Error("precache: public/sw.js has no BUILD_ID marker");
+      const dataMarker = '/* DATA_ID */ "dev"';
+      if (!sw.includes(dataMarker)) throw new Error("precache: public/sw.js has no DATA_ID marker");
       // By content, not only by name: index.html and compat.js keep their names
       // from build to build, and a change to either is a new build too.
       const hash = createHash("sha256");
@@ -118,19 +121,30 @@ function precache(): Plugin {
         const path = join(out, f);
         hash.update(f).update(existsSync(path) ? readFileSync(path) : "");
       }
-      // And the data this site is deployed with: routing tiles are cached in
-      // this same cache as they are fetched, and a weekly data deploy with the
-      // same code kept last week's there beside this week's manifest, whose
-      // tiles don't join them. pages.yml fetches the data before it builds.
+      const id = hash.digest("hex").slice(0, 12);
+      // The data this site is deployed with names the data cache: routing tiles
+      // are cached there as they are fetched, and a weekly data deploy with the
+      // same code kept last week's beside this week's manifest, whose tiles
+      // don't join them. Code alone doesn't name it, so a code deploy leaves
+      // the tiles a rider has browsed. pages.yml fetches the data before it
+      // builds.
       const meta = join(WEB, "data", "meta.json");
       if (!existsSync(meta) && process.env["CI"] !== undefined) {
         // without it the id is fixed across data deploys, and stale routing
         // tiles come back quietly
         throw new Error("precache: no web/data/meta.json to name the cache by; fetch the data first");
       }
-      hash.update(existsSync(meta) ? readFileSync(meta) : "no data");
-      const id = hash.digest("hex").slice(0, 12);
-      writeFileSync(swPath, sw.replace(marker, `${list},`).replace(idMarker, JSON.stringify(id)));
+      const dataId = createHash("sha256")
+        .update(existsSync(meta) ? readFileSync(meta) : "no data")
+        .digest("hex")
+        .slice(0, 12);
+      writeFileSync(
+        swPath,
+        sw
+          .replace(marker, `${list},`)
+          .replace(idMarker, JSON.stringify(id))
+          .replace(dataMarker, JSON.stringify(dataId)),
+      );
       // the manifest was for this; it isn't part of the site
       rmSync(join(out, ".vite"), { recursive: true, force: true });
     },

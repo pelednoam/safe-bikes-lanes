@@ -45,6 +45,7 @@ function loadWorker(fetchImpl: FetchFn, caches = new FakeCacheStorage()): Worker
   };
   const names = [
     "CACHE",
+    "DATA_CACHE",
     "TILE_CACHE",
     "BROWSE_CACHE",
     "BROWSE_MAX",
@@ -115,31 +116,92 @@ function body(text: string): Response {
  * quite dead. */
 const hangs: FetchFn = () => new Promise<Response>(() => undefined);
 
+/** Put a response where the worker keeps it: the data cache for the site's data,
+ * the shell cache for the rest. */
 async function seed(w: Worker, url: string, text: string): Promise<void> {
-  const shell = String(w.consts["CACHE"]);
-  await (await w.caches.open(shell)).put(new URL(url, ORIGIN).toString(), body(text));
+  const name = String(w.consts[url.includes("data/") ? "DATA_CACHE" : "CACHE"]);
+  await (await w.caches.open(name)).put(new URL(url, ORIGIN).toString(), body(text));
 }
 
 describe("updating the service worker", () => {
-  it("keeps the rider's downloaded maps and drops only old copies of the app", async () => {
+  it("keeps the rider's downloaded maps, the data cache, and the last build's shell", async () => {
     const w = loadWorker(hangs);
     const current = String(w.consts["CACHE"]);
+    const data = String(w.consts["DATA_CACHE"]);
+    // creation order, oldest first: caches.keys() answers in it
     for (const name of [
       "family-bike-router-v10",
       "family-bike-router-v9",
-      current,
+      "family-bike-data-someoldbuild",
       "bike-tiles-v1",
       "bike-tiles-browse-v1",
       "bike-styles-v1",
+      current,
+      data,
     ]) {
       await w.caches.open(name);
     }
     await w.activate();
-    // Every update used to delete every cache but the shell's own — including
-    // the offline maps a rider had downloaded for tomorrow's ride.
+    // Every update used to delete every cache but the shell's own, including
+    // the offline maps a rider had downloaded for tomorrow's ride. Now what goes
+    // is shells two builds back and more, and data built another time.
     expect((await w.caches.keys()).sort()).toEqual(
-      [current, "bike-styles-v1", "bike-tiles-browse-v1", "bike-tiles-v1"].sort(),
+      [
+        current,
+        data,
+        "family-bike-router-v9",
+        "bike-styles-v1",
+        "bike-tiles-browse-v1",
+        "bike-tiles-v1",
+      ].sort(),
     );
+  });
+
+  it("keeps the routing tiles a rider has browsed when only the code changed", async () => {
+    // A code deploy renames the shell cache and nothing else: the data cache is
+    // named by the data, so the tiles of streets the rider has been over are
+    // still there to reroute on, with no signal.
+    const was = loadWorker(hangs);
+    await seed(was, "data/tiles/103_76.json", "browsed tile");
+    const store = was.caches;
+    // the same data, a different shell: the next build's worker over the same storage
+    const next = loadWorker(hangs, store);
+    expect(next.consts["DATA_CACHE"]).toBe(was.consts["DATA_CACHE"]);
+    await next.activate();
+    const data = await store.open(String(next.consts["DATA_CACHE"]));
+    expect(await (await data.match(`${ORIGIN}/data/tiles/103_76.json`))?.text()).toBe("browsed tile");
+  });
+
+  it("answers the current build's page, not the previous one's, when both are kept", async () => {
+    vi.useFakeTimers();
+    const w = loadWorker(hangs);
+    const previous = await w.caches.open("family-bike-router-previous");
+    await previous.put(`${ORIGIN}/index.html`, body("last build's page"));
+    await previous.put(`${ORIGIN}/app-OLD.js`, body("last build's bundle"));
+    await seed(w, "index.html", "this build's page");
+    // a page still running the last build can still load its own bundles...
+    const old = w.request("app-OLD.js");
+    void old.response;
+    await vi.advanceTimersByTimeAsync(Number(w.consts["NETWORK_TIMEOUT_MS"] ?? 60_000));
+    expect(await (await (old.response as Promise<Response>)).text()).toBe("last build's bundle");
+    // ...but a request for the page itself gets this build's first
+    const page = w.request("index.html", { navigate: true, resultingClientId: "tab" });
+    await vi.advanceTimersByTimeAsync(Number(w.consts["NETWORK_TIMEOUT_MS"] ?? 60_000));
+    expect(await (await (page.response as Promise<Response>)).text()).toBe("this build's page");
+    vi.useRealTimers();
+  });
+
+  it("keeps what it fetches in the cache it belongs to: data apart from the shell", async () => {
+    const w = loadWorker(async (req) => body(`from the network: ${new URL(req.url).pathname}`));
+    for (const path of ["data/tiles/1_1.json", "data/nettiles/2_2.json", "app.js"]) {
+      const { response, lifetime } = w.request(path);
+      await response;
+      await lifetime;
+    }
+    const shell = await w.caches.open(String(w.consts["CACHE"]));
+    const data = await w.caches.open(String(w.consts["DATA_CACHE"]));
+    expect(shell.urls()).toEqual([`${ORIGIN}/app.js`]);
+    expect(data.urls().sort()).toEqual([`${ORIGIN}/data/nettiles/2_2.json`, `${ORIGIN}/data/tiles/1_1.json`]);
   });
 });
 
@@ -212,8 +274,8 @@ describe("a connection that is barely there", () => {
     await vi.advanceTimersByTimeAsync(20_000);
     expect(await (await (response as Promise<Response>)).text()).toBe("old");
     await lifetime;
-    const shell = await w.caches.open(String(w.consts["CACHE"]));
-    expect(await (await shell.match(`${ORIGIN}/data/meta.json`))?.text()).toBe("new");
+    const data = await w.caches.open(String(w.consts["DATA_CACHE"]));
+    expect(await (await data.match(`${ORIGIN}/data/meta.json`))?.text()).toBe("new");
   });
 
   it("serves a page that fell back to cache the rest of the same build", async () => {
@@ -273,6 +335,17 @@ describe("a page the network answered after all", () => {
       await gate;
       return realMatch(req);
     };
+    // the worker reads the current build's caches by name first, so they are slow too
+    const realOpen = w.caches.open.bind(w.caches);
+    w.caches.open = async (name: string) => {
+      const cache = await realOpen(name);
+      const match = cache.match.bind(cache);
+      cache.match = async (req: RequestInfo | URL) => {
+        await gate;
+        return match(req);
+      };
+      return cache;
+    };
     const page = w.request("index.html", { navigate: true, resultingClientId: "tab-1" });
     await vi.advanceTimersByTimeAsync(Number(w.consts["NETWORK_TIMEOUT_MS"] ?? 60_000));
     arrive(body("new page"));
@@ -280,6 +353,7 @@ describe("a page the network answered after all", () => {
     release();
     await vi.advanceTimersByTimeAsync(10);
     w.caches.match = realMatch;
+    w.caches.open = realOpen;
     const module = w.request("app.js", { clientId: "tab-1" });
     expect(await (await (module.response as Promise<Response>)).text()).toBe("new module");
   });
@@ -292,6 +366,18 @@ describe("the shell cache", () => {
     expect(src).toContain('const CACHE = "family-bike-router-" + /* BUILD_ID */ "dev";');
     const vite = readFileSync(join(WEB, "vite.config.ts"), "utf8");
     expect(vite).toContain('/* BUILD_ID */ "dev"');
+  });
+
+  it("and the data cache by the data, written in by the same build", () => {
+    const src = readFileSync(join(WEB, "public", "sw.js"), "utf8");
+    expect(src).toContain('const DATA_CACHE = "family-bike-data-" + /* DATA_ID */ "dev";');
+    const vite = readFileSync(join(WEB, "vite.config.ts"), "utf8");
+    expect(vite).toContain('/* DATA_ID */ "dev"');
+    // the shell's name is made from the code alone: if it hashed the data too, a
+    // data deploy would rename it as well, and a code deploy needs no data
+    const plugin = vite.slice(vite.indexOf("function precache"), vite.indexOf("function noMapLibreTags"));
+    const hashPart = plugin.slice(plugin.indexOf("const hash = createHash"), plugin.indexOf("const id = hash.digest"));
+    expect(hashPart).not.toContain("meta");
   });
 });
 

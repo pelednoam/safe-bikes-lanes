@@ -20,6 +20,7 @@ function precached() {
     .replace(/\/\/.*$/gm, "");
   if (block.includes("BUILD_ASSETS")) problems.push("sw.js: the build never wrote its assets in");
   if (sw.includes("BUILD_ID")) problems.push("sw.js: the build never named its cache");
+  if (sw.includes("DATA_ID")) problems.push("sw.js: the build never named its data cache");
   return [...block.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
 }
 

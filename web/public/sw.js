@@ -11,6 +11,41 @@
 // phone collected each deploy until storage ran out, and then a new build's
 // install failed and it stayed on the old one.
 const CACHE = "family-bike-router-" + /* BUILD_ID */ "dev";
+// The site's data (routing and display tiles, manifests, POIs) is cached apart
+// from the code, named by the data it was built with (BUILD data id, written in
+// by vite.config.ts from data/meta.json). It used to sit in the shell cache,
+// whose name changes with every deploy, so every code change, however small,
+// threw away the routing tiles a rider had browsed, and the next ride over the
+// same streets, on a weak signal, had none. A code deploy now leaves them; a
+// data deploy replaces them, which is what it should: a new data build's
+// tiles don't join the last one's, and the old ones would be served beside the
+// new manifest.
+const DATA_CACHE = "family-bike-data-" + /* DATA_ID */ "dev";
+const DATA_PREFIX = "family-bike-data-";
+
+/** Whether a URL is the site's data, and so belongs in the data cache. */
+function isData(url) {
+  return url.pathname.includes("/data/");
+}
+
+/** The cache a same-origin response is kept in. */
+function cacheNameFor(url) {
+  return isData(url) ? DATA_CACHE : CACHE;
+}
+
+/** What is cached for a request, current build first. `caches.match` alone
+ * searches every cache oldest first, so with the last build's shell still
+ * kept (below) an unhashed name like index.html would answer with the OLD one
+ * whenever the network was slow: the page a rider had, not the one just
+ * deployed. The older caches are only for what the current ones lack: the
+ * hashed bundles of a page still running the build before. */
+async function fromCaches(request) {
+  for (const name of [CACHE, DATA_CACHE]) {
+    const hit = await (await caches.open(name)).match(request);
+    if (hit !== undefined) return hit;
+  }
+  return caches.match(request);
+}
 // Precache the shell + the tile manifests + eager POIs. The routing graph
 // (data/tiles/*.json), the display network (data/nettiles/*.json), and the
 // heavy overlays (heatmap/elevation/lane) all load on demand — cached
@@ -57,7 +92,14 @@ const ASSETS = [
 self.addEventListener("install", (event) => {
   // activate this build immediately instead of waiting for all tabs to close
   self.skipWaiting();
-  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(ASSETS)));
+  event.waitUntil(
+    (async () => {
+      const shell = await caches.open(CACHE);
+      const data = await caches.open(DATA_CACHE);
+      await shell.addAll(ASSETS.filter((a) => !a.startsWith("data/")));
+      await data.addAll(ASSETS.filter((a) => a.startsWith("data/")));
+    })(),
+  );
 });
 
 /** Every version of the app shell's cache is named this, and nothing else is.
@@ -70,16 +112,26 @@ self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches
       .keys()
-      // Only older shells. This used to delete everything that was not the
-      // current shell, so every deploy silently threw away the offline maps
-      // riders had downloaded — found on the road, with no signal.
-      .then((keys) =>
-        Promise.all(
-          keys
-            .filter((k) => k.startsWith(SHELL_PREFIX) && k !== CACHE)
-            .map((k) => caches.delete(k)),
-        ),
-      )
+      // Only older shells, and older data. This used to delete everything that
+      // was not the current shell, so every deploy silently threw away the
+      // offline maps riders had downloaded — found on the road, with no signal.
+      .then((keys) => {
+        // The last build's shell stays too (caches.keys() is in creation order,
+        // so it is the newest of the others): a page open since before the
+        // update, a rider mid-ride, is still running that build's code, and
+        // loads the bundles it imports, lazily, from there. Without it the page
+        // lost its own files the moment the new worker took over. Two builds
+        // back and older are gone, which is what stops a phone collecting every
+        // deploy.
+        const shells = keys.filter((k) => k.startsWith(SHELL_PREFIX) && k !== CACHE);
+        const previous = shells[shells.length - 1];
+        const stale = [
+          ...shells.filter((k) => k !== previous),
+          // another data build: its tiles don't join this one's
+          ...keys.filter((k) => k.startsWith(DATA_PREFIX) && k !== DATA_CACHE),
+        ];
+        return Promise.all(stale.map((k) => caches.delete(k)));
+      })
       // take control of open pages so the update reaches them at once
       .then(() => self.clients.claim()),
   );
@@ -170,11 +222,13 @@ function networkFirst(event, req) {
       .then((resp) => {
         if (!resp.ok) return undefined;
         const clone = resp.clone();
-        return caches.open(CACHE).then((cache) => cache.put(event.request, clone));
+        return caches
+          .open(cacheNameFor(new URL(event.request.url)))
+          .then((cache) => cache.put(event.request, clone));
       })
       .catch(() => undefined),
   );
-  const cached = () => caches.match(event.request);
+  const cached = () => fromCaches(event.request);
   return new Promise((resolve) => {
     let answered = false;
     const answer = (resp) => {
@@ -213,7 +267,7 @@ self.addEventListener("fetch", (event) => {
     const shell = event.request.mode === "navigate" || isShell(url);
     if (shell && event.clientId && staleClients.has(event.clientId)) {
       event.respondWith(
-        caches.match(event.request).then((hit) => hit ?? networkFirst(event, event.request)),
+        fromCaches(event.request).then((hit) => hit ?? networkFirst(event, event.request)),
       );
       return;
     }
