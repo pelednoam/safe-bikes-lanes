@@ -24,7 +24,12 @@ export default defineConfig({
       // put a 0%-covered 800-line file into the global number and left every
       // threshold failing. Nothing noticed, because the deploy gate runs
       // `npm test` and the thresholds only apply under --coverage.
-      exclude: ["src/app.ts", "src/build.ts", "src/city.ts", "src/types.ts"],
+      //
+      // src/app/ holds what is being moved out of app.ts, module by module, and
+      // stays on the same footing while it is wiring: it builds the map and touches
+      // the DOM on import. A module that gains logic worth a unit test gets one
+      // (classes.ts has), and when it is pure it moves out of this folder.
+      exclude: ["src/app.ts", "src/app/**", "src/build.ts", "src/city.ts", "src/types.ts"],
       // Set just under what the suite achieves today, so this ratchets rather
       // than blocks: raise them when the number rises, never lower them to pass.
       thresholds: {
