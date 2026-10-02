@@ -41,10 +41,11 @@ function env(over: Partial<Env> = {}): Env {
   };
 }
 
-function fakeGitHub(existing: number | null = null): GitHub & { calls: string[] } {
+function fakeGitHub(existing: number | null = null, reachable = true): GitHub & { calls: string[] } {
   const calls: string[] = [];
   return {
     calls,
+    reachable: () => Promise.resolve(reachable),
     find: (m) => {
       calls.push(`find ${m}`);
       return Promise.resolve(existing);
@@ -319,6 +320,64 @@ describe("filing", () => {
     expect(again.calls.at(-1)).toMatch(/^create /);
   });
 
+  it("forgets the record of a locked issue too: GitHub answers a comment on one with a 403 that says so", async () => {
+    const e = env();
+    await file(sample(), e, fakeGitHub(), day1);
+    const locked = {
+      ...fakeGitHub(),
+      comment: () =>
+        Promise.reject(new GitHubError("GitHub comment: 403 Unable to create comment because issue is locked", 403)),
+    };
+    await expect(file(sample(), e, locked, day2)).rejects.toBeInstanceOf(GitHubError);
+    expect(await seen(e, sample())).toBeNull();
+  });
+
+  it("keeps the record on any other 403, a rate limit or a bad token: that isn't the issue's fault", async () => {
+    const e = env();
+    await file(sample(), e, fakeGitHub(), day1);
+    const limited = {
+      ...fakeGitHub(),
+      comment: () => Promise.reject(new GitHubError("GitHub comment: 403 API rate limit exceeded", 403)),
+    };
+    await expect(file(sample(), e, limited, day2)).rejects.toBeInstanceOf(GitHubError);
+    expect((await seen(e, sample()))?.issue).toBe(7);
+  });
+
+  it("keeps the record when the 404 is the token losing the repository, which answers 404 for everything", async () => {
+    const e = env();
+    await file(sample(), e, fakeGitHub(), day1);
+    const blind = {
+      ...fakeGitHub(null, false), // the repository can't be read either
+      comment: () => Promise.reject(new GitHubError("GitHub comment: 404 Not Found", 404)),
+    };
+    await expect(file(sample(), e, blind, day2)).rejects.toBeInstanceOf(GitHubError);
+    expect((await seen(e, sample()))?.issue).toBe(7);
+  });
+
+  it("tries again to forget a record when KV refuses the delete, which it does within a second of a write", async () => {
+    vi.useFakeTimers();
+    try {
+      const e = env();
+      const store = e.REPORTS as ReturnType<typeof memoryStore>;
+      await file(sample(), e, fakeGitHub(), day1);
+      const realDelete = store.delete.bind(store);
+      let refusals = 2;
+      store.delete = (k) => (refusals-- > 0 ? Promise.reject(new Error("429 Too Many Requests")) : realDelete(k));
+      const gone = {
+        ...fakeGitHub(),
+        comment: () => Promise.reject(new GitHubError("GitHub comment: 410 Gone", 410)),
+      };
+      const done = file(sample(), e, gone, day2).catch((err: unknown) => err);
+      // the clock moves in steps, so that each second's wait is reached before it is
+      // moved past (the Worker awaits a digest and the comment before the first one)
+      for (let i = 0; i < 6; i++) await vi.advanceTimersByTimeAsync(1200);
+      expect(await done).toBeInstanceOf(GitHubError);
+      expect(await seen(e, sample())).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps the record when a comment fails for any other reason", async () => {
     const e = env();
     await file(sample(), e, fakeGitHub(), day1);
@@ -330,15 +389,17 @@ describe("filing", () => {
   it("reports GitHub's refusal, not a KV failure, when giving the slot back goes wrong", async () => {
     const e = env({ DAILY_NEW_CAP: "5" });
     const store = e.REPORTS as ReturnType<typeof memoryStore>;
-    const refuse = { ...fakeGitHub(), create: () => Promise.reject(new GitHubError("GitHub create: 422", 422)) };
     const realGet = store.get.bind(store);
     let failing = false;
     store.get = (k) => (failing && k.startsWith("new:") ? Promise.reject(new Error("KV unavailable")) : realGet(k));
-    const attempt = file(sample(), e, { ...refuse, create: () => {
-      failing = true; // from the moment GitHub is asked, reading the count back fails
-      return Promise.reject(new GitHubError("GitHub create: 422", 422));
-    } }, day1);
-    await expect(attempt).rejects.toThrow("GitHub create: 422");
+    const refused = {
+      ...fakeGitHub(),
+      create: () => {
+        failing = true; // from the moment GitHub is asked, reading the count back fails
+        return Promise.reject(new GitHubError("GitHub create: 422", 422));
+      },
+    };
+    await expect(file(sample(), e, refused, day1)).rejects.toThrow("GitHub create: 422");
   });
 
   it("never lets an unlabelled issue's record expire, so find() not seeing it can't file another", async () => {

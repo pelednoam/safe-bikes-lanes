@@ -8,6 +8,10 @@ export interface GitHub {
    * exists either way, and the caller has to know that it does. */
   create(title: string, body: string): Promise<Created>;
   comment(issue: number, body: string): Promise<void>;
+  /** Whether the repository itself can be read with this token. GitHub answers a
+   * token that has lost access to a private repository with a 404, the same as for
+   * an issue that is gone, so a 404 on an issue means nothing until this says yes. */
+  reachable(): Promise<boolean>;
 }
 
 /** An answer from GitHub that wasn't a success. `status` is its HTTP status: a 4xx
@@ -78,6 +82,13 @@ export function github(repo: string, token: string, fetchFn: Fetch = fetch): Git
       );
       const made = (await resp.json()) as { number: number; labels?: { name?: string }[] };
       return { number: made.number, labelled: made.labels?.some((l) => l.name === LABEL) === true };
+    },
+    async reachable() {
+      try {
+        return (await api(`/repos/${repo}`)).ok;
+      } catch {
+        return false;
+      }
     },
     async comment(issue, body) {
       await ok(

@@ -11,6 +11,7 @@ import {
   scrubbed,
   signature,
 } from "../src/report.js";
+import bundlesJson from "../src/bundles.json";
 import { sample } from "./sample.js";
 
 describe("the format", () => {
@@ -168,6 +169,35 @@ describe("the scrubbing", () => {
     expect(scrub('{"lat":+42,"lon":\u221271}')).toBe('{"‹n›,"‹n›}');
   });
 
+  it("doesn't wreck an email address with digits either side of the @", () => {
+    expect(scrub("login failed for wang123@163.com")).toBe("login failed for ‹email›");
+    expect(scrub("rider1@2wheels.org")).toBe("‹email›");
+  });
+
+  it("takes out tile coordinates written with x between numbers, or as run-together axes", () => {
+    expect(scrub("14x4953x6060")).toBe("‹n›");
+    expect(scrub("14×4953×6060")).toBe("‹n›");
+    expect(scrub("z14_x4953_y6060")).toBe("‹n›");
+    expect(scrub("x4953y6060")).toBe("‹n›");
+    expect(scrub("z14x4953y6060")).toBe("‹n›");
+    expect(scrub("x 4953 y 6060")).toBe("‹n› ‹n›");
+    // a pair joined by x is indistinguishable from a screen size, and stays: decided
+    expect(scrub("viewport 4953x6060")).toBe("viewport 4953x6060");
+  });
+
+  it("takes out camelCase labels written in capitals, and a hex code stays whatever it follows", () => {
+    expect(scrub("centerLAT=42 centerLON=-71")).toBe("center‹n› center‹n›");
+    for (const text of ["HRESULT_0x80070005", "error0x80070005", "code=0xDEAD12345"]) {
+      expect(scrub(text), text).toBe(text);
+    }
+  });
+
+  it("reads punctuation set between digits, with spaces around it, as a decimal point", () => {
+    expect(scrub("42\u2e31 3967")).toBe("‹n›");
+    // and strips what normalising makes: U+FF9E becomes a combining mark
+    expect(scrub("42\uff9e.3967")).toBe("‹n›");
+  });
+
   it("doesn't take the x and z in hex, sizes and architectures for coordinates: different failures stay apart", () => {
     for (const text of ["HRESULT 0x80070005 on x64", "1920x1080", "max=5", "app-X4bCdEfG.js", "app-Ab_x1CdE.js"]) {
       expect(scrub(text), text).toBe(text);
@@ -245,9 +275,17 @@ describe("the scrubbing", () => {
     }
   });
 
-  it("the list of chunk names is the one the build checks", () => {
-    expect(BUNDLE_BASES).toContain("app");
-    expect(BUNDLE_BASES).toContain("routing.worker");
+  it("reads the list of chunk names from bundles.json, which the build checks the same way", () => {
+    // not parsed out of the source: the build (web/scripts/check-dist.mjs) reads
+    // this file as JSON, so the two can't drift on a reformat
+    expect(BUNDLE_BASES).toEqual(bundlesJson.bases);
+    expect(bundlesJson.fixed).toContain("sw.js");
+  });
+
+  it("keeps no hash that holds a coordinate or a place, though its name is listed", () => {
+    for (const name of ["app-L42_71xx.js", "app-X4239677.js", "report-A12345bc.js"]) {
+      expect(scrub(`https://example.test/${name}`), name).toBe("‹url›");
+    }
   });
 
   it("keeps the names of the bundles this app really builds", () => {

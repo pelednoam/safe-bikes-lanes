@@ -1,0 +1,5 @@
+{
+  "comment": "The files of this app's own build whose names may stay in an error report's stack. A name can carry a place, and a pattern can't tell the app's from one that does, so a frame's file is kept only if it is listed here: 'bases' are the chunk names before Vite's eight-character hash (app-BrmPk3gH.js is 'app'), 'fixed' are the files that keep their names. web/scripts/check-dist.mjs fails the build when it makes a file that isn't covered, so a new chunk can't quietly lose its frames' file names. Add it here.",
+  "bases": ["app", "build", "city", "report", "routing.worker", "SegmentCard", "segment", "units"],
+  "fixed": ["sw.js", "compat.js", "maplibre-gl.mjs", "maplibre-gl-shared.mjs", "maplibre-gl-worker.mjs"]
+}

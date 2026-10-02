@@ -11,6 +11,8 @@
 // errs towards taking too much out: an error message with a number missing is
 // still a bug report.
 
+import bundles from "./bundles.json";
+
 export const KINDS = ["error", "rejection", "worker", "native"] as const;
 export type Kind = (typeof KINDS)[number];
 
@@ -120,6 +122,19 @@ const DECIMAL = /-?\d+\s*\.\s*\d+/g;
  * cell), "14:4953:6060", "14-4953-6060", "POINT(-71 42)", "tile 4953 6060".
  * Counts and sizes stand alone; these are positions. */
 const NUMBER_RUN = /-?\d+(?:(?:\s*[,/_;:-]\s*|\s+)-?\d+)+/g;
+/** An optional quote, which may be escaped any number of times: JSON inside JSON
+ * writes a backslash before each. */
+const QUOTE = `(?:\\\\*["'])?`;
+/** A word in either case, written out: the `i` flag would make the camelCase
+ * lookbehinds ("a capital after a lowercase letter") match "max=5" as "ma" + "x=5". */
+const either = (word: string): string =>
+  [...word].map((c) => `[${c.toLowerCase()}${c.toUpperCase()}]`).join("");
+/** A single-letter axis: it needs its separator. */
+const AXIS = `(?:(?<![A-Za-z0-9])[xyzXYZ]${QUOTE}\\s*[=:]|(?<=[a-z])[XYZ]${QUOTE}\\s*[=:])`;
+/** latitude/longitude by name: the separator is optional. */
+const NAMED =
+  `(?:(?<![A-Za-z0-9])(?:${either("lat")}(?:${either("itude")})?|${either("lon")}(?:${either("gitude")})?|${either("lng")})` +
+  `|(?<=[a-z])(?:Lat(?:itude)?|LAT(?:ITUDE)?|Lon(?:gitude)?|LON(?:GITUDE)?|Lng|LNG))${QUOTE}\\s*[=:]?`;
 /** Tile axes and coordinates with their names, whole numbers too: "z=14 x=4953
  * y=6060", "lat=42 lon=-71", '"lat":42', "tile_x=4953", "tileX=4953",
  * '{\"x\":4953}' (JSON inside JSON), "lat 42", "lat=+42", "lon=\u221271". Decimals
@@ -129,22 +144,23 @@ const NUMBER_RUN = /-?\d+(?:(?:\s*[,/_;:-]\s*|\s+)-?\d+)+/g;
  * taken as coordinates and different failures fold together; the long names don't
  * ("lat 42"). Not the end of a longer word ("max 5", "latency 200"), except a
  * capital after lowercase, which is how camelCase writes it. */
-const QUOTE = `(?:\\\\*["'])?`;
-/** A word in either case, written out: the `i` flag would make the camelCase
- * lookbehinds ("a capital after a lowercase letter") match "max=5" as "ma" + "x=5". */
-const either = (word: string): string =>
-  [...word].map((c) => `[${c.toLowerCase()}${c.toUpperCase()}]`).join("");
-const AXIS = `(?:(?<![A-Za-z0-9])[xyzXYZ]${QUOTE}\\s*[=:]|(?<=[a-z])[XYZ]${QUOTE}\\s*[=:])`;
-const NAMED =
-  `(?:(?<![A-Za-z0-9])(?:${either("lat")}(?:${either("itude")})?|${either("lon")}(?:${either("gitude")})?|${either("lng")})` +
-  `|(?<=[a-z])(?:Lat(?:itude)?|Lon(?:gitude)?|Lng))${QUOTE}\\s*[=:]?`;
 const LABELLED = new RegExp(`(?:${AXIS}|${NAMED})\\s*${QUOTE}\\s*[-+]?\\d+(?:\\.\\d+)?`, "g");
+/** Tile coordinates written with x between three numbers or more ("14x4953x6060")
+ * or as axes run together ("z14_x4953_y6060", "x4953y6060", "z14x4953y6060"), or
+ * an axis letter and its number set apart ("x 4953"). Two numbers joined by x
+ * ("4953x6060") are NOT taken: a screen size ("1920x1080") looks the same, and a
+ * report that loses every window size is a worse report; the app writes a tile as
+ * z/x/y or z_x_y, which are. */
+const TILE_RUN = /-?\d+(?:\s*[x×]\s*-?\d+){2,}/gi;
+const TILE_AXES =
+  /(?<![A-Za-z0-9])(?:[zZ][_-]?\d+[_-]?)?[xX][_-]?\d+[_-]?[yY][_-]?\d+/g;
+const AXIS_SPACED = /(?<![A-Za-z0-9])[xyzXYZ]\s+\d{3,}/g;
 /** Degrees, minutes, seconds: 42°23'48"N 71°7'20"W. */
 const DMS = /\d+\s*°(?:\s*\d+(?:\.\d+)?\s*['′’])?(?:\s*\d+(?:\.\d+)?\s*(?:"|″|''))?\s*[NSEW]?/gi;
 /** A long run of digits: a tile index, an id, a phone number. Statuses (404),
  * line numbers and small counts are shorter, and so are not taken; nor are the
  * digits of a hex code ("0x80070005"), which is what tells two failures apart. */
-const LONG_DIGITS = /(?<!\b0[xX][0-9a-fA-F]*)\d{5,}/g;
+const LONG_DIGITS = /(?<!0[xX][0-9a-fA-F]*)\d{5,}/g;
 const EMAIL = /[\w.+-]+@[\w-]+(\.[\w-]+)+/g;
 /** A house number and street: "12 Elm Street", "1600 Mass. Ave". Free text
  * can't be fully recognised; this takes the usual written forms. */
@@ -177,22 +193,23 @@ const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f]/g;
 const INVISIBLE =
   /[\p{Cf}\p{M}\p{Variation_Selector}\u115f\u1160\u17b4\u17b5\u2028\u2029\u2800\u3164\uffa0]/gu;
 
-/** The chunks this app builds, by name: the base of "app-BrmPk3gH.js". A shape
- * ("a word, a hyphen, eight characters") can't tell a bundle from "home-drkrqkrr-…",
- * a place to within tens of metres in a name an attacker or a feed chose, so a name
- * is kept only if it is one of these, and web/scripts/check-dist.mjs fails the build
- * when it makes a chunk that isn't on the list (add its name here, or its frames
- * lose their file name until someone does). */
-export const BUNDLE_BASES = ["app", "build", "city", "report", "routing.worker", "SegmentCard", "segment", "units"];
-/** Files that keep their names from build to build: no hash to check. */
-const FIXED_FILES = new Set(["sw.js", "compat.js", "maplibre-gl.mjs", "maplibre-gl-shared.mjs", "maplibre-gl-worker.mjs"]);
+/** The chunks this app builds, by name (reports/src/bundles.json): the base of
+ * "app-BrmPk3gH.js". A shape ("a word, a hyphen, eight characters") can't tell a
+ * bundle from "home-drkrqkrr-…", a place to within tens of metres in a name someone
+ * chose, so a name is kept only if it is listed, and web/scripts/check-dist.mjs
+ * fails the build when it makes a file that isn't covered. */
+export const BUNDLE_BASES: readonly string[] = bundles.bases;
+const FIXED_FILES = new Set<string>(bundles.fixed);
 const HASHED = new RegExp(`^(?:${BUNDLE_BASES.map((b) => b.replace(/\./g, "\\.")).join("|")})-([A-Za-z0-9_-]{8})\\.m?js$`);
-/** Vite's hash has a capital in it all but about once in sixty (a frame that loses
- * its file name then, which is the safe way to be wrong); a geohash is lowercase. */
+/** A listed name, and a hash that is Vite's: a capital in it (all but about one in
+ * sixty), and nothing in it that scrubbing would take out. The hash is the only part
+ * that isn't listed, and eight characters of [A-Za-z0-9_-] can hold a coordinate
+ * ("app-L42_71xx.js"). A hash that trips the scrubber is a frame that loses its file
+ * name in that build, a few percent of builds' chunks: the safe way to be wrong. */
 function isBundle(file: string): boolean {
   if (FIXED_FILES.has(file)) return true;
   const hash = HASHED.exec(file)?.[1];
-  return hash !== undefined && /[A-Z]/.test(hash);
+  return hash !== undefined && /[A-Z]/.test(hash) && scrub(file) === file;
 }
 
 /** A URL down to its bundle's name, if it names one: the host is ours, and the
@@ -205,6 +222,11 @@ function urlToFile(url: string): string {
   const path = bare.replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]*/i, "").replace(/[?#].*$/s, "");
   const file = path.split("/").filter((p) => p !== "").pop();
   return (file !== undefined && isBundle(file) ? file : "‹url›") + at;
+}
+
+/** Control and invisible characters, taken out. */
+function strip(text: string): string {
+  return text.replace(CONTROL, "").replace(INVISIBLE, "");
 }
 
 /** Digits and separators from other scripts as ASCII, so "٤٢٫٣٩٦٧" is matched
@@ -222,18 +244,23 @@ function ascii(text: string): string {
       .replace(/[\u2212\u2796\ufe63\uff0d]/g, "-")
       .replace(/[\u066b\u2396\uff0e\u2024\u2027\ufe52\u00b7\u3002\uff61\u2219\u22c5]/g, ".")
       .replace(/[\u066c\u060c\uff0c\ufe50\uff64\u3001]/g, ",")
-      // and any other punctuation set between two digits is a decimal point, by
-      // class and not by list (U+2219, U+22C5, U+0387, U+2E31 ...), keeping the
-      // separators NUMBER_RUN already knows
-      .replace(/(?<=\d)[\p{Po}](?=\d)/gu, (c) => (",/:;".includes(c) ? c : "."))
+      // and any other punctuation set between two digits, with or without spaces
+      // around it, is a decimal point, by class and not by list (U+0387, U+2E31 ...).
+      // Only the non-ASCII marks: '@', '&', '%' and the rest of ASCII are not decimal
+      // points, and "wang123@163.com" is an email address, which this must not break.
+      .replace(/(?<=\d)(\s*)([\p{Po}])(\s*)(?=\d)/gu, (m, _a: string, c: string) =>
+        c.charCodeAt(0) < 0x80 ? m : ".",
+      )
   );
 }
 
 /** Text with anything that could say where someone is, or who, taken out. */
 export function scrub(text: string): string {
-  return ascii(text)
-    .replace(CONTROL, "")
-    .replace(INVISIBLE, "")
+  // Stripped before and after the normalisation: before, so that nothing sits
+  // between two digits and a mark when the marks are read as decimal points; after,
+  // since normalising can make combining marks (U+FF9E becomes U+3099), which would
+  // split a coordinate again.
+  return strip(ascii(strip(text)))
     .replace(URL_TEXT, (u) => urlToFile(u))
     .replace(EMAIL, "‹email›")
     .replace(ADDRESS, "‹address›")
@@ -241,7 +268,10 @@ export function scrub(text: string): string {
     // decimals before the labelled whole numbers: "lat 42 .3967" must lose its
     // fraction with it, not have "lat 42" taken and ".3967" left behind
     .replace(DECIMAL, "‹n›")
+    .replace(TILE_AXES, "‹n›")
+    .replace(AXIS_SPACED, "‹n›")
     .replace(LABELLED, "‹n›")
+    .replace(TILE_RUN, "‹n›")
     .replace(NUMBER_RUN, "‹n›")
     .replace(LONG_DIGITS, "‹n›");
 }

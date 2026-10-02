@@ -8,6 +8,7 @@
     // src/worker.ts rather than pulling in a types package for them.
     "lib": ["ES2022", "DOM"],
     "strict": true,
+    "resolveJsonModule": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
     "noFallthroughCasesInSwitch": true,

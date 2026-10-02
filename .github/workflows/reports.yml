@@ -99,6 +99,8 @@ jobs:
           # succeeded; on failure both are what the error says (or "no answer").
           work=$(mktemp -d)
           trap 'rm -rf "$work"' EXIT
+          # sets two variables for the caller: got (have:<name>, missing or error) and
+          # reply (what Cloudflare or curl said)
           cf() {
             : > "$work/body"; : > "$work/err"
             if curl -sS --retry 3 --retry-all-errors -H "$auth" -o "$work/body" "$@" 2> "$work/err"; then
@@ -108,7 +110,7 @@ jobs:
               got=error
               reply="$(cat "$work/body") $(cat "$work/err")"
             fi
-            [ -n "${reply// /}" ] || reply="no answer"
+            [ -n "${reply//[[:space:]]/}" ] || reply="no answer"
           }
           cf "$api"
           case "$got" in

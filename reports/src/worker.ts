@@ -125,6 +125,51 @@ function answer(status: number, headers: Record<string, string> = {}): Response 
   return new Response(null, { status, headers });
 }
 
+/** Takes one off the day's count of new issues, from what the count is now: other
+ * reports have taken slots since, and writing back the count read earlier would
+ * erase theirs. A KV failure here is swallowed: it mustn't replace GitHub's error. */
+async function giveBackSlot(env: Env, key: string): Promise<void> {
+  try {
+    const current = Number((await env.REPORTS.get(key)) ?? "1");
+    await env.REPORTS.put(key, String(Math.max(0, current - 1)), { expirationTtl: DAY_TTL_S });
+  } catch {
+    // the slot stays taken: a flood limit that errs on the safe side
+  }
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Forgets a record. KV allows one write to a key a second and the record was
+ * written a moment ago (the repeat path writes it before the comment), so a delete
+ * can be refused: it is tried again after a second, a few times. A record that
+ * can't be deleted is left, and said so: for an unlabelled issue it never expires. */
+async function forget(env: Env, key: string): Promise<void> {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      await env.REPORTS.delete(key);
+      return;
+    } catch (err) {
+      if (attempt === 3) {
+        console.error(`could not forget the record of a gone issue (${key}):`, err instanceof Error ? err.message : err);
+        return;
+      }
+      await sleep(1100);
+    }
+  }
+}
+
+/** An issue the Worker can no longer comment on because it is gone: deleted or
+ * transferred (410, and a 404 while the repository is still readable: a token that
+ * has lost access to the repository gets the same 404 and must not lose its
+ * records), or locked (403, "locked": GitHub's own words). Anything else, a rate
+ * limit or a bad token, is not the issue's fault. */
+async function issueIsGone(err: unknown, gh: GitHub): Promise<boolean> {
+  if (!(err instanceof GitHubError)) return false;
+  if (err.status === 410) return true;
+  if (err.status === 403) return /locked/i.test(err.message);
+  return err.status === 404 && (await gh.reachable());
+}
+
 /** File one checked, scrubbed report: a new issue, or a count on its own. */
 export async function file(r: Report, env: Env, gh: GitHub, now: Date): Promise<void> {
   const day = today(now);
@@ -166,10 +211,7 @@ export async function file(r: Report, env: Env, gh: GitHub, now: Date): Promise<
         // now, not by writing back what was read: other reports have taken slots
         // since, and restoring the old count would erase theirs.
         if (err instanceof GitHubError && err.status >= 400 && err.status < 500) {
-          await (async () => {
-            const current = Number((await env.REPORTS.get(newKey)) ?? "1");
-            await env.REPORTS.put(newKey, String(Math.max(0, current - 1)), { expirationTtl: DAY_TTL_S });
-          })().catch(() => undefined); // a KV failure here mustn't replace GitHub's error
+          await giveBackSlot(env, newKey);
         }
         throw err;
       }
@@ -181,7 +223,7 @@ export async function file(r: Report, env: Env, gh: GitHub, now: Date): Promise<
       await env.REPORTS.put(
         key,
         JSON.stringify({ issue: made.number, day, pending: 0, ...(made.labelled ? {} : { unlabelled: true }) } satisfies Seen),
-        ttlOf(made.labelled ? {} : { unlabelled: true }),
+        ttlOf({ unlabelled: !made.labelled }),
       );
       if (!made.labelled) {
         throw new Error(
@@ -212,13 +254,10 @@ export async function file(r: Report, env: Env, gh: GitHub, now: Date): Promise<
   try {
     await gh.comment(seen.issue, repeatComment(count, since, r));
   } catch (err) {
-    // An issue that is gone (deleted, transferred) or locked would be commented on
-    // for ever by a record that never expires, and the error never filed again. A
-    // 404 or 410 is the issue gone: the record goes with it, so the next report
-    // files it afresh.
-    if (err instanceof GitHubError && (err.status === 404 || err.status === 410)) {
-      await env.REPORTS.delete(key).catch(() => undefined);
-    }
+    // A record that never expires would otherwise comment on a gone issue for ever,
+    // and the error would never be filed again: the record goes with the issue, so
+    // the next report files it afresh.
+    if (await issueIsGone(err, gh)) await forget(env, key);
     throw err;
   }
 }
