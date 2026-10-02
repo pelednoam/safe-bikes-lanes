@@ -1,6 +1,7 @@
 // Frontend for the family bike router. Routing runs fully in the browser
 // (see router.ts); class colors mirror pipeline/config.py.
 import "./app/started.js";
+import { AVOIDABLE, loadSketchy, SKETCHY_KEY, store } from "./app/store.js";
 import { CLASS_MARKS, CONSTRUCTION_SWATCH, MARK_INK, NETWORK_MARK_LAYERS, POI_META, RIBBON_PATTERNS, TICK_INK_DARK, classSwatch, classWidth, constructionIcon, isTick } from "./app/classes.js";
 import { el, emptyFC } from "./app/dom.js";
 import { map, scaleBar } from "./app/map.js";
@@ -155,7 +156,6 @@ import { DeferredReload, ScreenLock, type WakeLockApi } from "./lifecycle.js";
 import { drawRideCard, drawTotalsCard, rideShareText, totalsShareText } from "./sharecard.js";
 import type {
   PoiFeature,
-  ProfileId,
   ProtectionClass,
   SafetyGrade,
   RouteOption,
@@ -189,22 +189,11 @@ const LOOP_LIMITS: Record<"imperial" | "metric", [min: number, max: number]> = {
 };
 
 const BBOX = COVERAGE;
-const SKETCHY_KEY = "sketchyMarks";
 const DARK_KEY = "darkMode";
 
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
-
-function loadSketchy(): [number, number][] {
-  try {
-    const raw = localStorage.getItem(SKETCHY_KEY);
-    if (raw === null) return [];
-    return JSON.parse(raw) as [number, number][];
-  } catch {
-    return [];
-  }
-}
 
 function saveSketchy(marks: [number, number][]): void {
   writeItem(SKETCHY_KEY, JSON.stringify(marks));
@@ -227,48 +216,22 @@ function saveSketchy(marks: [number, number][]): void {
  * search, off this thread, so the map and the buttons keep working while a
  * route is found. The page asks and awaits. */
 const routing = wrap<RoutingApi>(new Worker(new URL("./routing.worker.ts", import.meta.url)));
-/** True once some tiles are loaded and the graph is built over them. */
-let routerReady = false;
 /** The basemap's layers, injected under everything this app draws. A theme's
  * layers are added the first time that theme is shown — see applyBasemap. */
 const basemap = createBasemap(map, () => map.getStyle().layers.find((l) => l.id !== "ground")?.id);
-let start: Marker | null = null;
-let end: Marker | null = null;
-// Google-Maps-style flow: origin defaults to the current location; the next
-// map tap fills the destination unless the user is explicitly picking a start.
-let fromCurrent = true;
-let activeField: "start" | "end" = "end";
 let poiMarker: Marker | null = null;
 let shedMarker: Marker | null = null;
-let profileId: ProfileId = "young_kids";
-let preferFlat = false;
-let walkMaxM = 0;
-const AVOIDABLE: [ProtectionClass, string][] = [
-  ["lane", "painted lanes"],
-  ["buffered", "buffered lanes"],
-  ["sharrow", "sharrows"],
-  ["moderate_street", "moderate streets"],
-  ["busy_street", "busy streets"],
-  ["unpaved", "unpaved paths"],
-];
-// Read at module level, so it must not throw: with site data blocked, the old
-// unguarded read here stopped the whole app on load (see storage.ts).
-const storedAvoid = readJson<unknown>("avoidTypes", []);
-let avoidTypes = new Set<ProtectionClass>(
-  Array.isArray(storedAvoid) ? (storedAvoid as ProtectionClass[]) : [],
-);
-
 /** Every routing choice the rider has made, as the router takes them — the one
  * place a trip, a reroute, a detour or a search grade reads them from. The
  * reroute, the detour and the resume each spelled the call out for themselves
  * once, and all three left the walking limit off. */
 function routePrefs(): WirePrefs {
-  return { profileId, preferFlat, avoid: [...avoidTypes], walkMaxM };
+  return { profileId: store.profileId, preferFlat: store.preferFlat, avoid: [...store.avoidTypes], walkMaxM: store.walkMaxM };
 }
 
 function syncAvoidSummary(): void {
   el<HTMLElement>("avoid-summary").textContent =
-    avoidTypes.size === 0 ? "🛡 avoid lane types" : `🛡 avoiding ${avoidTypes.size} lane type${avoidTypes.size > 1 ? "s" : ""}`;
+    store.avoidTypes.size === 0 ? "🛡 avoid lane types" : `🛡 avoiding ${store.avoidTypes.size} lane type${store.avoidTypes.size > 1 ? "s" : ""}`;
 }
 let hoverPopup: Popup | null = null;
 /** The street card the hover popup shows (src/ui/SegmentCard.tsx). */
@@ -317,12 +280,7 @@ function onTap(layer: TapLayer, open: TapOpen, alsoSetsPoint = false): void {
 /** The route options on screen and the chosen one (trip.ts): a plan's answer
  * is published with the ticket it was planned under, and refused if stale. */
 const trip = new Trip();
-let shedMode = false;
 let shedCenter: [number, number] | null = null;
-let sketchyMarks: [number, number][] = loadSketchy();
-let pois: PoiFeature[] = [];
-let hazards: HazardReport[] = [];
-let mapillaryToken = "";
 interface ConstructionFC {
   features: {
     geometry: { type: string; coordinates: unknown };
@@ -358,11 +316,10 @@ let hazardPhoto: Blob | null = null;
 /** Routes avoid both quick sketchy marks and full hazard reports. */
 function applyAvoidPoints(): void {
   void routing.setSketchyMarks([
-    ...sketchyMarks,
-    ...hazards.map((h): [number, number] => [h.lon, h.lat]),
+    ...store.sketchyMarks,
+    ...store.hazards.map((h): [number, number] => [h.lon, h.lat]),
   ]);
 }
-let loopParams: { km: number; kind: string } | null = null;
 let pendingSelect: RouteOption["id"] | null = null;
 /** Who owns each output while planning waits (see planner.ts): the route
  * options (a trip, a round trip, a what-if), the reach map, and the letters on
@@ -459,7 +416,7 @@ async function ensureRouter(
   const marginCells = margin + Math.round(padM / 2200);
   const { ready } = await routing.ensure(points, marginCells, onProgress);
   if (!ready) return false;
-  routerReady = true;
+  store.routerReady = true;
   return true;
 }
 
@@ -566,7 +523,7 @@ let netRefreshTimer: number | undefined;
  * it covers, and takes the rider there. */
 function showCoverage(): void {
   const b = map.getBounds();
-  const out = !navActive && outsideCoverage({
+  const out = !store.navActive && outsideCoverage({
     west: b.getWest(),
     south: b.getSouth(),
     east: b.getEast(),
@@ -589,7 +546,7 @@ map.on("moveend", () => {
 void dataReady
   .then(() => loadJson<{ mapillary?: string }>("keys.json"))
   .then((keys) => {
-    mapillaryToken = readItem("mapillaryToken") ?? keys.mapillary ?? "";
+    store.mapillaryToken = readItem("mapillaryToken") ?? keys.mapillary ?? "";
   })
   .catch(() => undefined);
 
@@ -614,7 +571,7 @@ const poisData: Promise<{ features: PoiFeature[] } | null> = dataReady
   .catch(() => null);
 
 const poisReady: Promise<void> = poisData.then((fc) => {
-  if (fc) pois = fc.features;
+  if (fc) store.pois = fc.features;
 });
 
 function getSource(id: string): GeoJSONSource {
@@ -676,7 +633,7 @@ function currentPosition(): Promise<[number, number]> {
  * else is located on demand, the first time they ask for a route.
  */
 async function locateIfAlreadyAllowed(): Promise<void> {
-  if (!fromCurrent || start !== null || !navigator.geolocation) return;
+  if (!store.fromCurrent || store.start !== null || !navigator.geolocation) return;
   try {
     // In the app, Android's own answer: the WebView's Permissions API reports
     // its per-origin state, which is not the app's permission. The app no
@@ -691,8 +648,8 @@ async function locateIfAlreadyAllowed(): Promise<void> {
       if (status.state !== "granted") return;
     }
     const at = await currentPosition();
-    if (!fromCurrent || start !== null) return; // the rider got there first
-    start = makeMarker(at, "#2b83ba", "start");
+    if (!store.fromCurrent || store.start !== null) return; // the rider got there first
+    store.start = makeMarker(at, "#2b83ba", "start");
     syncOD();
     map.easeTo({ center: at, zoom: Math.max(map.getZoom(), 14), duration: 600 });
   } catch {
@@ -704,8 +661,8 @@ async function locateIfAlreadyAllowed(): Promise<void> {
 function syncOD(): void {
   const f = el<HTMLInputElement>("from-field");
   if (f.classList.contains("picking")) return;
-  f.classList.toggle("custom", !fromCurrent);
-  if (fromCurrent) {
+  f.classList.toggle("custom", !store.fromCurrent);
+  if (store.fromCurrent) {
     f.value = "";
     f.placeholder = "Your location";
   } else if (f.value === "") {
@@ -748,10 +705,10 @@ function rememberName(cache: Record<string, string>, key: string, name: string):
 /** Whether the router has a graph, waiting up to `ms` for one. */
 async function withRouter(ms: number): Promise<boolean> {
   const deadline = Date.now() + ms;
-  while (!routerReady && Date.now() < deadline) {
+  while (!store.routerReady && Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 120));
   }
-  return routerReady;
+  return store.routerReady;
 }
 
 async function reverseGeocode(lon: number, lat: number): Promise<string | null> {
@@ -806,7 +763,7 @@ async function reverseGeocode(lon: number, lat: number): Promise<string | null> 
 
 /** Name an end in its field, unless the rider typed something there. */
 function nameEnd(kind: "start" | "end"): void {
-  const marker = kind === "start" ? start : end;
+  const marker = kind === "start" ? store.start : store.end;
   if (!marker) return;
   const field = el<HTMLInputElement>(kind === "start" ? "from-field" : "search");
   if (field.value.trim() !== "" && !autoNamed[kind]) return;
@@ -818,7 +775,7 @@ function nameEnd(kind: "start" | "end"): void {
     .then((label) => {
       if (label === null) return;
       // the pin may have moved on (or gone) while we were asking
-      const now = kind === "start" ? start : end;
+      const now = kind === "start" ? store.start : store.end;
       if (!now) return;
       const p = now.getLngLat();
       if (revKey(p.lng, p.lat) !== asked) return;
@@ -845,14 +802,14 @@ function makeMarker(lngLat: LngLat | [number, number], color: string, label: str
 
 function setPoint(kind: "start" | "end", lngLat: LngLat | [number, number]): void {
   if (kind === "start") {
-    fromCurrent = false;
+    store.fromCurrent = false;
     el<HTMLInputElement>("from-field").classList.remove("picking");
-    if (start) start.setLngLat(lngLat);
-    else start = makeMarker(lngLat, "#2b83ba", "start");
+    if (store.start) store.start.setLngLat(lngLat);
+    else store.start = makeMarker(lngLat, "#2b83ba", "start");
     regradeVisible();
   } else {
-    if (end) end.setLngLat(lngLat);
-    else end = makeMarker(lngLat, "#d7191c", "end");
+    if (store.end) store.end.setLngLat(lngLat);
+    else store.end = makeMarker(lngLat, "#d7191c", "end");
   }
   syncOD();
   nameEnd(kind);
@@ -926,7 +883,7 @@ function beginPlan(): Ticket {
  * waited, the load-time locate or a tap on the map; that one stands, rather
  * than a second pin going down on top of it. */
 async function locateStart(ticket: Ticket, onFail: string): Promise<Marker | null> {
-  if (start !== null) return start;
+  if (store.start !== null) return store.start;
   showStage("Finding your location…");
   let here: [number, number];
   try {
@@ -940,11 +897,11 @@ async function locateStart(ticket: Ticket, onFail: string): Promise<Marker | nul
     return null;
   }
   if (ticket.stale()) return null;
-  if (start === null) {
-    start = makeMarker(here, "#2b83ba", "start");
+  if (store.start === null) {
+    store.start = makeMarker(here, "#2b83ba", "start");
     syncOD();
   }
-  return start;
+  return store.start;
 }
 
 async function requestRoute(): Promise<void> {
@@ -952,19 +909,19 @@ async function requestRoute(): Promise<void> {
   // filing a hazard or dragging a pin all end up here, and used to re-plan the
   // whole trip from the start pin — which navigation then switched to, telling
   // a rider a mile down the road to go back to the beginning.
-  if (navActive) {
+  if (store.navActive) {
     void replanRide();
     return;
   }
   const ticket = beginPlan();
-  if (!end) return;
+  if (!store.end) return;
   await manifestReady;
   if (ticket.stale()) return;
   const errBox = el<HTMLDivElement>("error");
   errBox.style.display = "none";
   const loading = el<HTMLDivElement>("loading");
-  if (!start) {
-    if (!fromCurrent) return;
+  if (!store.start) {
+    if (!store.fromCurrent) return;
     const located = await locateStart(
       ticket,
       "Couldn't find where you are. Type a start in \u201cYour location\u201d, tap 🗺 to " +
@@ -981,10 +938,10 @@ async function requestRoute(): Promise<void> {
   };
   await new Promise((resolve) => setTimeout(resolve, 0));
   // Reset, or a newer plan, while we yielded: both ends may be gone
-  if (ticket.stale() || !start || !end) return;
+  if (ticket.stale() || !store.start || !store.end) return;
   try {
-    const s = start.getLngLat();
-    const d = end.getLngLat();
+    const s = store.start.getLngLat();
+    const d = store.end.getLngLat();
     const a: [number, number] = [s.lng, s.lat];
     const b: [number, number] = [d.lng, d.lat];
     // load the tiles along the corridor, then route; a safe route can detour
@@ -1019,7 +976,7 @@ async function requestRoute(): Promise<void> {
     // an A-to-B trip replaces a round trip, and its stop
     poiMarker?.remove();
     poiMarker = null;
-    loopParams = null;
+    store.loopParams = null;
     const wanted = pendingSelect;
     pendingSelect = null;
     selectOption(wanted !== null && trip.options.some((o) => o.id === wanted) ? wanted : fallback.id);
@@ -1030,7 +987,7 @@ async function requestRoute(): Promise<void> {
     if (ticket.stale()) return;
     poiMarker?.remove();
     poiMarker = null;
-    loopParams = null;
+    store.loopParams = null;
     trip.clear();
     renderOptions();
     clearOptionChips();
@@ -1043,7 +1000,7 @@ async function requestRoute(): Promise<void> {
 }
 
 async function requestLoop(): Promise<void> {
-  if (navActive) return; // a new round trip is not something to swap in mid-ride
+  if (store.navActive) return; // a new round trip is not something to swap in mid-ride
   const ticket = beginPlan();
   await manifestReady;
   if (ticket.stale()) return;
@@ -1066,7 +1023,7 @@ async function requestLoop(): Promise<void> {
     return;
   }
   const targetM = toMeters(typed);
-  if (!start) {
+  if (!store.start) {
     // A round trip starts where you are, so find that rather than refusing.
     // Telling someone to "click the map to set a start point first" is asking
     // them to do work the app can do, in answer to a button they just pressed.
@@ -1084,7 +1041,7 @@ async function requestLoop(): Promise<void> {
   // because sometimes the point is just to be out. An empty list is different:
   // it means the stop they asked for has none near enough, which is an error.
   const candidates =
-    kind === "none" ? null : kind === "any" ? pois : pois.filter((p) => p.properties.kind === kind);
+    kind === "none" ? null : kind === "any" ? store.pois : store.pois.filter((p) => p.properties.kind === kind);
   const loading = el<HTMLDivElement>("loading");
   showStage("Loading the map around you…");
   const progress = (done: number, total: number): void => {
@@ -1093,9 +1050,9 @@ async function requestLoop(): Promise<void> {
     }
   };
   await new Promise((resolve) => setTimeout(resolve, 0));
-  if (ticket.stale() || !start) return;
+  if (ticket.stale() || !store.start) return;
   try {
-    const s = start.getLngLat();
+    const s = store.start.getLngLat();
     // a loop can range out to roughly half its length from the start
     const mapped = await ensureRouter([[s.lng, s.lat]], targetM / 2, 2, progress);
     if (ticket.stale()) return;
@@ -1105,17 +1062,17 @@ async function requestLoop(): Promise<void> {
       [s.lng, s.lat],
       targetM,
       candidates,
-      profileId,
-      preferFlat,
+      store.profileId,
+      store.preferFlat,
     );
     if (ticket.stale()) return;
-    end?.remove();
-    end = null;
+    store.end?.remove();
+    store.end = null;
     // a choice of loops, not a verdict: the runner-ups go in the same option
     // cards the point-to-point router uses, so picking between them is the
     // gesture the rider already knows
     if (!trip.publish(ticket, [option, ...more.map((m) => m.option)])) return;
-    loopParams = { km, kind };
+    store.loopParams = { km, kind };
     selectOption("loop");
     poiMarker?.remove();
     poiMarker = null;
@@ -1241,7 +1198,7 @@ function selectOption(id: RouteOption["id"]): void {
   // While navigating, guidance follows its own copy of the track. Swapping the
   // drawn route underneath (a mid-ride hazard mark re-plans) would show one
   // line while the voice read another, so keep them in step.
-  const wasNavigating = navActive;
+  const wasNavigating = store.navActive;
   if (!trip.select(id)) return;
   const chosen = trip.selected as RouteOption;
   getSource("route").setData(chosen.payload.geojson as GeoJSON.GeoJSON);
@@ -1267,7 +1224,7 @@ function selectOption(id: RouteOption["id"]): void {
         (trip.options.length > 1 ? ` ${trip.options.length} route options.` : ""),
     );
   });
-  if (wasNavigating && navActive) {
+  if (wasNavigating && store.navActive) {
     // keep the spoken guidance on the line that is actually drawn
     rebuildNavFromSelected();
   }
@@ -1358,7 +1315,7 @@ function showSummary(option: RouteOption): void {
     h(Cautions, {
       cautions: s.cautions,
       labels: CLASS_LABELS,
-      photos: mapillaryToken !== "",
+      photos: store.mapillaryToken !== "",
       onPhoto: (lon: number, lat: number) => void showMapillaryPreview(lon, lat),
     }),
     el<HTMLDivElement>("cautions"),
@@ -1397,7 +1354,7 @@ async function showMapillaryPreview(lon: number, lat: number): Promise<void> {
     const newest = await nearestMapillary(
       lon,
       lat,
-      mapillaryToken,
+      store.mapillaryToken,
       "id,thumb_1024_url,captured_at,computed_geometry",
     );
     const box = document.createElement("div");
@@ -1494,13 +1451,13 @@ function lngLatOf(m: Marker): [number, number] {
 function updateHash(): void {
   const hash = encodePlan({
     // "from where you are" stays that, for whoever opens the link
-    start: start === null ? null : fromCurrent ? "here" : lngLatOf(start),
-    end: loopParams === null && end !== null ? lngLatOf(end) : null,
-    loop: loopParams,
-    profile: profileId,
-    flat: preferFlat,
-    walkM: walkMaxM,
-    avoid: [...avoidTypes],
+    start: store.start === null ? null : store.fromCurrent ? "here" : lngLatOf(store.start),
+    end: store.loopParams === null && store.end !== null ? lngLatOf(store.end) : null,
+    loop: store.loopParams,
+    profile: store.profileId,
+    flat: store.preferFlat,
+    walkM: store.walkMaxM,
+    avoid: [...store.avoidTypes],
     option:
       trip.selectedId === "safest" || trip.selectedId === "balanced" || trip.selectedId === "direct"
         ? trip.selectedId
@@ -1516,25 +1473,25 @@ function parseHash(): void {
   lastHash = window.location.hash.replace(/^#/, "");
   const link = decodePlan(window.location.hash);
   if (link.profile !== null) {
-    profileId = link.profile;
+    store.profileId = link.profile;
     const radio = document.querySelector<HTMLInputElement>(
       `input[name=profile][value=${link.profile}]`,
     );
     if (radio) radio.checked = true;
   }
   if (link.flat) {
-    preferFlat = true;
+    store.preferFlat = true;
     el<HTMLInputElement>("prefer-flat").checked = true;
   }
   if (link.walkM !== null) {
-    walkMaxM = link.walkM;
-    el<HTMLSelectElement>("walk-max").value = String(walkMaxM);
+    store.walkMaxM = link.walkM;
+    el<HTMLSelectElement>("walk-max").value = String(store.walkMaxM);
   }
   if (link.avoid !== null) {
     const valid = new Set(AVOIDABLE.map(([c]) => c as string));
-    avoidTypes = new Set(link.avoid.filter((t) => valid.has(t)) as ProtectionClass[]);
+    store.avoidTypes = new Set(link.avoid.filter((t) => valid.has(t)) as ProtectionClass[]);
     for (const [cls] of AVOIDABLE) {
-      el<HTMLInputElement>(`avoid-${cls}`).checked = avoidTypes.has(cls);
+      el<HTMLInputElement>(`avoid-${cls}`).checked = store.avoidTypes.has(cls);
     }
     syncAvoidSummary();
   }
@@ -1547,10 +1504,10 @@ function parseHash(): void {
     );
     el<HTMLSelectElement>("loop-stop").value = link.loop.kind;
     if (s !== "here") {
-      fromCurrent = false;
+      store.fromCurrent = false;
       // one start pin, even if the load-time locate put one down already
-      if (start) start.setLngLat(s);
-      else start = makeMarker(s, "#2b83ba", "start");
+      if (store.start) store.start.setLngLat(s);
+      else store.start = makeMarker(s, "#2b83ba", "start");
     }
     syncOD();
     void requestLoop();
@@ -1567,7 +1524,7 @@ function parseHash(): void {
 // (see lastHash), or a ride is under way, which a link does not replace.
 window.addEventListener("hashchange", () => {
   const now = window.location.hash.replace(/^#/, "");
-  if (now === lastHash || navActive) return;
+  if (now === lastHash || store.navActive) return;
   resetPlan(false);
   parseHash();
 });
@@ -1622,12 +1579,12 @@ function recordRecentRoute(s: [number, number], e: [number, number]): void {
 }
 
 function planBetween(s: [number, number], e: [number, number]): void {
-  fromCurrent = false;
+  store.fromCurrent = false;
   syncOD();
-  if (start) start.setLngLat(s);
-  else start = makeMarker(s, "#2b83ba", "start");
-  if (end) end.setLngLat(e);
-  else end = makeMarker(e, "#d7191c", "end");
+  if (store.start) store.start.setLngLat(s);
+  else store.start = makeMarker(s, "#2b83ba", "start");
+  if (store.end) store.end.setLngLat(e);
+  else store.end = makeMarker(e, "#d7191c", "end");
   nameEnd("start");
   nameEnd("end");
   void requestRoute();
@@ -1698,7 +1655,7 @@ function localCandidates(): Candidate[] {
     const label = r.label.includes(" to ") ? (r.label.split(" to ").pop() ?? r.label) : r.label;
     out.push({ name: label, lon: r.e[0], lat: r.e[1], source: "recent", kind: "you rode here" });
   }
-  for (const poi of pois) {
+  for (const poi of store.pois) {
     const name = poi.properties.name;
     if (typeof name !== "string" || name === "") continue;
     const meta = POI_META[poi.properties.kind];
@@ -1749,7 +1706,7 @@ const SEARCH_ROWS = 5;
 
 /** Where distances are measured from: the start if set, else what you're looking at. */
 function searchOrigin(): [number, number] | undefined {
-  const from = start?.getLngLat();
+  const from = store.start?.getLngLat();
   if (from) return [from.lng, from.lat];
   const c = map.getCenter();
   return [c.lng, c.lat];
@@ -1792,7 +1749,7 @@ function regradeVisible(): void {
   // which lands here, and grading is up to five routing runs on the main thread
   // — a stall in guidance while someone is riding, to refresh a search list
   // that isn't even on screen.
-  if (navActive) return;
+  if (store.navActive) return;
   // the list is gone, or is another list: nothing to redo
   const listed = new Set(searchView.rows.map((r) => r.key));
   if (!gradedRows.every((r) => listed.has(r.key))) return;
@@ -1847,13 +1804,13 @@ async function gradeSearchResults(rows: { key: string; lngLat: [number, number] 
   // the old settings and the route computed with the new ones, so the answer was
   // filed under a description of itself that was already wrong.
   const snap = {
-    profileId,
-    preferFlat,
-    avoid: [...avoidTypes],
-    walkMaxM,
+    profileId: store.profileId,
+    preferFlat: store.preferFlat,
+    avoid: [...store.avoidTypes],
+    walkMaxM: store.walkMaxM,
     avoidRevision,
   };
-  const from = start?.getLngLat();
+  const from = store.start?.getLngLat();
   if (!from) {
     // no start yet: a grade needs somewhere to start from, and inventing one
     // would be a safety claim about a route nobody asked for
@@ -2057,7 +2014,7 @@ function chooseSearchRow(row: SearchRowView): void {
   const field = el<HTMLInputElement>(target === "start" ? "from-field" : "search");
   field.value = row.name;
   field.classList.remove("picking");
-  if (target === "start") activeField = "end";
+  if (target === "start") store.activeField = "end";
   syncOD();
   map.flyTo({ center: row.lngLat, zoom: 15 });
   clearSearchResults();
@@ -2106,9 +2063,9 @@ async function computeShed(): Promise<void> {
   el<HTMLSpanElement>("shed-budget-label").textContent = fmtDistTight(budgetKm * 1000);
   // the flood can reach out to the full budget radius from the center
   const mapped = await ensureRouter([center], budgetKm * 1000, 2);
-  if (ticket.stale() || !shedMode || !mapped) return;
-  const res = await routing.safeShed(center, budgetKm * 1000, profileId, preferFlat);
-  if (ticket.stale() || !shedMode) return;
+  if (ticket.stale() || !store.shedMode || !mapped) return;
+  const res = await routing.safeShed(center, budgetKm * 1000, store.profileId, store.preferFlat);
+  if (ticket.stale() || !store.shedMode) return;
   getSource("shed").setData(res.geojson as GeoJSON.GeoJSON);
   el<HTMLDivElement>("shed-info").textContent =
     `${fmtDist(res.reachableKm * 1000)} of streets reachable ` +
@@ -2122,7 +2079,7 @@ async function computeShed(): Promise<void> {
 
 function exitShedMode(): void {
   shedLane.cancel(); // a flood still loading tiles is for a map no longer open
-  shedMode = false;
+  store.shedMode = false;
   shedCenter = null;
   shedMarker?.remove();
   shedMarker = null;
@@ -2133,11 +2090,11 @@ function exitShedMode(): void {
 }
 
 el<HTMLButtonElement>("shed-btn").addEventListener("click", () => {
-  if (shedMode) {
+  if (store.shedMode) {
     exitShedMode();
     return;
   }
-  shedMode = true;
+  store.shedMode = true;
   el<HTMLButtonElement>("shed-btn").textContent = "✕ Exit reach map";
   el<HTMLDivElement>("shed-panel").style.display = "block";
   el<HTMLDivElement>("shed-info").textContent =
@@ -2153,14 +2110,14 @@ el<HTMLInputElement>("shed-budget").addEventListener("input", () => {
 // ---------------------------------------------------------------------------
 
 function renderSketchy(): void {
-  el<HTMLDivElement>("sketchy-section").style.display = sketchyMarks.length > 0 ? "block" : "none";
+  el<HTMLDivElement>("sketchy-section").style.display = store.sketchyMarks.length > 0 ? "block" : "none";
   render(
     h(SketchyList, {
-      marks: sketchyMarks,
+      marks: store.sketchyMarks,
       onFly: (mark) => map.flyTo({ center: mark, zoom: 16 }),
       onRemove: (i) => {
-        sketchyMarks = sketchyMarks.filter((_, j) => j !== i);
-        saveSketchy(sketchyMarks);
+        store.sketchyMarks = store.sketchyMarks.filter((_, j) => j !== i);
+        saveSketchy(store.sketchyMarks);
         applyAvoidPoints();
         renderSketchy();
         void requestRoute();
@@ -2861,20 +2818,20 @@ map.on("load", () => {
       const hint = window.matchMedia("(hover: none)").matches
         ? "press and hold to mark as sketchy"
         : "right-click to mark as sketchy";
-      segmentCard.show(props, [h("br", null), h("small", null, hint)], mapillaryToken !== "");
+      segmentCard.show(props, [h("br", null), h("small", null, hint)], store.mapillaryToken !== "");
       if (!hoverPopup) {
         hoverPopup = new maplibregl.Popup({ closeButton: true, closeOnClick: true });
         hoverPopup.addTo(map);
       }
       // the same element each time: the card is drawn into it, not replaced
       hoverPopup.setLngLat(e.lngLat).setDOMContent(segmentCard.el);
-      if (mapillaryToken !== "") {
+      if (store.mapillaryToken !== "") {
         window.clearTimeout(segPhotoTimer);
         const popup = hoverPopup;
         const { lng, lat } = e.lngLat;
         // debounce: only fetch once the cursor rests on a segment
         segPhotoTimer = window.setTimeout(() => {
-          segmentCard.loadPhoto(lng, lat, mapillaryToken, () => popup === hoverPopup);
+          segmentCard.loadPhoto(lng, lat, store.mapillaryToken, () => popup === hoverPopup);
         }, 300);
       }
     });
@@ -2986,7 +2943,7 @@ map.on("click", (e: MapMouseEvent) => {
 function onMapTap(e: MapMouseEvent): void {
   if (el<HTMLButtonElement>("nav-stops").getAttribute("aria-expanded") === "true") {
     stopsOpen(false);
-    if (navActive) return;
+    if (store.navActive) return;
   }
   // not "=== visible": a layer that never sets it is visible, and reads undefined
   const live = TAP_ORDER.filter(
@@ -3005,14 +2962,14 @@ function onMapTap(e: MapMouseEvent): void {
       if (!target.alsoSetsPoint) return;
     }
   }
-  if (shedMode) {
+  if (store.shedMode) {
     shedCenter = [e.lngLat.lng, e.lngLat.lat];
     void computeShed();
     return;
   }
   // Mid-ride the map is for looking at, not re-planning: a stray tap on the
   // handlebars used to silently swap the route out from under the rider.
-  if (navActive) {
+  if (store.navActive) {
     askDuringRide(
       "End this ride and route to the spot you tapped instead?",
       () => {
@@ -3024,9 +2981,9 @@ function onMapTap(e: MapMouseEvent): void {
     );
     return;
   }
-  if (activeField === "start") {
+  if (store.activeField === "start") {
     setPoint("start", e.lngLat);
-    activeField = "end";
+    store.activeField = "end";
   } else {
     setPoint("end", e.lngLat);
   }
@@ -3064,8 +3021,8 @@ function openSketchyPopup(lngLat: [number, number]): void {
     if (sketchyPopup === popup) sketchyPopup = null;
   });
   btn.addEventListener("click", () => {
-    sketchyMarks.push(lngLat);
-    saveSketchy(sketchyMarks);
+    store.sketchyMarks.push(lngLat);
+    saveSketchy(store.sketchyMarks);
     applyAvoidPoints();
     renderSketchy();
     popup.remove();
@@ -3220,8 +3177,8 @@ function revealSheet(): void {
   const wasPeek = currentSheet() === "peek";
   if (wasPeek) setSheet("half");
   if (!sheetLayout.matches) return;
-  const s = start?.getLngLat();
-  const e = end?.getLngLat();
+  const s = store.start?.getLngLat();
+  const e = store.end?.getLngLat();
   const trip =
     s && e ? `${s.lng.toFixed(5)},${s.lat.toFixed(5)}>${e.lng.toFixed(5)},${e.lat.toFixed(5)}` : "";
   if (!wasPeek && trip === revealedTrip) return;
@@ -3365,10 +3322,10 @@ function leaveSearchMode(chose: boolean): void {
 
 el<HTMLButtonElement>("from-locate").addEventListener("click", () => {
   // back to riding from wherever you are
-  start?.remove();
-  start = null;
-  fromCurrent = true;
-  activeField = "end";
+  store.start?.remove();
+  store.start = null;
+  store.fromCurrent = true;
+  store.activeField = "end";
   const f = el<HTMLInputElement>("from-field");
   f.classList.remove("picking");
   f.value = "";
@@ -3379,7 +3336,7 @@ el<HTMLButtonElement>("from-locate").addEventListener("click", () => {
 
 el<HTMLButtonElement>("from-pick").addEventListener("click", () => {
   // the next map tap sets the start
-  activeField = "start";
+  store.activeField = "start";
   const f = el<HTMLInputElement>("from-field");
   f.classList.add("picking");
   f.value = "";
@@ -3412,7 +3369,7 @@ el<HTMLInputElement>("backup-file").addEventListener("change", () => {
     .then((text) => {
       const n = importBackup(JSON.parse(text));
       renderPlacesAndRecent();
-      sketchyMarks = loadSketchy();
+      store.sketchyMarks = loadSketchy();
       applyAvoidPoints();
       renderSketchy();
       el<HTMLDivElement>("backup-note").textContent =
@@ -3436,15 +3393,15 @@ function resetPlan(clearLink = true): void {
   // put back over the empty map
   cancelPanelPaint?.();
   el<HTMLDivElement>("loading").style.display = "none";
-  start?.remove();
-  end?.remove();
+  store.start?.remove();
+  store.end?.remove();
   poiMarker?.remove();
-  start = end = poiMarker = null;
-  loopParams = null;
+  store.start = store.end = poiMarker = null;
+  store.loopParams = null;
   endWhatIf();
   clearOptionChips();
-  fromCurrent = true;
-  activeField = "end";
+  store.fromCurrent = true;
+  store.activeField = "end";
   el<HTMLInputElement>("from-field").classList.remove("picking");
   el<HTMLInputElement>("from-field").value = "";
   clearSearchResults();
@@ -3463,16 +3420,16 @@ function resetPlan(clearLink = true): void {
 el<HTMLButtonElement>("reset").addEventListener("click", () => resetPlan());
 
 el<HTMLButtonElement>("swap").addEventListener("click", () => {
-  if (!start || !end) return;
-  const s = start.getLngLat();
-  start.setLngLat(end.getLngLat());
-  end.setLngLat(s);
+  if (!store.start || !store.end) return;
+  const s = store.start.getLngLat();
+  store.start.setLngLat(store.end.getLngLat());
+  store.end.setLngLat(s);
   // the names swap with the pins, or the fields describe the trip backwards
   const from = el<HTMLInputElement>("from-field");
   const to = el<HTMLInputElement>("search");
   [from.value, to.value] = [to.value, from.value];
   [autoNamed.start, autoNamed.end] = [autoNamed.end, autoNamed.start];
-  fromCurrent = false;
+  store.fromCurrent = false;
   syncOD();
   void requestRoute();
 });
@@ -3516,29 +3473,29 @@ for (const [checkboxId, layers] of [
 }
 
 el<HTMLInputElement>("prefer-flat").addEventListener("change", (e: Event) => {
-  preferFlat = (e.target as HTMLInputElement).checked;
+  store.preferFlat = (e.target as HTMLInputElement).checked;
   void requestRoute();
   void computeShed();
   regradeVisible();
 });
 
 el<HTMLSelectElement>("walk-max").addEventListener("change", (e: Event) => {
-  walkMaxM = Number((e.target as HTMLSelectElement).value);
-  writeItem("walkMaxM", String(walkMaxM));
+  store.walkMaxM = Number((e.target as HTMLSelectElement).value);
+  writeItem("walkMaxM", String(store.walkMaxM));
   void requestRoute();
   regradeVisible();
 });
 // restore the persisted walking budget
-walkMaxM = Number(readItem("walkMaxM") ?? "0") || 0;
-el<HTMLSelectElement>("walk-max").value = String(walkMaxM);
+store.walkMaxM = Number(readItem("walkMaxM") ?? "0") || 0;
+el<HTMLSelectElement>("walk-max").value = String(store.walkMaxM);
 
 for (const [cls] of AVOIDABLE) {
   const box = el<HTMLInputElement>(`avoid-${cls}`);
-  box.checked = avoidTypes.has(cls);
+  box.checked = store.avoidTypes.has(cls);
   box.addEventListener("change", () => {
-    if (box.checked) avoidTypes.add(cls);
-    else avoidTypes.delete(cls);
-    writeItem("avoidTypes", JSON.stringify([...avoidTypes]));
+    if (box.checked) store.avoidTypes.add(cls);
+    else store.avoidTypes.delete(cls);
+    writeItem("avoidTypes", JSON.stringify([...store.avoidTypes]));
     syncAvoidSummary();
     // Write the permalink NOW, not just when the reroute finishes: the URL is
     // parsed on load and overrides the stored preferences, so a reload (or a
@@ -3603,7 +3560,7 @@ for (const radio of document.querySelectorAll<HTMLInputElement>("input[name=prof
   radio.addEventListener("change", () => {
     const v = radio.value;
     if (radio.checked && (v === "young_kids" || v === "older_kids" || v === "solo")) {
-      profileId = v;
+      store.profileId = v;
       void requestRoute();
       void computeShed();
       // the letters were the safest route for a different rider; a cache key
@@ -3785,11 +3742,11 @@ document.addEventListener("keydown", (e: KeyboardEvent) => {
     ) {
       return; // dialogs handle it
     }
-    if (shedMode) exitShedMode();
+    if (store.shedMode) exitShedMode();
     // never wipe the trip out from under an active ride: reset() cleared the
     // route, markers and permalink while navigation kept talking, leaving the
     // rider following a voice over a blank map with no way to recover it
-    else if (!navActive) el<HTMLButtonElement>("reset").click();
+    else if (!store.navActive) el<HTMLButtonElement>("reset").click();
   }
 });
 
@@ -3868,13 +3825,13 @@ const hazardPhotos = new PhotoUrls(getHazardPhoto);
 
 async function refreshHazards(): Promise<void> {
   try {
-    hazards = await listHazards();
+    store.hazards = await listHazards();
   } catch {
-    hazards = [];
+    store.hazards = [];
   }
   applyAvoidPoints();
-  hazardPhotos.prune(new Set(hazards.filter((h) => h.hasPhoto).map((h) => h.id)));
-  const features = hazards.map((h) => ({
+  hazardPhotos.prune(new Set(store.hazards.filter((h) => h.hasPhoto).map((h) => h.id)));
+  const features = store.hazards.map((h) => ({
     type: "Feature",
     geometry: { type: "Point", coordinates: [h.lon, h.lat] },
     properties: { id: h.id, category: h.category, note: h.note, t: h.t, hasPhoto: h.hasPhoto },
@@ -3988,7 +3945,7 @@ function hideClassify(): void {
 }
 
 async function quickReport(): Promise<void> {
-  if (!navActive) {
+  if (!store.navActive) {
     if (navLastPos) openHazardDialog(navLastPos[0], navLastPos[1]);
     return;
   }
@@ -3999,7 +3956,7 @@ async function quickReport(): Promise<void> {
     return;
   }
   // tapping again because nothing visible happened used to file a second report
-  const near = hazards.find((hz) => distM([hz.lon, hz.lat], at) < 20);
+  const near = store.hazards.find((hz) => distM([hz.lon, hz.lat], at) < 20);
   const id = near?.id ?? `${Date.now()}`;
   if (!near) {
     try {
@@ -4161,7 +4118,7 @@ el<HTMLDialogElement>("hazard").addEventListener("click", (e: MouseEvent) => {
 
 el<HTMLButtonElement>("mapillary-save").addEventListener("click", () => {
   const token = el<HTMLInputElement>("mapillary-token").value.trim();
-  mapillaryToken = token;
+  store.mapillaryToken = token;
   if (token === "") removeItem("mapillaryToken");
   else writeItem("mapillaryToken", token);
   clearPhotoCache(); // the shared lookup holds misses fetched with the old token
@@ -4170,7 +4127,7 @@ el<HTMLButtonElement>("mapillary-save").addEventListener("click", () => {
 });
 
 function openAbout(): void {
-  el<HTMLInputElement>("mapillary-token").value = mapillaryToken;
+  el<HTMLInputElement>("mapillary-token").value = store.mapillaryToken;
   fillAbout();
   el<HTMLDialogElement>("about").showModal();
 }
@@ -4285,7 +4242,6 @@ const NAV_PITCH = 50;
  * and you have to keep hunting for the recenter button. */
 const REFOLLOW_MS = 10_000;
 
-let navActive = false;
 let navWatchId: number | null = null;
 let navMuted = false;
 let navFollowing = true;
@@ -4303,7 +4259,7 @@ document.addEventListener("visibilitychange", () => {
 });
 /** A new build waits for the ride to end before the page reloads into it. */
 const swReload = new DeferredReload(
-  () => navActive,
+  () => store.navActive,
   () => location.reload(),
 );
 /** How long after a ride ends a held-back reload waits: long enough for the
@@ -4337,7 +4293,7 @@ let recorder: RideRecorder | null = null;
 let navBgWatcherId: string | null = null;
 
 function finishAndSaveRide(): void {
-  const ride = recorder?.finish(profileId);
+  const ride = recorder?.finish(store.profileId);
   recorder = null;
   stashInProgress(null);
   if (!ride) return;
@@ -4468,7 +4424,7 @@ function noteVoiceUnavailable(): void {
   voiceWarned = true;
   const why = lastNativeSpeechError();
   console.warn("voice unavailable", why ?? "no voices");
-  if (!navActive) return;
+  if (!store.navActive) return;
   // silence is the worst failure a spoken guide can have: a rider who thinks
   // the voice is coming stops watching the screen
   showRideAlert("🔇 no voice on this phone — watch the screen for turns", "gps");
@@ -4503,8 +4459,8 @@ const rideEngine = new RideEngine({
   dest: () => navDest,
   atStop: () => navOriginalDest !== null,
   myWay: () => navMyWay,
-  paceKmh: () => PROFILES[profileId].paceKmh,
-  solo: () => profileId === "solo",
+  paceKmh: () => PROFILES[store.profileId].paceKmh,
+  solo: () => store.profileId === "solo",
 });
 
 /** Route options from where the rider is to where the ride is going: back onto
@@ -4539,7 +4495,7 @@ async function rideOptionsFrom(
  * for, is dropped: guidance switching to a route for a wrong turn already put
  * right is worse than none. */
 const rideLane = new Lane();
-const rideStale = (ticket: Ticket): boolean => ticket.stale() || !navActive;
+const rideStale = (ticket: Ticket): boolean => ticket.stale() || !store.navActive;
 /** A ride's ticket as the trip takes it: stale too once the ride is over. */
 const rideTicket = (ticket: Ticket): Ticket => ({ stale: () => rideStale(ticket) });
 /** A reroute is also dropped when the rider rejoins before it arrives. */
@@ -4548,12 +4504,12 @@ const rerouteLane = new Lane();
 /** Re-plan the ride from where the rider is, keeping where it is going: after
  * something changed what the router must avoid. */
 async function replanRide(): Promise<void> {
-  if (!routerReady || !navLastPos) return;
+  if (!store.routerReady || !navLastPos) return;
   // The destination pin may be why: dragged mid-ride, it used to re-plan to
   // where the ride had been going, with the pin and the guidance apart. On a
   // detour the pin is still the ride's destination, the one Resume returns to;
   // a round trip's pin is its start, which it already ends at.
-  const pin = end?.getLngLat();
+  const pin = store.end?.getLngLat();
   if (pin !== undefined && navLoop === null) {
     if (navOriginalDest !== null) navOriginalDest = [pin.lng, pin.lat];
     else navDest = [pin.lng, pin.lat];
@@ -4685,7 +4641,7 @@ async function navStartLocation(ask: boolean): Promise<void> {
   try {
     if (isNativeApp()) {
       const state = await rideLocationState(ask);
-      if (!navActive) return;
+      if (!store.navActive) return;
       const advice = locationAdvice(state);
       if (state === "approximate" || state === "denied") {
         if (advice !== null) showLocationAdvice(advice.text, advice.fix);
@@ -4696,7 +4652,7 @@ async function navStartLocation(ask: boolean): Promise<void> {
         if (line !== null && el<HTMLDivElement>("nav-alert").textContent === `🔔 ${line}`) {
           hideRideAlert();
         }
-        if (!navActive) return;
+        if (!store.navActive) return;
       }
       // "off" still starts the watcher: its fixes arrive once location is on
       if (advice !== null) showLocationAdvice(advice.text, advice.fix);
@@ -4709,7 +4665,7 @@ async function navStartLocation(ask: boolean): Promise<void> {
         showLocationAdvice,
         { requestPermissions: state === "unknown" },
       );
-      if (!navActive) {
+      if (!store.navActive) {
         if (id !== null) void stopBackgroundWatcher(id);
         return;
       }
@@ -4728,7 +4684,7 @@ async function navStartLocation(ask: boolean): Promise<void> {
 
 // Back from Settings with location now allowed (or switched on): pick the ride up.
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && navActive && isNativeApp()) {
+  if (document.visibilityState === "visible" && store.navActive && isNativeApp()) {
     void navStartLocation(false);
   }
 });
@@ -4772,7 +4728,7 @@ let navDestLabel: string | null = null;
  * the recipient of a 42 km route was left looking at the default view with 2% of
  * it on screen. Skipped while navigating, where the camera belongs to the rider. */
 function frameRoute(option: RouteOption): void {
-  if (navActive) return;
+  if (store.navActive) return;
   const coords = option.payload.geojson.features.flatMap((f) =>
     f.geometry.type === "LineString" ? (f.geometry.coordinates as [number, number][]) : [],
   );
@@ -4812,7 +4768,7 @@ function frameRoute(option: RouteOption): void {
  * degrees at them while the app already knew the street name. */
 async function hereLabel(lon: number, lat: number): Promise<string> {
   const street = rideView.headline.street.trim();
-  if (navActive && street && !/^[-–]$/.test(street) && !/^⚠/.test(street)) {
+  if (store.navActive && street && !/^[-–]$/.test(street) && !/^⚠/.test(street)) {
     return `on ${street}`;
   }
   const cls = await routing.edgeClassAt(lon, lat);
@@ -4836,7 +4792,7 @@ function angleDelta(a: number, b: number): number {
  * teleporting the dot while a queue of 900 ms camera eases fight each other. */
 function navAnimate(): void {
   navRaf = null;
-  if (!navActive) return;
+  if (!store.navActive) return;
   if (navPosTarget) {
     const cur = navPosShown ?? navPosTarget;
     const k = 0.18; // keeps up with a fix/sec without looking twitchy
@@ -4888,14 +4844,14 @@ function navStopAnimation(): void {
 }
 
 function navOnFix(fix: NativeFix): void {
-  if (!navActive) return;
+  if (!store.navActive) return;
   const step = rideEngine.onFix(fix, Date.now());
   if (step === null) return;
   navLastPos = [fix.lon, fix.lat];
   // keep the ride recoverable: Back, a reload or a crash used to lose it all
   if (recorder && ++navFixesSinceStash >= STASH_EVERY_FIXES) {
     navFixesSinceStash = 0;
-    stashInProgress(recorder.finish(profileId));
+    stashInProgress(recorder.finish(store.profileId));
   }
   recorder?.addPoint(Date.now(), fix.lon, fix.lat, step.cls, step.alongM);
   navPosTarget = step.dot;
@@ -5008,7 +4964,7 @@ async function startNav(): Promise<void> {
   navLoop = chosen !== undefined && chosen.id.startsWith("loop") ? chosen : null;
   rideEngine.start();
   if (!rebuildNavFromSelected()) return;
-  const destLngLat = end?.getLngLat() ?? start?.getLngLat();
+  const destLngLat = store.end?.getLngLat() ?? store.start?.getLngLat();
   if (!destLngLat) return;
   navDest = [destLngLat.lng, destLngLat.lat];
   // A round trip has no destination field of its own; the one on screen still
@@ -5019,7 +4975,7 @@ async function startNav(): Promise<void> {
       : el<HTMLInputElement>("search").value.trim().split(",")[0] || null;
   navOriginalDest = null;
   el<HTMLButtonElement>("nav-resume").style.display = "none";
-  navActive = true;
+  store.navActive = true;
   const ride = ++rideGen;
   navFollowing = true;
   navUserZoom = false;
@@ -5046,18 +5002,18 @@ async function startNav(): Promise<void> {
   // permission dialog is up), and another begin. Starting a GPS watch or
   // pushing a Back guard for a ride already over left the phone tracking, and
   // a Back that did nothing; doing it inside the next ride pushed two.
-  if (!navActive || ride !== rideGen) return;
+  if (!store.navActive || ride !== rideGen) return;
   // Location last, permission first: on Android 14+ the background watcher's
   // foreground service cannot start without it (see navStartLocation).
   await navStartLocation(true);
-  if (!navActive || ride !== rideGen) return;
+  if (!store.navActive || ride !== rideGen) return;
   // absorb one Back press: on Android the hardware button is a thumb-brush from
   // ending the ride, and there was no guard of any kind
   history.pushState({ navigating: true }, "");
 }
 
 function exitNav(): void {
-  navActive = false;
+  store.navActive = false;
   rideLane.cancel();
   // the stops menu belongs to the ride; left open it floated over the planner
   stopsOpen(false);
@@ -5106,16 +5062,16 @@ function exitNav(): void {
 /** Mid-ride detour: reroute to the nearest kid stop of a kind, remembering
  * the original destination for the resume button. */
 async function detourToNearest(kind: "water" | "restroom" | "playground"): Promise<void> {
-  if (!navActive || !routerReady || !navLastPos) return;
+  if (!store.navActive || !store.routerReady || !navLastPos) return;
   const from = navLastPos;
-  const candidates = pois.filter((p) => p.properties.kind === kind);
+  const candidates = store.pois.filter((p) => p.properties.kind === kind);
   const ticket = rideLane.begin();
   try {
     const idx = await routing.nearestReachable(
       from,
       candidates.map((p) => p.geometry.coordinates),
-      profileId,
-      preferFlat,
+      store.profileId,
+      store.preferFlat,
     );
     if (rideStale(ticket)) return;
     const poi = idx !== null ? candidates[idx] : undefined;
@@ -5163,7 +5119,7 @@ el<HTMLButtonElement>("nav-resume").addEventListener("click", () => {
 /** Back to the ride from a detour: the destination, or what is left of the
  * loop. The detour stays what is being followed until the way back exists. */
 async function resumeRide(): Promise<void> {
-  if (!routerReady || !navLastPos || !navOriginalDest) return;
+  if (!store.routerReady || !navLastPos || !navOriginalDest) return;
   const original = navOriginalDest;
   const ticket = rideLane.begin();
   try {
@@ -5207,10 +5163,10 @@ el<HTMLButtonElement>("nav-hazard").addEventListener("click", () => {
   // Tapping again because nothing visible happened wrote a duplicate mark, and
   // marks can only be removed from the planning panel, which is hidden while
   // riding. Collapse repeats within a few metres.
-  const already = sketchyMarks.some((m) => distM(m, navLastPos as [number, number]) < 15);
+  const already = store.sketchyMarks.some((m) => distM(m, navLastPos as [number, number]) < 15);
   if (!already) {
-    sketchyMarks.push(navLastPos);
-    saveSketchy(sketchyMarks);
+    store.sketchyMarks.push(navLastPos);
+    saveSketchy(store.sketchyMarks);
     applyAvoidPoints();
     renderSketchy();
   }
@@ -5360,7 +5316,7 @@ el<HTMLButtonElement>("nav-recenter").addEventListener("click", () => {
 /** Set while exitNav steps back over the ride's history entry. */
 let navHistoryUnwinding = false;
 window.addEventListener("popstate", () => {
-  if (!navActive) {
+  if (!store.navActive) {
     if (navHistoryUnwinding) {
       navHistoryUnwinding = false;
       // back on the entry from before the ride, whose link may be older than
@@ -5399,7 +5355,7 @@ onAndroidBack(() => {
     closeAsk(); // Back answers "no"
     return;
   }
-  if (navActive) {
+  if (store.navActive) {
     askDuringRide("End the ride?", exitNav);
     return;
   }
@@ -5408,7 +5364,7 @@ onAndroidBack(() => {
     leaveSearchMode(false);
     return;
   }
-  if (shedMode) {
+  if (store.shedMode) {
     exitShedMode();
     return;
   }
@@ -5416,7 +5372,7 @@ onAndroidBack(() => {
 });
 
 map.on("dragstart", () => {
-  if (navActive) {
+  if (store.navActive) {
     navFollowing = false;
     setRecentreNeeded(true);
     scheduleRefollow();
@@ -5426,7 +5382,7 @@ map.on("dragstart", () => {
 // further ahead — keep their zoom (the old code re-applied its own every fix,
 // so zooming out snapped back within a second) until they tap recenter.
 map.on("zoomstart", (e: { originalEvent?: unknown }) => {
-  if (navActive && e.originalEvent) {
+  if (store.navActive && e.originalEvent) {
     navUserZoom = true;
     setRecentreNeeded(true);
   }
@@ -5436,7 +5392,7 @@ map.on("zoomstart", (e: { originalEvent?: unknown }) => {
 // the gesture. Back off the moment they touch the map, resume shortly after.
 let navInteractTimer: number | undefined;
 function pauseFollowForInput(): void {
-  if (!navActive) return;
+  if (!store.navActive) return;
   navInteracting = true;
   scheduleRefollow();
   window.clearTimeout(navInteractTimer);
@@ -5448,7 +5404,7 @@ function pauseFollowForInput(): void {
 /** The rider took the zoom: keep it until they tap recenter (or until the
  * camera takes itself back — see scheduleRefollow). */
 function takeZoomControl(): void {
-  if (!navActive) return;
+  if (!store.navActive) return;
   navUserZoom = true;
   setRecentreNeeded(true);
   scheduleRefollow();
@@ -5458,7 +5414,7 @@ function takeZoomControl(): void {
 function scheduleRefollow(): void {
   window.clearTimeout(navRefollowTimer);
   navRefollowTimer = window.setTimeout(() => {
-    if (!navActive) return;
+    if (!store.navActive) return;
     navFollowing = true;
     navUserZoom = false;
     setRecentreNeeded(false);
@@ -5527,7 +5483,7 @@ function applyBasemap(): void {
   const netOn = el<HTMLInputElement>("show-net").checked;
   // while riding, the map is turned to the heading: drop the basemap's baked
   // labels and draw our own, which stay the right way up
-  const plain = navActive;
+  const plain = store.navActive;
   const setVis = (): void => {
     // Skip layers that aren't added yet: this runs during map load too, from
     // whichever data callback lands first, and setLayoutProperty throws on an
@@ -6041,10 +5997,10 @@ async function runWhatIf(pid: string): Promise<void> {
     out.textContent = "couldn't find that project's shape";
     return;
   }
-  if (!start || !end) {
+  if (!store.start || !store.end) {
     // no trip planned: answer with reach instead, which needs only one point
-    const from = start ?? end;
-    if (!routerReady || !from) {
+    const from = store.start ?? store.end;
+    if (!store.routerReady || !from) {
       out.textContent = "plan a trip, or set a start, and ask again";
       return;
     }
@@ -6052,8 +6008,8 @@ async function runWhatIf(pid: string): Promise<void> {
     const budget = 2500;
     const ticket = whatIfLane.begin();
     const center: [number, number] = [at.lng, at.lat];
-    const before = await routing.safeShed(center, budget, profileId, preferFlat);
-    const { result: after } = await routing.safeShedWith(points, center, budget, profileId, preferFlat);
+    const before = await routing.safeShed(center, budget, store.profileId, store.preferFlat);
+    const { result: after } = await routing.safeShedWith(points, center, budget, store.profileId, store.preferFlat);
     if (ticket.stale()) return;
     whatIfPid = pid;
     el<HTMLButtonElement>("whatif-clear").style.display = "";
@@ -6077,8 +6033,8 @@ async function runWhatIf(pid: string): Promise<void> {
     return;
   }
   const was = chosen.payload.summary;
-  const s = start.getLngLat();
-  const d = end.getLngLat();
+  const s = store.start.getLngLat();
+  const d = store.end.getLngLat();
   const a: [number, number] = [s.lng, s.lat];
   const b: [number, number] = [d.lng, d.lat];
   const ticket = beginPlan();
