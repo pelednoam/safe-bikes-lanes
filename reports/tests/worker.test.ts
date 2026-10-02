@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { GitHubError, type GitHub } from "../src/github.js";
 import { fingerprint, type Report } from "../src/report.js";
-import { capOf, type Ctx, type Env, file, handle, readLimited, type Seen, type Store } from "../src/worker.js";
+import { capOf, type Ctx, type Env, file, handle, readLimited, type Seen, type Store, timing } from "../src/worker.js";
 import { sample } from "./sample.js";
 
 const SITE = "https://pelednoam.github.io";
@@ -359,27 +359,53 @@ describe("filing", () => {
   });
 
   it("tries again to forget a record when KV refuses the delete, which it does within a second of a write", async () => {
-    vi.useFakeTimers();
+    const e = env();
+    const store = e.REPORTS as ReturnType<typeof memoryStore>;
+    await file(sample(), e, fakeGitHub(), day1);
+    const realDelete = store.delete.bind(store);
+    let refusals = 2;
+    let deletes = 0;
+    store.delete = (k) => {
+      deletes++;
+      return refusals-- > 0 ? Promise.reject(new Error("429 Too Many Requests")) : realDelete(k);
+    };
+    const gone = {
+      ...fakeGitHub(),
+      comment: () => Promise.reject(new GitHubError("GitHub comment: 410 Gone", 410)),
+    };
+    const was = timing.forgetRetryMs;
+    timing.forgetRetryMs = 1; // the real wait is a second; the retries are what is tested
     try {
-      const e = env();
-      const store = e.REPORTS as ReturnType<typeof memoryStore>;
-      await file(sample(), e, fakeGitHub(), day1);
-      const realDelete = store.delete.bind(store);
-      let refusals = 2;
-      store.delete = (k) => (refusals-- > 0 ? Promise.reject(new Error("429 Too Many Requests")) : realDelete(k));
-      const gone = {
-        ...fakeGitHub(),
-        comment: () => Promise.reject(new GitHubError("GitHub comment: 410 Gone", 410)),
-      };
-      const done = file(sample(), e, gone, day2).catch((err: unknown) => err);
-      // the clock moves in steps, so that each second's wait is reached before it is
-      // moved past (the Worker awaits a digest and the comment before the first one)
-      for (let i = 0; i < 6; i++) await vi.advanceTimersByTimeAsync(1200);
-      expect(await done).toBeInstanceOf(GitHubError);
-      expect(await seen(e, sample())).toBeNull();
+      await expect(file(sample(), e, gone, day2)).rejects.toBeInstanceOf(GitHubError);
     } finally {
-      vi.useRealTimers();
+      timing.forgetRetryMs = was;
     }
+    expect(deletes).toBe(3);
+    expect(await seen(e, sample())).toBeNull();
+  });
+
+  it("gives up after three tries to forget a record, and still reports GitHub's error", async () => {
+    const e = env();
+    const store = e.REPORTS as ReturnType<typeof memoryStore>;
+    await file(sample(), e, fakeGitHub(), day1);
+    let deletes = 0;
+    store.delete = () => {
+      deletes++;
+      return Promise.reject(new Error("429 Too Many Requests"));
+    };
+    const gone = {
+      ...fakeGitHub(),
+      comment: () => Promise.reject(new GitHubError("GitHub comment: 410 Gone", 410)),
+    };
+    const was = timing.forgetRetryMs;
+    timing.forgetRetryMs = 1;
+    try {
+      await expect(file(sample(), e, gone, day2)).rejects.toThrow("410 Gone");
+    } finally {
+      timing.forgetRetryMs = was;
+    }
+    expect(deletes).toBe(3);
+    expect((await seen(e, sample()))?.issue).toBe(7); // couldn't be forgotten, and says so in the log
   });
 
   it("keeps the record when a comment fails for any other reason", async () => {

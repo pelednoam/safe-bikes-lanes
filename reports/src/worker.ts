@@ -137,6 +137,8 @@ async function giveBackSlot(env: Env, key: string): Promise<void> {
   }
 }
 
+/** The one timing the Worker has, as a value a test can shorten. */
+export const timing = { forgetRetryMs: 1100 };
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Forgets a record. KV allows one write to a key a second and the record was
@@ -153,7 +155,7 @@ async function forget(env: Env, key: string): Promise<void> {
         console.error(`could not forget the record of a gone issue (${key}):`, err instanceof Error ? err.message : err);
         return;
       }
-      await sleep(1100);
+      await sleep(timing.forgetRetryMs);
     }
   }
 }
