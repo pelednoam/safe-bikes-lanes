@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { hook } from "../src/app/hooks.js";
+import { hook } from "../src/hooks.js";
 
 describe("a hook", () => {
   it("calls what was set, with its arguments, and returns its answer", () => {

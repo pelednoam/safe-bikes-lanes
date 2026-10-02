@@ -4,6 +4,7 @@ import "./app/started.js";
 import { AVOIDABLE, loadSketchy, SKETCHY_KEY, store } from "./app/store.js";
 import { CLASS_MARKS, CONSTRUCTION_SWATCH, MARK_INK, NETWORK_MARK_LAYERS, POI_META, RIBBON_PATTERNS, TICK_INK_DARK, classSwatch, classWidth, constructionIcon, isTick } from "./app/classes.js";
 import { el, emptyFC } from "./app/dom.js";
+// the map is built by importing this: app/map.js
 import { map, scaleBar } from "./app/map.js";
 import type {
   GeoJSONSource,
@@ -171,7 +172,6 @@ interface NominatimResult {
   name?: string;
 }
 
-
 // ---------------------------------------------------------------------------
 // constants
 // ---------------------------------------------------------------------------
@@ -202,11 +202,6 @@ function saveSketchy(marks: [number, number][]): void {
   avoidRevision++;
   regradeVisible();
 }
-
-// ---------------------------------------------------------------------------
-// map setup
-// ---------------------------------------------------------------------------
-
 
 // ---------------------------------------------------------------------------
 // state

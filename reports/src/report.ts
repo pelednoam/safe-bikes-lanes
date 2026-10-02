@@ -151,16 +151,26 @@ const LABELLED = new RegExp(`(?:${AXIS}|${NAMED})\\s*${QUOTE}\\s*[-+]?\\d+(?:\\.
  * ("4953x6060") are NOT taken: a screen size ("1920x1080") looks the same, and a
  * report that loses every window size is a worse report; the app writes a tile as
  * z/x/y or z_x_y, which are. */
-const TILE_RUN = /-?\d+(?:\s*[x×]\s*-?\d+){2,}/gi;
+const TILE_RUN = /-?\d+(?:\.\d+)?(?:\s*[x×]\s*-?\d+(?:\.\d+)?){2,}/gi;
+/** Axes as a log writes them, with a space, comma, slash or underscore between,
+ * after a word ("tileX4953Y6060", "tile x4953 y6060") or alone, with a fraction
+ * ("z14_x4953_y6060.5"). Not after a digit, which is a hex code ("0x4953y1") or a
+ * number. Taken before DECIMAL: the fraction would otherwise be cut off first and
+ * leave "z14_x4953_y‹n›" behind. A y and an x are both needed, so "1920 x 1080"
+ * is not one. */
 const TILE_AXES =
-  /(?<![A-Za-z0-9])(?:[zZ][_-]?\d+[_-]?)?[xX][_-]?\d+[_-]?[yY][_-]?\d+/g;
-const AXIS_SPACED = /(?<![A-Za-z0-9])[xyzXYZ]\s+\d{3,}/g;
+  /(?<![0-9])(?:[zZ][_\s-]*\d+[_\s,/-]*)?[xX][_\s-]*\d+(?:\.\d+)?[_\s,/-]*[yY][_\s-]*\d+(?:\.\d+)?/g;
+/** A lone axis letter and its number ("x 4953"), but not after a number: "1920 x
+ * 1080" is a screen size, which is decided to stay. */
+const AXIS_SPACED = /(?<![A-Za-z0-9]|\d\s+)[xyzXYZ]\s+\d{3,}/g;
 /** Degrees, minutes, seconds: 42°23'48"N 71°7'20"W. */
 const DMS = /\d+\s*°(?:\s*\d+(?:\.\d+)?\s*['′’])?(?:\s*\d+(?:\.\d+)?\s*(?:"|″|''))?\s*[NSEW]?/gi;
 /** A long run of digits: a tile index, an id, a phone number. Statuses (404),
  * line numbers and small counts are shorter, and so are not taken; nor are the
- * digits of a hex code ("0x80070005"), which is what tells two failures apart. */
-const LONG_DIGITS = /(?<!0[xX][0-9a-fA-F]*)\d{5,}/g;
+ * digits of a hex code ("0x80070005"), which is what tells two failures apart. A
+ * hex code starts "0x" after a non-digit: "4250x4239677" is a number, an x and a
+ * number, and its long half goes. */
+const LONG_DIGITS = /(?<!(?:^|[^0-9])0[xX][0-9a-fA-F]*)\d{5,}/g;
 const EMAIL = /[\w.+-]+@[\w-]+(\.[\w-]+)+/g;
 /** A house number and street: "12 Elm Street", "1600 Mass. Ave". Free text
  * can't be fully recognised; this takes the usual written forms. */
@@ -244,13 +254,19 @@ function ascii(text: string): string {
       .replace(/[\u2212\u2796\ufe63\uff0d]/g, "-")
       .replace(/[\u066b\u2396\uff0e\u2024\u2027\ufe52\u00b7\u3002\uff61\u2219\u22c5]/g, ".")
       .replace(/[\u066c\u060c\uff0c\ufe50\uff64\u3001]/g, ",")
-      // and any other punctuation set between two digits, with or without spaces
-      // around it, is a decimal point, by class and not by list (U+0387, U+2E31 ...).
-      // Only the non-ASCII marks: '@', '&', '%' and the rest of ASCII are not decimal
-      // points, and "wang123@163.com" is an email address, which this must not break.
-      .replace(/(?<=\d)(\s*)([\p{Po}])(\s*)(?=\d)/gu, (m, _a: string, c: string) =>
-        c.charCodeAt(0) < 0x80 ? m : ".",
-      )
+  );
+}
+
+/** Punctuation set between two digits, with or without spaces around it, is a
+ * decimal point, by class and not by list (U+0387, U+2E31 ...). Of the ASCII marks
+ * only the ones coordinates are written with are: the apostrophe and quote of
+ * degrees, minutes and seconds with no degree sign ("42'23'48"), and "*", which
+ * stands in for the sign. '@', '&', '%' and the rest are not decimal points, and
+ * "wang123@163.com" is an email address, which this must not break. Runs after
+ * DMS, which wants its quotes as they were written. */
+function marks(text: string): string {
+  return text.replace(/(?<=\d)(\s*)([\p{Po}])(\s*)(?=\d)/gu, (m, _a: string, c: string) =>
+    c.charCodeAt(0) < 0x80 && !`'"*`.includes(c) ? m : ".",
   );
 }
 
@@ -260,18 +276,21 @@ export function scrub(text: string): string {
   // between two digits and a mark when the marks are read as decimal points; after,
   // since normalising can make combining marks (U+FF9E becomes U+3099), which would
   // split a coordinate again.
-  return strip(ascii(strip(text)))
+  const plain = strip(ascii(strip(text)))
     .replace(URL_TEXT, (u) => urlToFile(u))
     .replace(EMAIL, "‹email›")
     .replace(ADDRESS, "‹address›")
-    .replace(DMS, "‹n›")
+    .replace(DMS, "‹n›");
+  return marks(plain)
+    // tiles before decimals: "z14_x4953_y6060.5" must go whole, not lose its
+    // fraction first and leave "z14_x4953_y‹n›" behind
+    .replace(TILE_AXES, "‹n›")
+    .replace(TILE_RUN, "‹n›")
     // decimals before the labelled whole numbers: "lat 42 .3967" must lose its
     // fraction with it, not have "lat 42" taken and ".3967" left behind
     .replace(DECIMAL, "‹n›")
-    .replace(TILE_AXES, "‹n›")
     .replace(AXIS_SPACED, "‹n›")
     .replace(LABELLED, "‹n›")
-    .replace(TILE_RUN, "‹n›")
     .replace(NUMBER_RUN, "‹n›")
     .replace(LONG_DIGITS, "‹n›");
 }

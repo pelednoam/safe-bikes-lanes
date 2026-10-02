@@ -320,7 +320,7 @@ describe("filing", () => {
     expect(again.calls.at(-1)).toMatch(/^create /);
   });
 
-  it("forgets the record of a locked issue too: GitHub answers a comment on one with a 403 that says so", async () => {
+  it("keeps the record of a locked issue: a lock is a maintainer's stop, not a gone issue to file again", async () => {
     const e = env();
     await file(sample(), e, fakeGitHub(), day1);
     const locked = {
@@ -328,8 +328,12 @@ describe("filing", () => {
       comment: () =>
         Promise.reject(new GitHubError("GitHub comment: 403 Unable to create comment because issue is locked", 403)),
     };
-    await expect(file(sample(), e, locked, day2)).rejects.toBeInstanceOf(GitHubError);
-    expect(await seen(e, sample())).toBeNull();
+    // each day's repeat fails the same way, quietly, and no new issue is ever created
+    for (const day of [day2, new Date("2026-10-01T08:00:00Z"), new Date("2026-10-02T08:00:00Z")]) {
+      await expect(file(sample(), e, locked, day)).rejects.toBeInstanceOf(GitHubError);
+    }
+    expect((await seen(e, sample()))?.issue).toBe(7);
+    expect(locked.calls.filter((c) => c.startsWith("create"))).toEqual([]);
   });
 
   it("keeps the record on any other 403, a rate limit or a bad token: that isn't the issue's fault", async () => {

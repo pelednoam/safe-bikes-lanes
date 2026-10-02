@@ -180,9 +180,37 @@ describe("the scrubbing", () => {
     expect(scrub("z14_x4953_y6060")).toBe("‹n›");
     expect(scrub("x4953y6060")).toBe("‹n›");
     expect(scrub("z14x4953y6060")).toBe("‹n›");
-    expect(scrub("x 4953 y 6060")).toBe("‹n› ‹n›");
-    // a pair joined by x is indistinguishable from a screen size, and stays: decided
+    expect(scrub("x 4953 y 6060")).toBe("‹n›");
+    expect(scrub("z 14 x 4953 y 6060")).toBe("‹n›");
+    // a pair joined by x is indistinguishable from a screen size, and stays: decided,
+    // spaced or not
     expect(scrub("viewport 4953x6060")).toBe("viewport 4953x6060");
+    expect(scrub("viewport 1920 x 1080")).toBe("viewport 1920 x 1080");
+  });
+
+  it("takes tile axes written after a word, or with a space, comma or slash between them", () => {
+    for (const text of ["tileX4953Y6060", "tileZ14X4953Y6060", "tile x4953 y6060 z14", "(x4953, y6060)", "x4953/y6060", "tilex4953y6060"]) {
+      expect(scrub(text), text).not.toMatch(/4953|6060/);
+    }
+  });
+
+  it("takes the whole of a tile with a fraction, not the fraction first", () => {
+    for (const text of ["z14_x4953_y6060.5", "14x4953x6060.5", "x4953.5y6060.5"]) {
+      expect(scrub(text), text).toBe("‹n›");
+    }
+  });
+
+  it("takes degrees, minutes and seconds written with apostrophes and no degree sign", () => {
+    expect(scrub(`at 42'23'48"N 71'7'20"W`)).not.toMatch(/42|23|71/);
+    expect(scrub("42*23.5 71*7.2")).not.toMatch(/42|23|71/);
+    // and the degree-sign form still goes whole
+    expect(scrub(`42°23'48"N`)).toBe("‹n›");
+  });
+
+  it("takes the long number after an x that isn't a hex prefix", () => {
+    expect(scrub("4250x4239677")).not.toMatch(/4239677/);
+    expect(scrub("4251x4239677")).not.toMatch(/4239677/);
+    expect(scrub("HRESULT_0x80070005")).toBe("HRESULT_0x80070005");
   });
 
   it("takes out camelCase labels written in capitals, and a hex code stays whatever it follows", () => {

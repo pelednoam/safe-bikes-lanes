@@ -10,7 +10,9 @@ export interface GitHub {
   comment(issue: number, body: string): Promise<void>;
   /** Whether the repository itself can be read with this token. GitHub answers a
    * token that has lost access to a private repository with a 404, the same as for
-   * an issue that is gone, so a 404 on an issue means nothing until this says yes. */
+   * an issue that is gone, so a 404 on an issue means nothing until this says yes.
+   * For this repository, which is public, it is a safeguard against a repository
+   * that has been made private or moved, and costs one request when it matters. */
   reachable(): Promise<boolean>;
 }
 

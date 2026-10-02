@@ -159,14 +159,15 @@ async function forget(env: Env, key: string): Promise<void> {
 }
 
 /** An issue the Worker can no longer comment on because it is gone: deleted or
- * transferred (410, and a 404 while the repository is still readable: a token that
- * has lost access to the repository gets the same 404 and must not lose its
- * records), or locked (403, "locked": GitHub's own words). Anything else, a rate
- * limit or a bad token, is not the issue's fault. */
+ * transferred (410), or a 404 while the repository is still readable (a token that
+ * has lost access to a private repository gets the same 404, and must not lose its
+ * records). Not a locked issue (403): a lock is a maintainer's "stop", and
+ * forgetting the record would file a fresh public issue around it, again and again
+ * up to the day's cap. Its record stays and the comments fail quietly. Nor any
+ * other failure, a rate limit or a bad token, which is not the issue's fault. */
 async function issueIsGone(err: unknown, gh: GitHub): Promise<boolean> {
   if (!(err instanceof GitHubError)) return false;
   if (err.status === 410) return true;
-  if (err.status === 403) return /locked/i.test(err.message);
   return err.status === 404 && (await gh.reachable());
 }
 

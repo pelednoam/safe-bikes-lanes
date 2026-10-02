@@ -1,8 +1,8 @@
 # Splitting `web/src/app.ts` into small files
 
 **Budget:** about 200 lines of code per file, not counting comments or blank
-lines. `app.ts` has 4,964 code lines (6,486 with comments), so about 25 files at
-the very least. Grouping by topic instead of filling files to the brim gives
+lines. `app.ts` had 4,964 code lines (6,486 with comments, 6,717 at the start of
+the split); it has 4,927 (6,437) after step 0, so about 25 files at the very least. Grouping by topic instead of filling files to the brim gives
 about 38, averaging about 130. A file under budget is fine; one over it is not.
 
 The numbers below were counted on 2026-10-02 from the file as it stands
@@ -16,9 +16,10 @@ module is cut, and each commit should correct them here.
 2. **The budget is enforced, not hoped for.** A unit test (`tests/appsize.test.ts`)
    counts code lines in `src/app/*.ts` and fails above 220; the same test fails
    on an import cycle inside `src/app/`. Both land before the big moves.
-3. **Cycles are cut with `app/hooks.ts`**, a small typed registry: a module that
-   would import a later one calls `hooks.x(...)` instead, and the later module
-   registers it in its `init`. Only the back-edges found by the survey need one
+3. **Cycles are cut with `src/hooks.ts`**, a small typed registry (outside
+   `src/app/` because it is pure and tested, so it counts toward coverage): a
+   module that would import a later one calls `hooks.x(...)` instead, and the
+   later module registers it in its `init`. Only the back-edges found by the survey need one
    (below), about a dozen functions.
 4. **Shared state lives in `app/store.ts`.** 51 of the 82 top-level variables are
    used in one section only and move with it. The 16 used from three or more
@@ -37,19 +38,22 @@ module is cut, and each commit should correct them here.
 
 | File | Code lines | What |
 |---|---|---|
-| `app/started.ts` | 4 | the start flag and error reporting, imported first |
-| `app/classes.ts` | ~140 | class widths, marks, swatches, construction icon |
-| `app/dom.ts` | 7 | `el`, `emptyFC` |
-| `app/map.ts` | ~35 | the map and its controls |
+| `app/started.ts` | 3 | the start flag and error reporting, imported first |
+| `app/classes.ts` | 131 | class widths, marks, swatches, construction icon |
+| `app/dom.ts` | 8 | `el`, `emptyFC` |
+| `app/map.ts` | 29 | the map and its controls |
+| `app/store.ts` | 59 | the 16 shared variables, `AVOIDABLE`, `loadSketchy` |
+| `hooks.ts` (in `src/`) | 17 | the registry for the back-edges |
+| `tests/appsize.test.ts` | | the size and cycle guard |
+
+Step 0 is done. Counts are from the same counter the guard uses.
 
 ## The rest (estimated code lines)
 
-### Core: shared state and what every module leans on (about 560)
+### Core: shared state and what every module leans on (about 450)
 
 | File | ~Lines | Holds |
 |---|---|---|
-| `app/store.ts` | 90 | the 16 shared variables, the lanes, the `Trip` |
-| `app/hooks.ts` | 40 | the registry for the back-edges |
 | `app/data-load.ts` | 150 | load progress, `ensureRouter`, load trouble, network tiles, `showCoverage` |
 | `app/sources.ts` | 80 | `getSource`, `ensureLayer`, the lazy layer files |
 | `app/markers.ts` | 150 | the two markers, `setPoint`, `syncOD`, locate, `currentPosition` |
@@ -139,7 +143,7 @@ From the survey, by function name:
 
 ## Order of work (each line is one or two commits)
 
-0. Foundation: the four files above (done), then `appsize` test, `store.ts`, `hooks.ts`.
+0. Foundation: done (see above). The lanes and the `Trip` join the store as the modules that use them are cut.
 1. Leaves: `dark-mode`, `app-info`, `rides-dialog`, `route-export`, `places`, `sketchy`, `shed`.
 2. "Where to build": the four `build-*` files.
 3. Core: `sources`, `data-load`, `markers`, `names`, `avoid`.
