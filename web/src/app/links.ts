@@ -4,6 +4,8 @@
 // is still in app.ts; once it moves out, its module's init sets it, and says in the
 // doc below when it can first be called.
 import { hook } from "../hooks.js";
+import type { Ticket } from "../planner.js";
+import type { RouteOption } from "../types.js";
 
 export const links = {
   /** Plan the route for the two ends as they stand. */
@@ -16,6 +18,11 @@ export const links = {
    * backup). Set by initSketchy: callable once start-up has reached it, and today
    * only a click on the backup button does. */
   renderSketchy: hook<[], void>("renderSketchy"),
+  /** Start planning: the ticket the answer will be published under, after ending a
+   * what-if that was on screen. */
+  beginPlan: hook<[], Ticket>("beginPlan"),
+  /** Make one of the planned options the drawn one. */
+  selectOption: hook<[id: RouteOption["id"]], void>("selectOption"),
   /** Close the card that follows the pointer over the map. */
   dropHoverCard: hook<[], void>("dropHoverCard"),
   /** Open the hazard report dialog at a place. */

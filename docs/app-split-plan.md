@@ -45,7 +45,7 @@ module is cut, and each commit should correct them here.
 | `app/dom.ts` | 8 | `el`, `emptyFC` |
 | `app/map.ts` | 29 | the map and its controls |
 | `app/store.ts` | 73 | the shared variables, `AVOIDABLE`, `loadSketchy` |
-| `app/links.ts` | 9 | the hooks other modules call; set by app.ts until a function moves out |
+| `app/links.ts` | 13 | the hooks other modules call; set by app.ts until a function moves out |
 | `app/services.ts` | 14 | the routing worker, basemap, trip, lanes, `dataReady` (runs at import) |
 | `app/sources.ts` | 32 | `getSource`, `ensureLayer`, the lazily loaded layer files |
 | `app/data-load.ts` | 175 | manifest, network tiles, construction, points of interest, progress |
@@ -60,12 +60,15 @@ module is cut, and each commit should correct them here.
 | `app/app-info.ts` | 115 | about dialog and build stamp |
 | `app/route-export.ts` | 79 | GPX, cue sheet, offline download |
 | `app/app-update.ts` | 85 | APK update check, service worker |
+| `app/taps.ts` | 20 | what a tap on a map layer opens: the registry |
+| `app/build-state.ts` | 53 | where-to-build data and its typed state |
+| `app/build-controls.ts` | 98 | the panel's listeners and map taps |
 | `hooks.ts` (in `src/`) | 17 | the registry the hooks are made with |
 | `tests/appsize.test.ts` | | the size and cycle guard |
 
-Steps 0 and 1 are done, and the core pieces the leaves needed (the old step 3's
+Steps 0, 1 and 2 ("where to build") are done, and the core pieces the leaves needed (the old step 3's
 `sources`, `data-load`, `markers`, `names`, `avoid`). Counts are from the same counter
-the guard uses. `app.ts` is down to 3,880 code lines (5,052 with comments).
+the guard uses. `app.ts` is down to 3,308 code lines (4,334 with comments).
 
 ## The rest (estimated code lines)
 
@@ -120,14 +123,10 @@ The closure has only 9 locals of its own, so each feature becomes an
 | `app/nav-controls.ts` | 120 | the 21 button listeners and `popstate` |
 | `app/hazard-dialog.ts` | 155 | hazard reports: category, note, photo |
 
-### The rest (about 700)
+### The entry point
 
 | File | ~Lines | Holds |
 |---|---|---|
-| `app/build-score.ts` | 120 | published weights, scoring, ranking projects |
-| `app/build-whatif.ts` | 190 | `runWhatIf`, preview, clearing, real trip |
-| `app/build-list.ts` | 160 | the list, project metadata and data |
-| `app/build-print.ts` | 90 | `printProject`, focus |
 | `app.ts` | 150 | the entry: imports, `init…()` calls in order |
 
 ## The back-edges (import cycles to cut with `hooks`)
@@ -148,7 +147,7 @@ From the survey, by function name:
 
 0. Foundation: done (see above). The lanes and the `Trip` join the store as the modules that use them are cut.
 1. Leaves: done (with the core pieces they needed, below).
-2. "Where to build": the four `build-*` files.
+2. "Where to build": done (six `build-*` files and `taps`).
 3. Core: `sources`, `data-load`, `markers`, `names`, `avoid` done with step 1; the rest of the state section (taps and hover, the lets used by the planner) goes with its users.
 4. Search: the six `search-*` and phone files.
 5. Planning: `plan-route`, `plan-options`, `summary`, `permalink`.
