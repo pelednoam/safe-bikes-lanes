@@ -40,6 +40,6 @@
     "@capacitor/core": "^8.4.3",
     "@protomaps/basemaps": "^5.7.2",
     "pmtiles": "^4.5.0",
-    "preact": "10.29.8"
+    "preact": "11.0.0"
   }
 }
