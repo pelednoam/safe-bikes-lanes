@@ -54,10 +54,12 @@ export interface Store {
   walkMaxM: number;
   avoidTypes: Set<ProtectionClass>;
   shedMode: boolean;
-  /** Bumped whenever what the router must avoid changes, so a grade computed before
-   * it is not taken for one that still holds. */
+  /** Bumped (by applyAvoidPoints) whenever what the router must avoid changes, so a
+   * grade computed before it is not taken for one that still holds. */
   avoidRevision: number;
-  /** The marker for a point of interest the rider picked. */
+  /** The marker for a point of interest the rider picked. Shared only because the
+   * planning code and the map's tap handling, both still in app.ts, each clear it;
+   * it moves out of the store with whichever of them is cut last. */
   poiMarker: Marker | null;
   /** Where the reach map is centred, once the rider has tapped. */
   shedCenter: [number, number] | null;

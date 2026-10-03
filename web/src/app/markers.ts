@@ -24,7 +24,6 @@ export function currentPosition(): Promise<[number, number]> {
   });
 }
 
-/** Reflect the origin state in the From field. */
 /** Put the start on the map at load, when we can do it without asking.
  *
  * The From field promises "Your location", and until this ran it was a promise
@@ -35,7 +34,7 @@ export function currentPosition(): Promise<[number, number]> {
  * this only acts where the browser says permission is already granted. Everyone
  * else is located on demand, the first time they ask for a route.
  */
-export async function locateIfAlreadyAllowed(): Promise<void> {
+async function locateIfAlreadyAllowed(): Promise<void> {
   if (!store.fromCurrent || store.start !== null || !navigator.geolocation) return;
   try {
     // In the app, Android's own answer: the WebView's Permissions API reports
@@ -61,6 +60,7 @@ export async function locateIfAlreadyAllowed(): Promise<void> {
   }
 }
 
+/** Reflect the origin state in the From field. */
 export function syncOD(): void {
   const f = el<HTMLInputElement>("from-field");
   if (f.classList.contains("picking")) return;

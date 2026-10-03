@@ -5,6 +5,7 @@
 import { type WirePrefs } from "../routing.js";
 import { type ConstructionFC, store } from "./store.js";
 import { el } from "./dom.js";
+import { links } from "./links.js";
 import { routing } from "./services.js";
 import { constructionReady } from "./data-load.js";
 
@@ -43,12 +44,19 @@ export function constructionAvoidPoints(fc: ConstructionFC): [number, number][] 
   return pts;
 }
 
-/** Routes avoid both quick sketchy marks and full hazard reports. */
+/** Routes avoid both quick sketchy marks and full hazard reports.
+ *
+ * This is the one place either changes what the router is told, so it is also
+ * where a grade computed before is made stale: a filed hazard, a restored backup
+ * and a marked spot all land here. The search rows are graded again after the
+ * router has the new points, not before, or they would be graded against the old. */
 export function applyAvoidPoints(): void {
   void routing.setSketchyMarks([
     ...store.sketchyMarks,
     ...store.hazards.map((h): [number, number] => [h.lon, h.lat]),
   ]);
+  store.avoidRevision++;
+  links.regradeVisible.call();
 }
 
 export function initAvoid(): void {

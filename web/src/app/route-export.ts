@@ -13,7 +13,7 @@ import { buildTrack } from "../nav.js";
 import { BASEMAP_MAXZOOM, tileDeps } from "../basemap.js";
 
 /** Say on the button what became of a file it saved, for a moment. */
-export function toldSaved(btn: HTMLElement, result: SaveResult): void {
+function toldSaved(btn: HTMLElement, result: SaveResult): void {
   const prev = btn.textContent;
   btn.textContent =
     "saved" in result ? `✓ saved to ${result.where ?? "Downloads"}` : `⚠ not saved: ${result.error}`;
@@ -59,6 +59,9 @@ export function initRouteExport(): void {
     win.print();
   });
 
+  // offline: pre-cache basemap tiles along the selected route (zooms 13-16, a ~1-tile
+  // corridor), and both basemap styles, into the page's own tile cache — see
+  // tilecache.ts, which is also what reads them back, with or without a service worker
   el<HTMLButtonElement>("offline-btn").addEventListener("click", () => {
     const sel = trip.selected;
     if (!sel) return;

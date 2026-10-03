@@ -142,12 +142,12 @@ def test_the_build_stamp_is_baked_in_and_the_build_fails_if_it_is_not() -> None:
     """
     placeholders = ("__BUILD_VERSION__", "__BUILD_TIME__", "__BUILD_COMMIT__")
     web = ROOT / "web"
-    # the app is app.ts and the modules split out of it (src/app/): the stamp may
-    # live in any of them
-    source = "\n".join(
-        path.read_text(encoding="utf-8")
-        for path in [web / "src" / "app.ts", *sorted((web / "src" / "app").glob("*.ts"))]
-    )
+    # the stamp lives in the about module, and it only counts if the app loads that
+    # module and starts it: removing either leaves a build that shows no stamp
+    entry = (web / "src" / "app.ts").read_text(encoding="utf-8")
+    source = (web / "src" / "app" / "app-info.ts").read_text(encoding="utf-8")
+    assert 'from "./app/app-info.js"' in entry, "app.ts no longer loads the stamp's module"
+    assert "initAppInfo();" in entry, "app.ts no longer starts the stamp's module"
     config = (web / "vite.config.ts").read_text(encoding="utf-8")
     check = (web / "scripts" / "check-dist.mjs").read_text(encoding="utf-8")
     for placeholder in placeholders:

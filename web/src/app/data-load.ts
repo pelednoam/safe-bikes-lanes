@@ -11,7 +11,6 @@ import { getUnits } from "../units.js";
 import { withRetry } from "../retry.js";
 import { WORKER_FAILED } from "../rpc.js";
 import { reportCaught } from "../report.js";
-import { links } from "./links.js";
 import { NetworkTiles } from "../tiles.js";
 import { map } from "./map.js";
 import { type GeoJSONSource } from "maplibre-gl";
@@ -21,9 +20,9 @@ import { readItem } from "../storage.js";
 
 // first launch after a website data refresh downloads layers from the site;
 // surface that as progress (native only — bundled loads are instant)
-export const DATA_STEPS = 4; // tile manifest + network + pois + construction (overlays are lazy)
+const DATA_STEPS = 4; // tile manifest + network + pois + construction (overlays are lazy)
 
-export let dataDone = 0;
+let dataDone = 0;
 
 export function dataProgress(): void {
   if (usingRemoteData() === null) return;
@@ -40,6 +39,24 @@ export function dataProgress(): void {
 // tiles covering a route's corridor, so coverage can scale toward all of MA
 // without a giant download. The worker (re)builds the graph over whatever
 // tiles are loaded; ensureRouter has it fetch the ones an area needs first.
+let announceTimer: number | undefined;
+
+/** Say something to a screen reader without putting it on screen.
+ *
+ * Route results, grades and search answers all arrive by redrawing part of the
+ * panel, which a screen reader does not notice: a blind parent asked for a
+ * route and heard nothing at all. `delayMs` lets a burst — a list redrawn on
+ * every keystroke — settle into one announcement. */
+export function announce(text: string, delayMs = 0): void {
+  window.clearTimeout(announceTimer);
+  announceTimer = window.setTimeout(() => {
+    const box = document.getElementById("sr-status");
+    if (box === null) return;
+    // the same words twice in a row are only announced if the node changes
+    box.textContent = box.textContent === text ? `${text}\u00a0` : text;
+  }, delayMs);
+}
+
 /** What the loading line is doing right now.
  *
  * Routing was showing a motionless "routing…" for the whole wait, which is
@@ -53,24 +70,6 @@ export function dataProgress(): void {
  * route's callback, and "Loading the map around your route… 40 of 40" stayed
  * over the map with nothing loading at all.
  */
-/** Say something to a screen reader without putting it on screen.
- *
- * Route results, grades and search answers all arrive by redrawing part of the
- * panel, which a screen reader does not notice: a blind parent asked for a
- * route and heard nothing at all. `delayMs` lets a burst — a list redrawn on
- * every keystroke — settle into one announcement. */
-export let announceTimer: number | undefined;
-
-export function announce(text: string, delayMs = 0): void {
-  window.clearTimeout(announceTimer);
-  announceTimer = window.setTimeout(() => {
-    const box = document.getElementById("sr-status");
-    if (box === null) return;
-    // the same words twice in a row are only announced if the node changes
-    box.textContent = box.textContent === text ? `${text}\u00a0` : text;
-  }, delayMs);
-}
-
 export function showStage(text: string, sub = ""): void {
   const box = el<HTMLDivElement>("loading");
   box.innerHTML =
@@ -109,7 +108,7 @@ export async function ensureRouter(
  * be tried again (see retry.ts). The error line used to read "failed to load
  * routing tiles: TypeError: Failed to fetch" under a "loading map…" that never
  * went away, and nothing was ever tried again. */
-export function dataLoadTrouble(what: string, delayMs: number): void {
+function dataLoadTrouble(what: string, delayMs: number): void {
   const errBox = el<HTMLDivElement>("error");
   errBox.textContent =
     `Couldn't load ${what} — trying again in ${Math.round(delayMs / 1000)} s. ` +
@@ -120,7 +119,7 @@ export function dataLoadTrouble(what: string, delayMs: number): void {
 
 /** Take the message down once what it was about has loaded — only if it is
  * still that message, and not a routing error written since. */
-export function dataLoadRecovered(): void {
+function dataLoadRecovered(): void {
   const errBox = el<HTMLDivElement>("error");
   if (errBox.dataset["from"] !== "dataload") return;
   delete errBox.dataset["from"];
@@ -148,7 +147,6 @@ export const manifestReady: Promise<void> = dataReady
   )
   .then(() => {
     dataLoadRecovered();
-    void links.refreshHazards.call();
     el<HTMLDivElement>("loading").style.display = "none";
     dataProgress();
   });
@@ -157,7 +155,7 @@ export const manifestReady: Promise<void> = dataReady
 // corridor (it's shown by default across the whole visible area). Below this
 // zoom individual streets aren't legible and the viewport spans too many
 // tiles, so the layer clears — pan/zoom in and it repopulates.
-export const NET_MIN_ZOOM = 12;
+const NET_MIN_ZOOM = 12;
 
 export const netTiles = new NetworkTiles(loadJson);
 
@@ -167,7 +165,7 @@ export const networkReady: Promise<void> = dataReady.then(() =>
   }).then(dataLoadRecovered),
 );
 
-export let netToken = 0;
+let netToken = 0;
 
 /** Fill the network source with the streets in the current viewport. */
 export async function refreshNetworkTiles(): Promise<void> {
@@ -200,16 +198,13 @@ export async function refreshNetworkTiles(): Promise<void> {
   src.setData({ type: "FeatureCollection", features });
 }
 
-// Debounced: the follow camera drives the map every animation frame while
-// navigating, and each move fires moveend — without this the whole network
-// layer would be re-queried and re-rendered ~60x/second mid-ride.
-export let netRefreshTimer: number | undefined;
+let netRefreshTimer: number | undefined;
 
 /** Outside the mapped area there is nothing to draw: no streets, no basemap
  * (it is this area's too), no safety network. A phone located elsewhere
  * opened on a blank grey map with nothing to say why; now the map says what
  * it covers, and takes the rider there. */
-export function showCoverage(): void {
+function showCoverage(): void {
   const b = map.getBounds();
   const out = !store.navActive && outsideCoverage({
     west: b.getWest(),
@@ -248,7 +243,6 @@ export function initDataLoad(): void {
   });
 
   el<HTMLDivElement>("loading").textContent = "loading map…";
-
   el<HTMLDivElement>("loading").style.display = "block";
 
   // a jump, not a flight: animating across a continent of empty map is a long
@@ -261,6 +255,9 @@ export function initDataLoad(): void {
 
   map.on("moveend", showCoverage);
 
+  // Debounced: the follow camera drives the map every animation frame while
+  // navigating, and each move fires moveend — without this the whole network
+  // layer would be re-queried and re-rendered ~60x/second mid-ride.
   map.on("moveend", () => {
     window.clearTimeout(netRefreshTimer);
     netRefreshTimer = window.setTimeout(() => void refreshNetworkTiles(), 300);

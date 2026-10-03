@@ -16,10 +16,10 @@ export const swReload = new DeferredReload(
 // allowance and the APK is 90 MB, so a thousand downloads would be the entire
 // month's budget and would take the site down with it. Release downloads don't
 // count against that at all.
-export const APK_URL =
+const APK_URL =
   "https://github.com/pelednoam/safe-bikes-lanes/releases/latest/download/family-bike-router.apk";
 
-export async function checkAppUpdate(): Promise<void> {
+async function checkAppUpdate(): Promise<void> {
   if (!isNativeApp()) return;
   try {
     const bundled = (await (await fetch("version.json")).json()) as { version?: string };
@@ -65,7 +65,9 @@ export async function checkAppUpdate(): Promise<void> {
 
 export function initAppUpdate(): void {
   void checkAppUpdate();
+}
 
+export function initServiceWorker(): void {
   // service worker: register only on the website (PWA offline). In the native
   // app Capacitor already bundles everything offline, and a persistent SW would
   // serve a STALE app shell across APK updates (its origin outlives installs) —

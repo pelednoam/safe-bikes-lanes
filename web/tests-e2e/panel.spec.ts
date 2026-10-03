@@ -38,9 +38,14 @@ test("switching options quickly leaves no per-frame work behind", async ({ page 
     const cards = [...document.querySelectorAll<HTMLElement>(".option-card")];
     for (let i = 0; i < 5; i++) for (const c of cards) c.click();
   });
-  // past the three-second hard stop every paint has
-  await page.waitForTimeout(4500);
-  expect(await waiting(), "a superseded paint is still watching every frame").toBe(0);
+  // Every paint has a three-second hard stop, so once the last click's has passed
+  // none is left. Polled rather than checked at one moment: a route answer that
+  // lands after the clicks (a loaded machine plans slowly) starts a paint of its
+  // own, which is entitled to its own three seconds; what the leak looked like is a
+  // paint that never stops, and that never reaches zero however long this waits.
+  await expect
+    .poll(waiting, { message: "a superseded paint is still watching every frame", timeout: budget(10_000) })
+    .toBe(0);
 });
 
 test("on a phone held sideways, the route is framed above the sheet", async ({ page }) => {

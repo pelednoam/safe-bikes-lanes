@@ -10,12 +10,12 @@ import { dataReady } from "./services.js";
 import { loadJson, usingRemoteData } from "../data.js";
 import { store } from "./store.js";
 
-export interface DataMeta {
+interface DataMeta {
   built: string;
   sources: { name: string; retrieved: string; features: number }[];
 }
 
-export function fillAbout(): void {
+function fillAbout(): void {
   const multTable = el<HTMLTableElement>("mult-table");
   if (multTable.rows.length > 0) return; // already filled
   const yk = PROFILES.young_kids;
@@ -49,7 +49,7 @@ export function fillAbout(): void {
     .catch(() => undefined);
 }
 
-export function openAbout(): void {
+function openAbout(): void {
   el<HTMLInputElement>("mapillary-token").value = store.mapillaryToken;
   fillAbout();
   el<HTMLDialogElement>("about").showModal();
@@ -69,13 +69,11 @@ export function openAbout(): void {
 // the entire app. Values with no quotes in them cannot be mangled that way.
 // Filled in by the build (vite.config.ts), not by sed on the output: a
 // substitution in the shell once turned app.js into a syntax error.
-export const BUILD_VERSION = __BUILD_VERSION__;
+const BUILD_VERSION = __BUILD_VERSION__;
+const BUILD_TIME = __BUILD_TIME__;
+const BUILD_COMMIT = __BUILD_COMMIT__;
 
-export const BUILD_TIME = __BUILD_TIME__;
-
-export const BUILD_COMMIT = __BUILD_COMMIT__;
-
-export interface BuildInfo {
+interface BuildInfo {
   version?: string;
   built?: string;
   commit?: string;
@@ -84,12 +82,12 @@ export interface BuildInfo {
 /** This build, or null when the placeholders were never substituted — which
  * means the source is being served directly rather than from an assembled
  * bundle or a deploy. */
-export function thisBuild(): BuildInfo | null {
+function thisBuild(): BuildInfo | null {
   if (BUILD_COMMIT.startsWith("__BUILD")) return null;
   return { version: BUILD_VERSION, built: BUILD_TIME, commit: BUILD_COMMIT };
 }
 
-export function whenBuilt(iso: string | undefined): string {
+function whenBuilt(iso: string | undefined): string {
   if (iso === undefined || iso === "") return "an unrecorded time";
   const at = new Date(iso);
   return Number.isNaN(at.getTime())
@@ -109,7 +107,7 @@ export function whenBuilt(iso: string | undefined): string {
  * change nothing is indistinguishable from a deploy that never happened, and
  * without this there is no way to tell them apart from inside the app.
  */
-export async function showBuildStamp(): Promise<void> {
+async function showBuildStamp(): Promise<void> {
   const line = el<HTMLParagraphElement>("build-stamp");
   const mine = thisBuild();
   if (!mine) {

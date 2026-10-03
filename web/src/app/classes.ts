@@ -26,7 +26,7 @@ import { CLASS_COLORS } from "../weights.gen.js";
 // ---------------------------------------------------------------------------
 
 /** Line width relative to an ordinary street. */
-export const CLASS_WIDTH: Record<ProtectionClass, number> = {
+const CLASS_WIDTH: Record<ProtectionClass, number> = {
   path: 1.7,
   separated: 1.5,
   buffered: 1.3,
@@ -40,7 +40,7 @@ export const CLASS_WIDTH: Record<ProtectionClass, number> = {
   busy_street: 1.25,
 };
 
-export interface ClassMark {
+interface ClassMark {
   id: string;
   cls: ProtectionClass;
   /** Mark width, as a multiple of the line it sits on. */

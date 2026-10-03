@@ -37,7 +37,9 @@ export function codeLines(source: string): number {
  * from this folder or one up. Comments are taken out first, so a mention in prose
  * is not an import. */
 export function importsIn(source: string): string[] {
-  const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  // only comments that start a line: a "/*" inside a string ("src/app/**") must not
+  // cut the code out up to the next "*/", and with it the imports in between
+  const code = source.replace(/^\s*\/\*[\s\S]*?\*\//gm, "").replace(/^\s*\/\/.*$/gm, "");
   const found = [
     ...code.matchAll(/^\s*(?:import|export)\b(?:[^;"']*?\bfrom\s+)?\s*["'](\.{1,2}\/[^"']+)\.js["']/gm),
     ...code.matchAll(/\bimport\(\s*["'](\.{1,2}\/[^"']+)\.js["']\s*\)/g),
@@ -66,6 +68,8 @@ describe("the modules in src/app/", () => {
     expect(importsIn('import "../app.js";')).toEqual(["../app.ts"]);
     expect(importsIn('// import "./h.js";\n/* import "./i.js"; */\nconst x = 1;')).toEqual([]);
     expect(importsIn('import { x } from "maplibre-gl";')).toEqual([]);
+    // a glob in a string is not the start of a comment
+    expect(importsIn('const g = "src/app/**";\nimport { x } from "./x.js";\n/* c */')).toEqual(["./x.ts"]);
   });
 
   it.each(files)("%s is a small file", (file) => {

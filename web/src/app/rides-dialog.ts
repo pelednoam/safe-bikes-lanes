@@ -10,7 +10,7 @@ import { h, render } from "preact";
 import { RideList, RideTotalsLine } from "../ui/Lists.js";
 import { el, emptyFC } from "./dom.js";
 
-export function showRideOnMap(ride: RideSummary): void {
+function showRideOnMap(ride: RideSummary): void {
   getSource("history").setData({
     type: "Feature",
     geometry: { type: "LineString", coordinates: ride.polyline },
@@ -32,7 +32,7 @@ export function showRideOnMap(ride: RideSummary): void {
 /** Share a stats card from a tap (see share.ts): the share sheet when the card
  * is ready and the browser has one, otherwise the picture saved and the text
  * copied — with the button saying so, instead of nothing happening. */
-export function shareCard(text: string, image: PreparedImage, filename: string, btn: HTMLElement): void {
+function shareCard(text: string, image: PreparedImage, filename: string, btn: HTMLElement): void {
   void shareImage(text, image, filename, {
     canShare: typeof navigator.canShare === "function" ? (d) => navigator.canShare(d) : undefined,
     share: typeof navigator.share === "function" ? (d) => navigator.share(d) : undefined,
@@ -51,11 +51,10 @@ export function shareCard(text: string, image: PreparedImage, filename: string, 
 }
 
 /** Cards drawn ahead of the tap, so share() can run inside it. */
-export let totalsCard: PreparedImage | null = null;
+let totalsCard: PreparedImage | null = null;
+const rideCards = new Map<string, PreparedImage>();
 
-export const rideCards = new Map<string, PreparedImage>();
-
-export function rideCard(ride: RideSummary): PreparedImage {
+function rideCard(ride: RideSummary): PreparedImage {
   let card = rideCards.get(ride.id);
   if (card === undefined) {
     card = new PreparedImage(drawRideCard(ride));

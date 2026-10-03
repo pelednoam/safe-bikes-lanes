@@ -11,7 +11,7 @@ import { getSource } from "./sources.js";
 import { maplibregl } from "../maplibre.js";
 import { map } from "./map.js";
 
-export let shedMarker: Marker | null = null;
+let shedMarker: Marker | null = null;
 
 /** The reach map for the current centre and budget.
  *

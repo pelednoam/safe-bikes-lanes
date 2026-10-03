@@ -29,7 +29,6 @@ export const trip = new Trip();
 export const routeLane = new Lane();
 
 export const shedLane = new Lane();
-
 export const gradeLane = new Lane();
 
 /** Resolves once the data source is chosen (the site's own copy, or a newer one

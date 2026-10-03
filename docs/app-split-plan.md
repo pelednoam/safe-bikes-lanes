@@ -2,7 +2,7 @@
 
 **Budget:** about 200 lines of code per file, not counting comments or blank
 lines. `app.ts` had 4,964 code lines (6,486 with comments, 6,717 at the start of
-the split); it has 4,927 (6,437) after step 0, so about 25 files at the very least. Grouping by topic instead of filling files to the brim gives
+the split); it has 3,880 (5,052) after step 1, so about 25 files at the very least. Grouping by topic instead of filling files to the brim gives
 about 38, averaging about 130. A file under budget is fine; one over it is not.
 
 The numbers below were counted on 2026-10-02 from the file as it stands
@@ -19,7 +19,9 @@ module is cut, and each commit should correct them here.
 3. **Cycles are cut with `src/hooks.ts`**, a small typed registry (outside
    `src/app/` because it is pure and tested, so it counts toward coverage): a
    module that would import a later one calls `hooks.x(...)` instead, and the
-   later module registers it in its `init`. Only the back-edges found by the survey need one
+   later module registers it in its `init`. In practice `app/links.ts` holds the
+   hooks and `app.ts` sets them in one block right after its imports for as long
+   as the function is still there, so nothing at start-up can call one too early. Only the back-edges found by the survey need one
    (below), about a dozen functions.
 4. **Shared state lives in `app/store.ts`.** 51 of the 82 top-level variables are
    used in one section only and move with it. The 16 used from three or more
@@ -42,23 +44,31 @@ module is cut, and each commit should correct them here.
 | `app/classes.ts` | 131 | class widths, marks, swatches, construction icon |
 | `app/dom.ts` | 8 | `el`, `emptyFC` |
 | `app/map.ts` | 29 | the map and its controls |
-| `app/store.ts` | 59 | the 16 shared variables, `AVOIDABLE`, `loadSketchy` |
-| `hooks.ts` (in `src/`) | 17 | the registry for the back-edges |
+| `app/store.ts` | 73 | the shared variables, `AVOIDABLE`, `loadSketchy` |
+| `app/links.ts` | 9 | the hooks other modules call; set by app.ts until a function moves out |
+| `app/services.ts` | 14 | the routing worker, basemap, trip, lanes, `dataReady` (runs at import) |
+| `app/sources.ts` | 32 | `getSource`, `ensureLayer`, the lazily loaded layer files |
+| `app/data-load.ts` | 175 | manifest, network tiles, construction, points of interest, progress |
+| `app/dark-mode.ts` | 84 | night rides: the dark basemap and UI |
+| `app/avoid.ts` | 46 | what the router avoids; bumps the grade revision |
+| `app/names.ts` | 79 | reverse geocoding and the name cache |
+| `app/markers.ts` | 80 | the trip's markers, setting a point, the rider's position |
+| `app/sketchy.ts` | 75 | marked spots, their list and popup |
+| `app/places.ts` | 103 | saved places, recent routes, backup |
+| `app/shed.ts` | 59 | the reach map |
+| `app/rides-dialog.ts` | 104 | ride history dialog |
+| `app/app-info.ts` | 115 | about dialog and build stamp |
+| `app/route-export.ts` | 79 | GPX, cue sheet, offline download |
+| `app/app-update.ts` | 85 | APK update check, service worker |
+| `hooks.ts` (in `src/`) | 17 | the registry the hooks are made with |
 | `tests/appsize.test.ts` | | the size and cycle guard |
 
-Step 0 is done. Counts are from the same counter the guard uses.
+Steps 0 and 1 are done, and the core pieces the leaves needed (the old step 3's
+`sources`, `data-load`, `markers`, `names`, `avoid`). Counts are from the same counter
+the guard uses. `app.ts` is down to 3,880 code lines (5,052 with comments).
 
 ## The rest (estimated code lines)
 
-### Core: shared state and what every module leans on (about 450)
-
-| File | ~Lines | Holds |
-|---|---|---|
-| `app/data-load.ts` | 150 | load progress, `ensureRouter`, load trouble, network tiles, `showCoverage` |
-| `app/sources.ts` | 80 | `getSource`, `ensureLayer`, the lazy layer files |
-| `app/markers.ts` | 150 | the two markers, `setPoint`, `syncOD`, locate, `currentPosition` |
-| `app/names.ts` | 80 | reverse geocoding, its cache, `nameEnd` |
-| `app/avoid.ts` | 70 | the avoided types, `routePrefs`, construction avoid points |
 
 ### Planning (about 800)
 
@@ -68,10 +78,6 @@ Step 0 is done. Counts are from the same counter the guard uses.
 | `app/plan-options.ts` | 170 | option cards, `selectOption`, `paintPanelWithRoute` |
 | `app/summary.ts` | 100 | summary, ribbon, cautions, street photos |
 | `app/permalink.ts` | 100 | `parseHash`, `updateHash`, restoring a plan |
-| `app/route-export.ts` | 70 | GPX and cue sheet, offline download |
-| `app/places.ts` | 70 | saved places, recent routes |
-| `app/sketchy.ts` | 70 | marked spots, their list and popup |
-| `app/shed.ts` | 50 | the reachability view |
 
 ### Search (about 640)
 
@@ -91,7 +97,7 @@ The closure has only 9 locals of its own, so each feature becomes an
 
 | File | ~Lines | Holds |
 |---|---|---|
-| `app/basemap-layers.ts` | 100 | the basemap injected at first idle, `applyBasemap` |
+| `app/basemap-layers.ts` | 100 | the basemap injected at first idle (`applyBasemap` is in `dark-mode.ts`) |
 | `app/network-layers.ts` | 170 | the safety network, its marks, hit layers, lane map |
 | `app/construction-layers.ts` | 100 | construction lines and points, the barricade icon |
 | `app/route-layers.ts` | 120 | the route, ride history, the ride's own line |
@@ -118,9 +124,6 @@ The closure has only 9 locals of its own, so each feature becomes an
 
 | File | ~Lines | Holds |
 |---|---|---|
-| `app/rides-dialog.ts` | 174 | ride history dialog |
-| `app/dark-mode.ts` | 91 | night rides: dark basemap and UI |
-| `app/app-info.ts` | 116 | about dialog, the in-app update check |
 | `app/build-score.ts` | 120 | published weights, scoring, ranking projects |
 | `app/build-whatif.ts` | 190 | `runWhatIf`, preview, clearing, real trip |
 | `app/build-list.ts` | 160 | the list, project metadata and data |
@@ -144,9 +147,9 @@ From the survey, by function name:
 ## Order of work (each line is one or two commits)
 
 0. Foundation: done (see above). The lanes and the `Trip` join the store as the modules that use them are cut.
-1. Leaves: `dark-mode`, `app-info`, `rides-dialog`, `route-export`, `places`, `sketchy`, `shed`.
+1. Leaves: done (with the core pieces they needed, below).
 2. "Where to build": the four `build-*` files.
-3. Core: `sources`, `data-load`, `markers`, `names`, `avoid`.
+3. Core: `sources`, `data-load`, `markers`, `names`, `avoid` done with step 1; the rest of the state section (taps and hover, the lets used by the planner) goes with its users.
 4. Search: the six `search-*` and phone files.
 5. Planning: `plan-route`, `plan-options`, `summary`, `permalink`.
 6. Navigation and hazards: the eight files, with the hooks.

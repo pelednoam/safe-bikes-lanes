@@ -194,6 +194,15 @@ describe("the scrubbing", () => {
     }
   });
 
+  it("takes a tile written y first, and a lone y or z axis after a number", () => {
+    for (const text of ["y 6060 x 4953", "y6060x4953", "y=6060 x=4953"]) {
+      expect(scrub(text), text).not.toMatch(/4953|6060/);
+    }
+    expect(scrub("zoom 14 y 6060")).not.toMatch(/6060/);
+    // while a screen size stays whatever number is in front of it
+    expect(scrub("viewport 1920 x 1080")).toBe("viewport 1920 x 1080");
+  });
+
   it("takes the whole of a tile with a fraction, not the fraction first", () => {
     for (const text of ["z14_x4953_y6060.5", "14x4953x6060.5", "x4953.5y6060.5"]) {
       expect(scrub(text), text).toBe("‹n›");
@@ -201,7 +210,9 @@ describe("the scrubbing", () => {
   });
 
   it("takes degrees, minutes and seconds written with apostrophes and no degree sign", () => {
-    expect(scrub(`at 42'23'48"N 71'7'20"W`)).not.toMatch(/42|23|71/);
+    // nothing of the position is left, the seconds included
+    expect(scrub(`at 42'23'48"N 71'7'20"W`)).not.toMatch(/42|23|48|71|20/);
+    expect(scrub("42*23'48 71*7'20")).not.toMatch(/42|23|48|71|20/);
     expect(scrub("42*23.5 71*7.2")).not.toMatch(/42|23|71/);
     // and the degree-sign form still goes whole
     expect(scrub(`42°23'48"N`)).toBe("‹n›");

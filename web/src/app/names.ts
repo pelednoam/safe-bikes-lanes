@@ -6,33 +6,33 @@ import { store } from "./store.js";
 import { routing } from "./services.js";
 import { el } from "./dom.js";
 
-export const REVGEO_KEY = "bike-revgeo-v1";
+const REVGEO_KEY = "bike-revgeo-v1";
 
 /** Which fields we filled in ourselves, and may therefore overwrite. */
 export const autoNamed = { start: false, end: false };
 
 /** ~11 m of precision: enough that nudging a pin reuses the cached name. */
-export function revKey(lon: number, lat: number): string {
+function revKey(lon: number, lat: number): string {
   return `${lon.toFixed(4)},${lat.toFixed(4)}`;
 }
 
 /** Names worth remembering: enough for every place a family rides to, and
  * small enough that the cache cannot crowd the ride history out of storage —
  * it was never trimmed, and grew by a name for every pin ever dropped. */
-export const REVGEO_MAX = 400;
+const REVGEO_MAX = 400;
 
-export function revCache(): Record<string, string> {
+function revCache(): Record<string, string> {
   return readJson<Record<string, string>>(REVGEO_KEY, {});
 }
 
-export function rememberName(cache: Record<string, string>, key: string, name: string): void {
+function rememberName(cache: Record<string, string>, key: string, name: string): void {
   cache[key] = name;
   // private mode or a full store: the name just won't be remembered
   writeItem(REVGEO_KEY, JSON.stringify(trimRecord(cache, REVGEO_MAX)));
 }
 
 /** Whether the router has a graph, waiting up to `ms` for one. */
-export async function withRouter(ms: number): Promise<boolean> {
+async function withRouter(ms: number): Promise<boolean> {
   const deadline = Date.now() + ms;
   while (!store.routerReady && Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 120));
@@ -40,7 +40,7 @@ export async function withRouter(ms: number): Promise<boolean> {
   return store.routerReady;
 }
 
-export async function reverseGeocode(lon: number, lat: number): Promise<string | null> {
+async function reverseGeocode(lon: number, lat: number): Promise<string | null> {
   const key = revKey(lon, lat);
   const cache = revCache();
   const hit = cache[key];

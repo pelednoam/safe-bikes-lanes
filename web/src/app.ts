@@ -99,7 +99,22 @@ import { autoNamed, nameEnd } from "./app/names.js";
 import { currentPosition, initMarkers, makeMarker, setPoint, syncOD } from "./app/markers.js";
 import { initSketchy, openSketchyPopup, renderSketchy, saveSketchy } from "./app/sketchy.js";
 import { initPlaces, promptSavePlace, recordRecentRoute, renderPlacesAndRecent } from "./app/places.js";
-import { initAppUpdate, swReload } from "./app/app-update.js";
+import { initAppUpdate, initServiceWorker, swReload } from "./app/app-update.js";
+
+// The functions other modules call through src/app/links.ts, set first: all of them
+// are function declarations, so they exist from the moment this module runs, and
+// nothing that runs at start-up can reach one before it is set. (renderSketchy is
+// set by initSketchy, and only a click on the backup button calls it.)
+links.dropHoverCard.set(dropHoverCard);
+links.requestRoute.set(requestRoute);
+links.planBetween.set(planBetween);
+links.regradeVisible.set(regradeVisible);
+links.openHazardDialog.set(openHazardDialog);
+
+// hazards are read once the routing data is in; not part of the chain that says
+// routing is ready, so a failure here can't take routing down with it
+void manifestReady.then(() => refreshHazards());
+
 
 interface NominatimResult {
   display_name: string;
@@ -128,10 +143,6 @@ const LOOP_LIMITS: Record<"imperial" | "metric", [min: number, max: number]> = {
 
 const BBOX = COVERAGE;
 
-// ---------------------------------------------------------------------------
-// helpers
-// ---------------------------------------------------------------------------
-
 
 // ---------------------------------------------------------------------------
 // state
@@ -147,7 +158,6 @@ function dropHoverCard(): void {
   hoverPopup?.remove();
   hoverPopup = null;
 }
-links.dropHoverCard.set(dropHoverCard);
 
 /** What a tap on the map means, decided in one place (onMapTap).
  *
@@ -383,7 +393,6 @@ async function requestRoute(): Promise<void> {
     if (!ticket.stale()) loading.style.display = "none";
   }
 }
-links.requestRoute.set(requestRoute);
 
 async function requestLoop(): Promise<void> {
   if (store.navActive) return; // a new round trip is not something to swap in mid-ride
@@ -771,9 +780,7 @@ async function showMapillaryPreview(lon: number, lat: number): Promise<void> {
   }
 }
 
-// ---------------------------------------------------------------------------
-// GPX + cue sheet
-// ---------------------------------------------------------------------------
+// GPX, cue sheet and the offline map download: app/route-export.ts
 
 initRouteExport();
 
@@ -897,9 +904,8 @@ el<HTMLButtonElement>("share").addEventListener("click", () => {
     });
 });
 
-// ---------------------------------------------------------------------------
-// saved places (Home/Work/…) and recent route history
-// ---------------------------------------------------------------------------
+// planning between two points picked from a list; saved places and recent
+// routes are in app/places.ts
 
 function planBetween(s: [number, number], e: [number, number]): void {
   store.fromCurrent = false;
@@ -912,7 +918,6 @@ function planBetween(s: [number, number], e: [number, number]): void {
   nameEnd("end");
   void requestRoute();
 }
-links.planBetween.set(planBetween);
 
 
 // ---------------------------------------------------------------------------
@@ -1042,7 +1047,6 @@ function regradeVisible(): void {
   paintSearch();
   void gradeSearchResults(gradedRows);
 }
-links.regradeVisible.set(regradeVisible);
 
 /** Take the placeholders away from a row that will never get a grade.
  *
@@ -1326,16 +1330,9 @@ function scheduleGrading(rows: { key: string; lngLat: [number, number] }[]): voi
   }, 400);
 }
 
-// ---------------------------------------------------------------------------
-// safe-shed (reachability)
-// ---------------------------------------------------------------------------
+// the reach map: app/shed.ts
 
 initShed();
-
-
-// ---------------------------------------------------------------------------
-// sketchy marks (personal feedback)
-// ---------------------------------------------------------------------------
 
 
 // ---------------------------------------------------------------------------
@@ -2896,10 +2893,6 @@ for (const [cls, label] of Object.entries(CLASS_LABELS) as [ProtectionClass, str
   legend.appendChild(span);
 }
 
-// ---------------------------------------------------------------------------
-// about dialog: methodology + live data freshness
-// ---------------------------------------------------------------------------
-
 
 // ---------------------------------------------------------------------------
 // hazard reports (category + note + photo), stored on-device
@@ -2931,7 +2924,6 @@ async function refreshHazards(): Promise<void> {
     } as GeoJSON.GeoJSON);
   }
 }
-links.refreshHazards.set(refreshHazards);
 
 function openHazardDialog(lon: number, lat: number): void {
   hazardPendingLoc = [lon, lat];
@@ -2954,7 +2946,6 @@ function openHazardDialog(lon: number, lat: number): void {
   });
   el<HTMLDialogElement>("hazard").showModal();
 }
-links.openHazardDialog.set(openHazardDialog);
 
 function pendingHazardReport(): HazardReport | null {
   if (!hazardPendingLoc) return null;
@@ -3089,9 +3080,7 @@ for (const btn of document.querySelectorAll<HTMLButtonElement>("#nav-classify bu
   });
 }
 
-// ---------------------------------------------------------------------------
-// ride history dialog
-// ---------------------------------------------------------------------------
+// ride history dialog: app/rides-dialog.ts
 
 initRidesDialog();
 
@@ -4310,18 +4299,8 @@ map.on("touchstart", (e: { originalEvent?: TouchEvent }) => {
 });
 map.on("mousedown", pauseFollowForInput);
 
-// ---------------------------------------------------------------------------
-// offline: pre-cache basemap tiles along the selected route (zooms 13-16,
-// ~1-tile corridor), and both basemap styles, into the page's own tile cache —
-// see tilecache.ts, which is also what reads them back, with or without a
-// service worker
-// ---------------------------------------------------------------------------
 
-
-// ---------------------------------------------------------------------------
-// dark mode (night rides): dark basemap + dark UI, persisted; light until
-// the rider turns it on, whatever the system theme (see applyDark below)
-// ---------------------------------------------------------------------------
+// dark mode (night rides): app/dark-mode.ts
 
 initDarkMode();
 
@@ -4360,11 +4339,8 @@ declare global {
 }
 window._map = map;
 
-// ---------------------------------------------------------------------------
-// in-app update check (native app only): compare the bundled build version
-// against the latest release published next to the mirrored APK
-// ---------------------------------------------------------------------------
-
+// start-up: recover an interrupted ride, then the update check and the service
+// worker (app/app-update.ts)
 
 // a ride interrupted by Back/reload/crash is saved on the next launch rather
 // than silently lost
@@ -4376,6 +4352,7 @@ if (interrupted !== null) {
 
 initAppUpdate();
 initMarkers();
+initServiceWorker();
 
 
 // ---------------------------------------------------------------------------

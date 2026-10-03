@@ -156,13 +156,19 @@ const TILE_RUN = /-?\d+(?:\.\d+)?(?:\s*[x×]\s*-?\d+(?:\.\d+)?){2,}/gi;
  * after a word ("tileX4953Y6060", "tile x4953 y6060") or alone, with a fraction
  * ("z14_x4953_y6060.5"). Not after a digit, which is a hex code ("0x4953y1") or a
  * number. Taken before DECIMAL: the fraction would otherwise be cut off first and
- * leave "z14_x4953_y‹n›" behind. A y and an x are both needed, so "1920 x 1080"
- * is not one. */
-const TILE_AXES =
-  /(?<![0-9])(?:[zZ][_\s-]*\d+[_\s,/-]*)?[xX][_\s-]*\d+(?:\.\d+)?[_\s,/-]*[yY][_\s-]*\d+(?:\.\d+)?/g;
-/** A lone axis letter and its number ("x 4953"), but not after a number: "1920 x
- * 1080" is a screen size, which is decided to stay. */
-const AXIS_SPACED = /(?<![A-Za-z0-9]|\d\s+)[xyzXYZ]\s+\d{3,}/g;
+ * leave "z14_x4953_y‹n›" behind. A y and an x are both needed, in either order
+ * ("y 6060 x 4953"), so "1920 x 1080" is not one. */
+const TILE_AXES = new RegExp(
+  "(?<![0-9])(?:" +
+    "(?:[zZ][_\\s-]*\\d+[_\\s,/-]*)?[xX][_\\s-]*\\d+(?:\\.\\d+)?[_\\s,/-]*[yY][_\\s-]*\\d+(?:\\.\\d+)?" +
+    "|[yY][_\\s-]*\\d+(?:\\.\\d+)?[_\\s,/-]*[xX][_\\s-]*\\d+(?:\\.\\d+)?" +
+    ")",
+  "g",
+);
+/** A lone axis letter and its number ("x 4953"). An x after a number is not one:
+ * "1920 x 1080" is a screen size, which is decided to stay. A y or z is, wherever
+ * it is ("zoom 14 y 6060"). */
+const AXIS_SPACED = /(?<![A-Za-z0-9])(?:[yzYZ]|(?<!\d\s+)[xX])\s+\d{3,}/g;
 /** Degrees, minutes, seconds: 42°23'48"N 71°7'20"W. */
 const DMS = /\d+\s*°(?:\s*\d+(?:\.\d+)?\s*['′’])?(?:\s*\d+(?:\.\d+)?\s*(?:"|″|''))?\s*[NSEW]?/gi;
 /** A long run of digits: a tile index, an id, a phone number. Statuses (404),
@@ -282,6 +288,10 @@ export function scrub(text: string): string {
     .replace(ADDRESS, "‹address›")
     .replace(DMS, "‹n›");
   return marks(plain)
+    // a chain of three or more numbers joined by points is degrees, minutes and
+    // seconds that "marks" wrote out ("42.23.48"): all of it, not just the first
+    // pair, or the seconds stay behind ("‹n›.48"). A version number goes with it.
+    .replace(/-?\d+(?:\s*\.\s*\d+){2,}/g, "‹n›")
     // tiles before decimals: "z14_x4953_y6060.5" must go whole, not lose its
     // fraction first and leave "z14_x4953_y‹n›" behind
     .replace(TILE_AXES, "‹n›")

@@ -13,7 +13,7 @@ export function getSource(id: string): GeoJSONSource {
 }
 
 // Heavy overlays load their data the first time they're shown, not at startup.
-export const LAZY_LAYER_FILES: Record<string, string> = {
+const LAZY_LAYER_FILES: Record<string, string> = {
   heatmap: "heatmap.geojson",
   lanemap: "lanemap.geojson",
   elevmap: "elevation.geojson",
@@ -23,7 +23,7 @@ export const LAZY_LAYER_FILES: Record<string, string> = {
   crossings: "severance.geojson",
 };
 
-export const lazyLoaded = new Set<string>();
+const lazyLoaded = new Set<string>();
 
 /** Fetch an overlay's data once, the first time its toggle is turned on. */
 export function ensureLayer(id: string): void {

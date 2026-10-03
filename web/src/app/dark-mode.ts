@@ -10,7 +10,7 @@ import { CLASS_MARKS, MARK_INK, TICK_INK_DARK, classWidth, isTick } from "./clas
 import { setSystemBarsDark } from "../native.js";
 import { readItem, writeItem } from "../storage.js";
 
-export const DARK_KEY = "darkMode";
+const DARK_KEY = "darkMode";
 
 export function applyBasemap(): void {
   const dark = document.body.classList.contains("dark");
@@ -102,7 +102,7 @@ export function applyBasemap(): void {
   else map.once("load", setVis);
 }
 
-export function applyDark(dark: boolean): void {
+function applyDark(dark: boolean): void {
   document.body.classList.toggle("dark", dark);
   el<HTMLInputElement>("dark-mode").checked = dark;
   setSystemBarsDark(dark); // the status bar icons follow the app's theme, not the phone's

@@ -13,12 +13,10 @@ import { type Popup } from "maplibre-gl";
 import { maplibregl } from "../maplibre.js";
 import { promptSavePlace } from "./places.js";
 
+/** Keep the marks. Telling the router and regrading the search rows is
+ * applyAvoidPoints's, which every caller runs next. */
 export function saveSketchy(marks: [number, number][]): void {
   writeItem(SKETCHY_KEY, JSON.stringify(marks));
-  // this is exactly a change to what the router must avoid, so any grade
-  // computed before it is now a claim about a route the app wouldn't plan
-  store.avoidRevision++;
-  links.regradeVisible.call();
 }
 
 export function renderSketchy(): void {
@@ -41,7 +39,7 @@ export function renderSketchy(): void {
 
 /** The one open spot-menu, so a second right-click (or long-press) replaces it
  * instead of stacking a second card on the map. */
-export let sketchyPopup: Popup | null = null;
+let sketchyPopup: Popup | null = null;
 
 // touch devices have no right-click: a long-press on a street opens this same
 // "mark sketchy" popup (wired below the definition)
