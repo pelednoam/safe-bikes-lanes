@@ -142,7 +142,12 @@ def test_the_build_stamp_is_baked_in_and_the_build_fails_if_it_is_not() -> None:
     """
     placeholders = ("__BUILD_VERSION__", "__BUILD_TIME__", "__BUILD_COMMIT__")
     web = ROOT / "web"
-    source = (web / "src" / "app.ts").read_text(encoding="utf-8")
+    # the app is app.ts and the modules split out of it (src/app/): the stamp may
+    # live in any of them
+    source = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in [web / "src" / "app.ts", *sorted((web / "src" / "app").glob("*.ts"))]
+    )
     config = (web / "vite.config.ts").read_text(encoding="utf-8")
     check = (web / "scripts" / "check-dist.mjs").read_text(encoding="utf-8")
     for placeholder in placeholders:
@@ -168,7 +173,7 @@ def test_the_app_reads_its_own_stamp_before_the_servers() -> None:
     answer, which is right about the site and wrong about the page in front of
     the reader. That is exactly the case this exists for.
     """
-    source = (ROOT / "web" / "src" / "app.ts").read_text(encoding="utf-8")
+    source = (ROOT / "web" / "src" / "app" / "app-info.ts").read_text(encoding="utf-8")
     stamp = source.index("const BUILD_COMMIT")
     fetched = source.index('fetch("build.json"')
     assert stamp < fetched, "the stamp must come from the bundle, not from the network"

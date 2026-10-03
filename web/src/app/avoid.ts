@@ -1,0 +1,60 @@
+// What the router is told to avoid: the lane types the rider turned off, the marked
+// spots, and the construction zones, kept in step with the map and the summary
+// line.
+
+import { type WirePrefs } from "../routing.js";
+import { type ConstructionFC, store } from "./store.js";
+import { el } from "./dom.js";
+import { routing } from "./services.js";
+import { constructionReady } from "./data-load.js";
+
+/** Every routing choice the rider has made, as the router takes them — the one
+ * place a trip, a reroute, a detour or a search grade reads them from. The
+ * reroute, the detour and the resume each spelled the call out for themselves
+ * once, and all three left the walking limit off. */
+export function routePrefs(): WirePrefs {
+  return { profileId: store.profileId, preferFlat: store.preferFlat, avoid: [...store.avoidTypes], walkMaxM: store.walkMaxM };
+}
+
+export function syncAvoidSummary(): void {
+  el<HTMLElement>("avoid-summary").textContent =
+    store.avoidTypes.size === 0 ? "🛡 avoid lane types" : `🛡 avoiding ${store.avoidTypes.size} lane type${store.avoidTypes.size > 1 ? "s" : ""}`;
+}
+
+/** Sample construction geometries into avoid-points for the router. */
+export function constructionAvoidPoints(fc: ConstructionFC): [number, number][] {
+  const pts: [number, number][] = [];
+  const pushCoord = (c: unknown): void => {
+    if (Array.isArray(c) && typeof c[0] === "number" && typeof c[1] === "number") {
+      pts.push([c[0], c[1]]);
+    }
+  };
+  for (const f of fc.features) {
+    const g = f.geometry;
+    if (g.type === "Point") pushCoord(g.coordinates);
+    else if (g.type === "LineString" && Array.isArray(g.coordinates)) {
+      for (const c of g.coordinates) pushCoord(c);
+    } else if (Array.isArray(g.coordinates)) {
+      for (const part of g.coordinates) {
+        if (Array.isArray(part)) for (const c of part) pushCoord(c);
+      }
+    }
+  }
+  return pts;
+}
+
+/** Routes avoid both quick sketchy marks and full hazard reports. */
+export function applyAvoidPoints(): void {
+  void routing.setSketchyMarks([
+    ...store.sketchyMarks,
+    ...store.hazards.map((h): [number, number] => [h.lon, h.lat]),
+  ]);
+}
+
+export function initAvoid(): void {
+  // construction avoidance for the router as soon as the zones load (the worker
+  // keeps it, and applies it to every graph it builds)
+  void constructionReady.then(() => {
+    if (store.constructionFC) void routing.setConstructionPoints(constructionAvoidPoints(store.constructionFC));
+  });
+}

@@ -2,27 +2,17 @@
 // (see router.ts); class colors mirror pipeline/config.py.
 import "./app/started.js";
 import { links } from "./app/links.js";
-import { AVOIDABLE, type ConstructionFC, SKETCHY_KEY, loadSketchy, store } from "./app/store.js";
+import { AVOIDABLE, store } from "./app/store.js";
 import { CLASS_MARKS, CONSTRUCTION_SWATCH, MARK_INK, NETWORK_MARK_LAYERS, POI_META, RIBBON_PATTERNS, classSwatch, classWidth, constructionIcon } from "./app/classes.js";
 import { el, emptyFC } from "./app/dom.js";
 // the map is built by importing this: app/map.js
 import { map, scaleBar } from "./app/map.js";
-import type {
-  GeoJSONSource,
-  LngLat,
-  Map as MLMap,
-  MapLayerMouseEvent,
-  MapMouseEvent,
-  Marker,
-  Popup,
-} from "maplibre-gl";
+import type { GeoJSONSource, Map as MLMap, MapLayerMouseEvent, MapMouseEvent, Marker, Popup } from "maplibre-gl";
 
-import { BASEMAP_MAXZOOM, tileDeps } from "./basemap.js";
 import { maplibregl } from "./maplibre.js";
 import { CLASS_COLORS } from "./weights.gen.js";
-import { downloadOffline, routeTiles } from "./tilecache.js";
 import type { NativeFix } from "./native.js";
-import { askForRideNotifications, isNativeApp, isNewerAppVersion, keepScreenOn, lastNativeSpeechError, locationAdvice, minimizeApp, nativeLocationAllowed, nativeSpeak, nativeStopSpeech, onAndroidBack, rideLocationState, type SaveResult, startDownload, startBackgroundWatcher, stopBackgroundWatcher, webVoiceCount } from "./native.js";
+import { askForRideNotifications, isNativeApp, keepScreenOn, lastNativeSpeechError, locationAdvice, minimizeApp, nativeSpeak, nativeStopSpeech, onAndroidBack, rideLocationState, startBackgroundWatcher, stopBackgroundWatcher, webVoiceCount } from "./native.js";
 import {
   type Candidate,
   GEOCODE_DEBOUNCE_MS,
@@ -34,18 +24,9 @@ import {
   type Ranked,
   worthGeocoding,
 } from "./search.js";
-import {
-  CLASS_LABELS,
-  cautionsHtml,
-  clearPhotoCache,
-  esc,
-  FACILITY_CLASSES,
-  nearestMapillary,
-  GRADE_COLORS,
-  GRADE_TEXT,
-} from "./segment.js";
+import { CLASS_LABELS, clearPhotoCache, FACILITY_CLASSES, nearestMapillary, GRADE_COLORS, GRADE_TEXT } from "./segment.js";
 import type { Maneuver } from "./nav.js";
-import { buildTrack, distM, sunsetTime } from "./nav.js";
+import { distM, sunsetTime } from "./nav.js";
 import { type LoopLeg, navDistText, RideEngine, type RideEffect } from "./ride.js";
 import type { HazardCategory, HazardReport } from "./hazards.js";
 import {
@@ -58,29 +39,10 @@ import {
   removeHazard,
   setHazardCategory,
 } from "./hazards.js";
-import {
-  clearRecent,
-  deletePlace,
-  exportBackup,
-  importBackup,
-  listPlaces,
-  listRecent,
-  pushRecent,
-  savePlace,
-} from "./places.js";
-import type { RideSummary } from "./rides.js";
-import {
-  clearRides,
-  deleteRide,
-  loadRides,
-  RideRecorder,
-  rideTotals,
-  saveRide,
-  stashInProgress,
-  takeInProgress,
-} from "./rides.js";
-import { dataSource, dataUrl, loadJson, usingRemoteData } from "./data.js";
-import { buildCues, PROFILES, routeCacheKey, toGPX } from "./router.js";
+import { listPlaces, listRecent } from "./places.js";
+import { RideRecorder, saveRide, stashInProgress, takeInProgress } from "./rides.js";
+import { dataSource, dataUrl, loadJson } from "./data.js";
+import { PROFILES, routeCacheKey } from "./router.js";
 import {
   distVoice,
   fmtDist,
@@ -103,8 +65,6 @@ import { type Headline, NavHeadline, NavTripLine, type TripLine } from "./ui/Nav
 import { OptionCards } from "./ui/OptionCards.js";
 import { type GradeView, SearchResults, type SearchRowView } from "./ui/SearchResults.js";
 import { Cautions, ClassBar, ClassKey, Ribbon, WhyList } from "./ui/RouteSummary.js";
-import { RecentRoutes, SavedPlaces } from "./ui/PlacesAndRecent.js";
-import { RideList, RideTotalsLine, SketchyList } from "./ui/Lists.js";
 import { chipViews, paintChip } from "./chips.js";
 import { BuildList, type BuildListStatus } from "./ui/BuildList.js";
 import { SegmentCardView } from "./ui/SegmentCard.js";
@@ -120,19 +80,26 @@ import {
   PlaceCard,
   textOf,
 } from "./ui/MapCards.js";
-import type { WirePrefs } from "./routing.js";
 import { type SpeakPriority, SpeechQueue } from "./speech.js";
 import { loopRejoinPoint, payloadLength, rejoinOption } from "./rejoin.js";
 import { decodePlan, encodePlan } from "./permalink.js";
-import { PreparedImage, saveBlob, shareImage } from "./share.js";
-import { readItem, readJson, removeItem, trimRecord, writeItem } from "./storage.js";
-import { DeferredReload, ScreenLock, type WakeLockApi } from "./lifecycle.js";
-import { drawRideCard, drawTotalsCard, rideShareText, totalsShareText } from "./sharecard.js";
+import { readItem, removeItem, writeItem } from "./storage.js";
+import { ScreenLock, type WakeLockApi } from "./lifecycle.js";
 import type { ProtectionClass, SafetyGrade, RouteOption, RouteSummary } from "./types.js";
-import { dataReady, gradeLane, routeLane, routing, shedLane, trip } from "./app/services.js";
+import { dataReady, gradeLane, routeLane, routing, trip } from "./app/services.js";
 import { applyBasemap, initDarkMode } from "./app/dark-mode.js";
 import { ensureLayer, getSource } from "./app/sources.js";
 import { announce, constructionReady, dataProgress, ensureRouter, initDataLoad, manifestReady, netTiles, networkReady, poisData, poisReady, refreshNetworkTiles, showStage } from "./app/data-load.js";
+import { initRidesDialog, renderRides } from "./app/rides-dialog.js";
+import { initAppInfo } from "./app/app-info.js";
+import { initRouteExport } from "./app/route-export.js";
+import { computeShed, exitShedMode, initShed } from "./app/shed.js";
+import { applyAvoidPoints, initAvoid, routePrefs, syncAvoidSummary } from "./app/avoid.js";
+import { autoNamed, nameEnd } from "./app/names.js";
+import { currentPosition, initMarkers, makeMarker, setPoint, syncOD } from "./app/markers.js";
+import { initSketchy, openSketchyPopup, renderSketchy, saveSketchy } from "./app/sketchy.js";
+import { initPlaces, promptSavePlace, recordRecentRoute, renderPlacesAndRecent } from "./app/places.js";
+import { initAppUpdate, swReload } from "./app/app-update.js";
 
 interface NominatimResult {
   display_name: string;
@@ -165,32 +132,11 @@ const BBOX = COVERAGE;
 // helpers
 // ---------------------------------------------------------------------------
 
-function saveSketchy(marks: [number, number][]): void {
-  writeItem(SKETCHY_KEY, JSON.stringify(marks));
-  // this is exactly a change to what the router must avoid, so any grade
-  // computed before it is now a claim about a route the app wouldn't plan
-  avoidRevision++;
-  regradeVisible();
-}
 
 // ---------------------------------------------------------------------------
 // state
 // ---------------------------------------------------------------------------
 
-let poiMarker: Marker | null = null;
-let shedMarker: Marker | null = null;
-/** Every routing choice the rider has made, as the router takes them — the one
- * place a trip, a reroute, a detour or a search grade reads them from. The
- * reroute, the detour and the resume each spelled the call out for themselves
- * once, and all three left the walking limit off. */
-function routePrefs(): WirePrefs {
-  return { profileId: store.profileId, preferFlat: store.preferFlat, avoid: [...store.avoidTypes], walkMaxM: store.walkMaxM };
-}
-
-function syncAvoidSummary(): void {
-  el<HTMLElement>("avoid-summary").textContent =
-    store.avoidTypes.size === 0 ? "🛡 avoid lane types" : `🛡 avoiding ${store.avoidTypes.size} lane type${store.avoidTypes.size > 1 ? "s" : ""}`;
-}
 let hoverPopup: Popup | null = null;
 /** The street card the hover popup shows (src/ui/SegmentCard.tsx). */
 const segmentCard = new SegmentCardView();
@@ -201,6 +147,7 @@ function dropHoverCard(): void {
   hoverPopup?.remove();
   hoverPopup = null;
 }
+links.dropHoverCard.set(dropHoverCard);
 
 /** What a tap on the map means, decided in one place (onMapTap).
  *
@@ -235,113 +182,16 @@ const tapTargets = new Map<TapLayer, TapTarget>();
 function onTap(layer: TapLayer, open: TapOpen, alsoSetsPoint = false): void {
   tapTargets.set(layer, { open, alsoSetsPoint });
 }
-let shedCenter: [number, number] | null = null;
 
-/** Sample construction geometries into avoid-points for the router. */
-function constructionAvoidPoints(fc: ConstructionFC): [number, number][] {
-  const pts: [number, number][] = [];
-  const pushCoord = (c: unknown): void => {
-    if (Array.isArray(c) && typeof c[0] === "number" && typeof c[1] === "number") {
-      pts.push([c[0], c[1]]);
-    }
-  };
-  for (const f of fc.features) {
-    const g = f.geometry;
-    if (g.type === "Point") pushCoord(g.coordinates);
-    else if (g.type === "LineString" && Array.isArray(g.coordinates)) {
-      for (const c of g.coordinates) pushCoord(c);
-    } else if (Array.isArray(g.coordinates)) {
-      for (const part of g.coordinates) {
-        if (Array.isArray(part)) for (const c of part) pushCoord(c);
-      }
-    }
-  }
-  return pts;
-}
 let hazardPendingLoc: [number, number] | null = null;
 let hazardPhoto: Blob | null = null;
 
-/** Routes avoid both quick sketchy marks and full hazard reports. */
-function applyAvoidPoints(): void {
-  void routing.setSketchyMarks([
-    ...store.sketchyMarks,
-    ...store.hazards.map((h): [number, number] => [h.lon, h.lat]),
-  ]);
-}
 let pendingSelect: RouteOption["id"] | null = null;
 
 initDataLoad();
 
+initAvoid();
 
-// construction avoidance for the router as soon as the zones load (the worker
-// keeps it, and applies it to every graph it builds)
-void constructionReady.then(() => {
-  if (store.constructionFC) void routing.setConstructionPoints(constructionAvoidPoints(store.constructionFC));
-});
-
-function currentPosition(): Promise<[number, number]> {
-  return new Promise((resolve, reject) => {
-    if (!navigator.geolocation) {
-      reject(new Error("no geolocation"));
-      return;
-    }
-    navigator.geolocation.getCurrentPosition(
-      (p) => resolve([p.coords.longitude, p.coords.latitude]),
-      (err) => reject(err instanceof Error ? err : new Error(String(err.message))),
-      { enableHighAccuracy: true, timeout: 8000, maximumAge: 30_000 },
-    );
-  });
-}
-
-/** Reflect the origin state in the From field. */
-/** Put the start on the map at load, when we can do it without asking.
- *
- * The From field promises "Your location", and until this ran it was a promise
- * the app hadn't kept: nothing was located until a route was requested, so the
- * map opened somewhere generic and the field described a start that didn't
- * exist. Cold-prompting every first-time visitor for location is the other
- * failure — people deny it, and a denied permission is hard to take back — so
- * this only acts where the browser says permission is already granted. Everyone
- * else is located on demand, the first time they ask for a route.
- */
-async function locateIfAlreadyAllowed(): Promise<void> {
-  if (!store.fromCurrent || store.start !== null || !navigator.geolocation) return;
-  try {
-    // In the app, Android's own answer: the WebView's Permissions API reports
-    // its per-origin state, which is not the app's permission. The app no
-    // longer asks at launch, so this is what keeps "Your location" filled in
-    // for someone who allowed it on an earlier ride.
-    const nativeAllowed = await nativeLocationAllowed();
-    if (nativeAllowed === false) return;
-    const perms = navigator.permissions;
-    if (nativeAllowed === null) {
-      if (perms === undefined) return; // Safari <16: don't guess, wait to be asked
-      const status = await perms.query({ name: "geolocation" as PermissionName });
-      if (status.state !== "granted") return;
-    }
-    const at = await currentPosition();
-    if (!store.fromCurrent || store.start !== null) return; // the rider got there first
-    store.start = makeMarker(at, "#2b83ba", "start");
-    syncOD();
-    map.easeTo({ center: at, zoom: Math.max(map.getZoom(), 14), duration: 600 });
-  } catch {
-    // no position, revoked between the check and the call, or simply slow:
-    // the on-demand path still runs when a route is asked for
-  }
-}
-
-function syncOD(): void {
-  const f = el<HTMLInputElement>("from-field");
-  if (f.classList.contains("picking")) return;
-  f.classList.toggle("custom", !store.fromCurrent);
-  if (store.fromCurrent) {
-    f.value = "";
-    f.placeholder = "Your location";
-  } else if (f.value === "") {
-    // set by tapping/dragging the map rather than typed
-    f.placeholder = "Start set on the map";
-  }
-}
 
 // ── what the ends are called ──────────────────────────────────────────────
 // A permalink (or a tap on the map) sets a destination that has no name, and
@@ -350,143 +200,6 @@ function syncOD(): void {
 // Nominatim once per spot, remember the answer, and never make routing wait
 // for it — a name is a nicety, the route is the product.
 
-const REVGEO_KEY = "bike-revgeo-v1";
-/** Which fields we filled in ourselves, and may therefore overwrite. */
-const autoNamed = { start: false, end: false };
-
-/** ~11 m of precision: enough that nudging a pin reuses the cached name. */
-function revKey(lon: number, lat: number): string {
-  return `${lon.toFixed(4)},${lat.toFixed(4)}`;
-}
-
-/** Names worth remembering: enough for every place a family rides to, and
- * small enough that the cache cannot crowd the ride history out of storage —
- * it was never trimmed, and grew by a name for every pin ever dropped. */
-const REVGEO_MAX = 400;
-
-function revCache(): Record<string, string> {
-  return readJson<Record<string, string>>(REVGEO_KEY, {});
-}
-
-function rememberName(cache: Record<string, string>, key: string, name: string): void {
-  cache[key] = name;
-  // private mode or a full store: the name just won't be remembered
-  writeItem(REVGEO_KEY, JSON.stringify(trimRecord(cache, REVGEO_MAX)));
-}
-
-/** Whether the router has a graph, waiting up to `ms` for one. */
-async function withRouter(ms: number): Promise<boolean> {
-  const deadline = Date.now() + ms;
-  while (!store.routerReady && Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, 120));
-  }
-  return store.routerReady;
-}
-
-async function reverseGeocode(lon: number, lat: number): Promise<string | null> {
-  const key = revKey(lon, lat);
-  const cache = revCache();
-  const hit = cache[key];
-  if (hit !== undefined) return hit;
-  // The map we already loaded knows the street. Ask it first: it is instant,
-  // it works with no signal, and it keeps a pin drop from costing a request to
-  // OpenStreetMap's geocoder, which is donated infrastructure that a public app
-  // is not supposed to lean on. Outside the mapped area, fall through and ask.
-  //
-  // Wait for the router if it isn't built yet: pins from a permalink are named
-  // before the first tiles land, which is precisely the common case, and
-  // answering those from Nominatim would leave the local path unused where it
-  // matters most. The wait is generous because naming is fire-and-forget — the
-  // field fills a beat later either way — and a slow phone on a cold start
-  // shouldn't be the reason a request goes out that didn't need to.
-  // A tight radius on purpose. Within a few metres of a street the local name
-  // is the right answer and costs nothing; further out the pin is probably on a
-  // building or in a park, where the geocoder's answer is better than the name
-  // of the nearest road — a pin on Kendall Square should say "Google", not the
-  // street it happens to sit beside.
-  const local = (await withRouter(10_000)) ? await routing.streetNameAt(lon, lat, 20) : null;
-  if (local !== null) {
-    rememberName(cache, key, local);
-    return local;
-  }
-  const url =
-    "https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18" +
-    `&lon=${lon.toFixed(6)}&lat=${lat.toFixed(6)}`;
-  const resp = await fetch(url, { headers: { Accept: "application/json" } });
-  if (!resp.ok) return null;
-  const j = (await resp.json()) as {
-    name?: string;
-    display_name?: string;
-    address?: Record<string, string>;
-  };
-  const a = j.address ?? {};
-  const street = [a["house_number"], a["road"]].filter((x) => x !== undefined).join(" ");
-  const label =
-    (j.name ?? "") ||
-    street ||
-    a["neighbourhood"] ||
-    a["suburb"] ||
-    a["city"] ||
-    (j.display_name ?? "").split(",")[0] ||
-    "";
-  if (label !== "") rememberName(cache, key, label);
-  return label === "" ? null : label;
-}
-
-/** Name an end in its field, unless the rider typed something there. */
-function nameEnd(kind: "start" | "end"): void {
-  const marker = kind === "start" ? store.start : store.end;
-  if (!marker) return;
-  const field = el<HTMLInputElement>(kind === "start" ? "from-field" : "search");
-  if (field.value.trim() !== "" && !autoNamed[kind]) return;
-  const { lng, lat } = marker.getLngLat();
-  const asked = revKey(lng, lat);
-  field.value = "";
-  autoNamed[kind] = false;
-  void reverseGeocode(lng, lat)
-    .then((label) => {
-      if (label === null) return;
-      // the pin may have moved on (or gone) while we were asking
-      const now = kind === "start" ? store.start : store.end;
-      if (!now) return;
-      const p = now.getLngLat();
-      if (revKey(p.lng, p.lat) !== asked) return;
-      if (field.value.trim() !== "") return;
-      field.value = label;
-      autoNamed[kind] = true;
-    })
-    .catch(() => undefined); // offline, or Nominatim rate-limiting us
-}
-
-function makeMarker(lngLat: LngLat | [number, number], color: string, label: string): Marker {
-  const m = new maplibregl.Marker({ color, draggable: true });
-  m.setLngLat(lngLat).addTo(map);
-  m.getElement().title = `${label} (drag to move)`;
-  m.on("dragend", () => {
-    nameEnd(label === "start" ? "start" : "end");
-    void requestRoute();
-    // a grade is the route FROM the start: move it and the letters on screen
-    // describe a journey that no longer begins where the rider does
-    if (label === "start") regradeVisible();
-  });
-  return m;
-}
-
-function setPoint(kind: "start" | "end", lngLat: LngLat | [number, number]): void {
-  if (kind === "start") {
-    store.fromCurrent = false;
-    el<HTMLInputElement>("from-field").classList.remove("picking");
-    if (store.start) store.start.setLngLat(lngLat);
-    else store.start = makeMarker(lngLat, "#2b83ba", "start");
-    regradeVisible();
-  } else {
-    if (store.end) store.end.setLngLat(lngLat);
-    else store.end = makeMarker(lngLat, "#d7191c", "end");
-  }
-  syncOD();
-  nameEnd(kind);
-  void requestRoute();
-}
 
 // ---------------------------------------------------------------------------
 // routing
@@ -646,8 +359,8 @@ async function requestRoute(): Promise<void> {
     if (!fallback) throw new Error("no route found");
     if (!trip.publish(ticket, found)) return;
     // an A-to-B trip replaces a round trip, and its stop
-    poiMarker?.remove();
-    poiMarker = null;
+    store.poiMarker?.remove();
+    store.poiMarker = null;
     store.loopParams = null;
     const wanted = pendingSelect;
     pendingSelect = null;
@@ -657,8 +370,8 @@ async function requestRoute(): Promise<void> {
     frameRoute(fallback);
   } catch (err) {
     if (ticket.stale()) return;
-    poiMarker?.remove();
-    poiMarker = null;
+    store.poiMarker?.remove();
+    store.poiMarker = null;
     store.loopParams = null;
     trip.clear();
     renderOptions();
@@ -670,6 +383,7 @@ async function requestRoute(): Promise<void> {
     if (!ticket.stale()) loading.style.display = "none";
   }
 }
+links.requestRoute.set(requestRoute);
 
 async function requestLoop(): Promise<void> {
   if (store.navActive) return; // a new round trip is not something to swap in mid-ride
@@ -746,15 +460,15 @@ async function requestLoop(): Promise<void> {
     if (!trip.publish(ticket, [option, ...more.map((m) => m.option)])) return;
     store.loopParams = { km, kind };
     selectOption("loop");
-    poiMarker?.remove();
-    poiMarker = null;
+    store.poiMarker?.remove();
+    store.poiMarker = null;
     if (poi !== null) {
       // no marker on a ride with no stop: the loop is the whole of it
-      poiMarker = new maplibregl.Marker({ color: "#e67e22" })
+      store.poiMarker = new maplibregl.Marker({ color: "#e67e22" })
         .setLngLat(poi.geometry.coordinates)
         .addTo(map);
       const meta = POI_META[poi.properties.kind];
-      poiMarker.getElement().title =
+      store.poiMarker.getElement().title =
         `${meta?.emoji ?? ""} ${poi.properties.name || meta?.label || "stop"}`;
     }
   } catch (err) {
@@ -1061,51 +775,8 @@ async function showMapillaryPreview(lon: number, lat: number): Promise<void> {
 // GPX + cue sheet
 // ---------------------------------------------------------------------------
 
-/** Say on the button what became of a file it saved, for a moment. */
-function toldSaved(btn: HTMLElement, result: SaveResult): void {
-  const prev = btn.textContent;
-  btn.textContent =
-    "saved" in result ? `✓ saved to ${result.where ?? "Downloads"}` : `⚠ not saved: ${result.error}`;
-  window.setTimeout(() => {
-    btn.textContent = prev;
-  }, 3000);
-}
+initRouteExport();
 
-el<HTMLButtonElement>("gpx").addEventListener("click", () => {
-  const sel = trip.selected;
-  if (!sel) return;
-  const gpx = toGPX(sel.payload, `Family bike route (${sel.label})`);
-  const saving = saveBlob(new Blob([gpx], { type: "application/gpx+xml" }), "family-bike-route.gpx");
-  // in a browser the download is its own confirmation; in the app it isn't
-  if (isNativeApp()) void saving.then((r) => toldSaved(el<HTMLButtonElement>("gpx"), r));
-});
-
-el<HTMLButtonElement>("print-cues").addEventListener("click", () => {
-  const sel = trip.selected;
-  if (!sel) return;
-  const cues = buildCues(sel.payload);
-  const s = sel.payload.summary;
-  const rows = cues
-    .map((c) => `<tr><td>${fmtDist(c.km * 1000)}</td><td>${esc(c.text)}</td></tr>`)
-    .join("");
-  const cautionRows = cautionsHtml(s.cautions, fmtDist);
-  const win = window.open("", "_blank");
-  if (!win) return;
-  win.document.write(
-    `<html><head><title>Cue sheet</title><style>
-      body{font-family:sans-serif;font-size:13px;max-width:520px;margin:20px auto}
-      table{border-collapse:collapse;width:100%}td{border-bottom:1px solid #ddd;padding:3px 6px}
-      td:first-child{white-space:nowrap;font-variant-numeric:tabular-nums}
-    </style></head><body>
-    <h2>Family bike route — ${sel.label}</h2>
-    <p>${fmtDist(s.meters)} · ~${s.minutes} min · ${s.pct_protected}% protected · climb ${fmtClimb(s.climb_m ?? 0)}</p>
-    ${cautionRows ? `<ul>${cautionRows}</ul>` : ""}
-    <table>${rows}</table>
-    </body></html>`,
-  );
-  win.document.close();
-  win.print();
-});
 
 // ---------------------------------------------------------------------------
 // URL hash permalinks: #s=lon,lat&e=lon,lat&m=profile&f=1
@@ -1230,26 +901,6 @@ el<HTMLButtonElement>("share").addEventListener("click", () => {
 // saved places (Home/Work/…) and recent route history
 // ---------------------------------------------------------------------------
 
-/** Label a just-planned route from its street names for the recent list. */
-function recordRecentRoute(s: [number, number], e: [number, number]): void {
-  const sel = trip.selected ?? trip.options[0];
-  if (!sel) return;
-  const names = sel.payload.geojson.features
-    .map((f) => f.properties.name)
-    .filter((n): n is string => n !== null && n !== "");
-  const from = names[0] ?? "start";
-  const to = names[names.length - 1] ?? "end";
-  pushRecent({
-    s,
-    e,
-    label: `${from} → ${to}`,
-    km: Math.round(sel.payload.summary.meters / 100) / 10,
-    grade: sel.grade,
-    t: Date.now(),
-  });
-  renderPlacesAndRecent();
-}
-
 function planBetween(s: [number, number], e: [number, number]): void {
   store.fromCurrent = false;
   syncOD();
@@ -1261,44 +912,8 @@ function planBetween(s: [number, number], e: [number, number]): void {
   nameEnd("end");
   void requestRoute();
 }
+links.planBetween.set(planBetween);
 
-function promptSavePlace(lon: number, lat: number): void {
-  const name = window.prompt("Name this place (e.g. Home, Work, School):");
-  if (name === null || name.trim() === "") return;
-  savePlace({ name: name.trim(), lon, lat });
-  renderPlacesAndRecent();
-}
-
-function renderPlacesAndRecent(): void {
-  render(
-    h(SavedPlaces, {
-      places: listPlaces(),
-      onUse: (place, as) => {
-        setPoint(as, [place.lon, place.lat]);
-        map.flyTo({ center: [place.lon, place.lat], zoom: 15 });
-      },
-      onDelete: (place) => {
-        deletePlace(place.name);
-        renderPlacesAndRecent();
-      },
-    }),
-    el<HTMLDivElement>("places-list"),
-  );
-  const recent = listRecent();
-  // collapsed by default; the whole section is hidden when there's no history
-  el<HTMLDetailsElement>("recent-box").style.display = recent.length > 0 ? "block" : "none";
-  render(
-    h(RecentRoutes, {
-      routes: recent,
-      onPlan: planBetween,
-      onClear: () => {
-        clearRecent();
-        renderPlacesAndRecent();
-      },
-    }),
-    el<HTMLDivElement>("recent-list"),
-  );
-}
 
 // ---------------------------------------------------------------------------
 // address search (Nominatim, bounded to our area)
@@ -1398,10 +1013,6 @@ async function searchAddress(query: string): Promise<NominatimResult[]> {
   return (await resp.json()) as NominatimResult[];
 }
 
-/** Moves whenever the rider changes what the router must avoid — a sketchy
- * mark, a filed hazard — so a grade computed before it is never replayed after.
- * Those change where routes go just as surely as a preference does. */
-let avoidRevision = 0;
 /** The rows currently on screen, so their letters can be withdrawn and redone
  * when the answer they state stops being true. */
 let gradedRows: { key: string; lngLat: [number, number] }[] = [];
@@ -1431,6 +1042,7 @@ function regradeVisible(): void {
   paintSearch();
   void gradeSearchResults(gradedRows);
 }
+links.regradeVisible.set(regradeVisible);
 
 /** Take the placeholders away from a row that will never get a grade.
  *
@@ -1480,7 +1092,7 @@ async function gradeSearchResults(rows: { key: string; lngLat: [number, number] 
     preferFlat: store.preferFlat,
     avoid: [...store.avoidTypes],
     walkMaxM: store.walkMaxM,
-    avoidRevision,
+    avoidRevision: store.avoidRevision,
   };
   const from = store.start?.getLngLat();
   if (!from) {
@@ -1718,86 +1330,13 @@ function scheduleGrading(rows: { key: string; lngLat: [number, number] }[]): voi
 // safe-shed (reachability)
 // ---------------------------------------------------------------------------
 
-/** The reach map for the current centre and budget.
- *
- * The slider fires on every step of a drag, and a bigger budget waits on more
- * tiles than a smaller one — so the flood for a budget already let go of used to
- * finish last and paint over the one asked for. And closing the reach map while
- * one waited left it to resume with no centre at all, which crashed. Each call
- * now owns the reach map only until the next one starts, or the map is closed. */
-async function computeShed(): Promise<void> {
-  const center = shedCenter;
-  if (!center) return;
-  const ticket = shedLane.begin();
-  await manifestReady;
-  if (ticket.stale()) return;
-  const budgetKm = Number(el<HTMLInputElement>("shed-budget").value);
-  el<HTMLSpanElement>("shed-budget-label").textContent = fmtDistTight(budgetKm * 1000);
-  // the flood can reach out to the full budget radius from the center
-  const mapped = await ensureRouter([center], budgetKm * 1000, 2);
-  if (ticket.stale() || !store.shedMode || !mapped) return;
-  const res = await routing.safeShed(center, budgetKm * 1000, store.profileId, store.preferFlat);
-  if (ticket.stale() || !store.shedMode) return;
-  getSource("shed").setData(res.geojson as GeoJSON.GeoJSON);
-  el<HTMLDivElement>("shed-info").textContent =
-    `${fmtDist(res.reachableKm * 1000)} of streets reachable ` +
-    `(${res.pctReachable}% of the network) within a perceived ${fmtDistTight(budgetKm * 1000)}`;
-  if (shedMarker) shedMarker.setLngLat(center);
-  else {
-    shedMarker = new maplibregl.Marker({ color: "#7c3aed" }).setLngLat(center).addTo(map);
-    shedMarker.getElement().title = "reachability center";
-  }
-}
+initShed();
 
-function exitShedMode(): void {
-  shedLane.cancel(); // a flood still loading tiles is for a map no longer open
-  store.shedMode = false;
-  shedCenter = null;
-  shedMarker?.remove();
-  shedMarker = null;
-  getSource("shed").setData(emptyFC());
-  el<HTMLDivElement>("shed-panel").style.display = "none";
-  el<HTMLButtonElement>("shed-btn").textContent = "🗺 Reach map";
-  el<HTMLDivElement>("shed-info").textContent = "";
-}
-
-el<HTMLButtonElement>("shed-btn").addEventListener("click", () => {
-  if (store.shedMode) {
-    exitShedMode();
-    return;
-  }
-  store.shedMode = true;
-  el<HTMLButtonElement>("shed-btn").textContent = "✕ Exit reach map";
-  el<HTMLDivElement>("shed-panel").style.display = "block";
-  el<HTMLDivElement>("shed-info").textContent =
-    "click the map (e.g. home) to see everything reachable at your comfort level";
-});
-
-el<HTMLInputElement>("shed-budget").addEventListener("input", () => {
-  void computeShed();
-});
 
 // ---------------------------------------------------------------------------
 // sketchy marks (personal feedback)
 // ---------------------------------------------------------------------------
 
-function renderSketchy(): void {
-  el<HTMLDivElement>("sketchy-section").style.display = store.sketchyMarks.length > 0 ? "block" : "none";
-  render(
-    h(SketchyList, {
-      marks: store.sketchyMarks,
-      onFly: (mark) => map.flyTo({ center: mark, zoom: 16 }),
-      onRemove: (i) => {
-        store.sketchyMarks = store.sketchyMarks.filter((_, j) => j !== i);
-        saveSketchy(store.sketchyMarks);
-        applyAvoidPoints();
-        renderSketchy();
-        void requestRoute();
-      },
-    }),
-    el<HTMLDivElement>("sketchy-list"),
-  );
-}
 
 // ---------------------------------------------------------------------------
 // layers + interaction wiring
@@ -2635,7 +2174,7 @@ function onMapTap(e: MapMouseEvent): void {
     }
   }
   if (store.shedMode) {
-    shedCenter = [e.lngLat.lng, e.lngLat.lat];
+    store.shedCenter = [e.lngLat.lng, e.lngLat.lat];
     void computeShed();
     return;
   }
@@ -2659,55 +2198,6 @@ function onMapTap(e: MapMouseEvent): void {
   } else {
     setPoint("end", e.lngLat);
   }
-}
-
-/** The one open spot-menu, so a second right-click (or long-press) replaces it
- * instead of stacking a second card on the map. */
-let sketchyPopup: Popup | null = null;
-
-// touch devices have no right-click: a long-press on a street opens this same
-// "mark sketchy" popup (wired below the definition)
-function openSketchyPopup(lngLat: [number, number]): void {
-  sketchyPopup?.remove();
-  sketchyPopup = null;
-  // the hover card describes the same street
-  dropHoverCard();
-  const box = document.createElement("div");
-  const btn = document.createElement("button");
-  btn.textContent = "⚠ mark this spot as sketchy";
-  box.appendChild(btn);
-  const report = document.createElement("button");
-  report.textContent = "📷 report hazard…";
-  box.appendChild(report);
-  const star = document.createElement("button");
-  star.textContent = "☆ save place…";
-  box.appendChild(star);
-  // closeOnClick would kill this the instant the finger lifts (the lift itself
-  // generates a click), which made it untappable on a touchscreen
-  const popup = new maplibregl.Popup({ closeOnClick: false, closeButton: true })
-    .setLngLat(lngLat)
-    .setDOMContent(box)
-    .addTo(map);
-  sketchyPopup = popup;
-  popup.on("close", () => {
-    if (sketchyPopup === popup) sketchyPopup = null;
-  });
-  btn.addEventListener("click", () => {
-    store.sketchyMarks.push(lngLat);
-    saveSketchy(store.sketchyMarks);
-    applyAvoidPoints();
-    renderSketchy();
-    popup.remove();
-    void requestRoute();
-  });
-  report.addEventListener("click", () => {
-    popup.remove();
-    openHazardDialog(lngLat[0], lngLat[1]);
-  });
-  star.addEventListener("click", () => {
-    popup.remove();
-    promptSavePlace(lngLat[0], lngLat[1]);
-  });
 }
 
 let pressTimer: number | undefined;
@@ -3015,44 +2505,7 @@ el<HTMLButtonElement>("from-pick").addEventListener("click", () => {
   f.placeholder = "tap the map to set the start…";
 });
 
-el<HTMLButtonElement>("backup-save").addEventListener("click", () => {
-  const backup = exportBackup(new Date().toISOString());
-  const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
-  const places = listPlaces().length;
-  const note = el<HTMLDivElement>("backup-note");
-  void saveBlob(blob, `family-bike-router-backup-${new Date().toISOString().slice(0, 10)}.json`).then((r) => {
-    note.textContent =
-      "saved" in r
-        ? `Backed up ${places} saved place${places === 1 ? "" : "s"} and your marks` +
-          (r.where === undefined ? "." : `, in ${r.where}.`)
-        : `The backup was not saved: ${r.error}`;
-  });
-});
-
-el<HTMLButtonElement>("backup-load").addEventListener("click", () => {
-  el<HTMLInputElement>("backup-file").click();
-});
-
-el<HTMLInputElement>("backup-file").addEventListener("change", () => {
-  const file = el<HTMLInputElement>("backup-file").files?.[0];
-  if (!file) return;
-  void file
-    .text()
-    .then((text) => {
-      const n = importBackup(JSON.parse(text));
-      renderPlacesAndRecent();
-      store.sketchyMarks = loadSketchy();
-      applyAvoidPoints();
-      renderSketchy();
-      el<HTMLDivElement>("backup-note").textContent =
-        `Restored ${n} item${n === 1 ? "" : "s"} — ${listPlaces().length} saved places.`;
-    })
-    .catch((err: unknown) => {
-      el<HTMLDivElement>("backup-note").textContent =
-        `Couldn't restore that file: ${err instanceof Error ? err.message : String(err)}`;
-    });
-  el<HTMLInputElement>("backup-file").value = "";
-});
+initPlaces();
 
 /** Clear the trip: pins, options, drawn route — and the link, unless the
  * link is what is being followed. */
@@ -3067,8 +2520,8 @@ function resetPlan(clearLink = true): void {
   el<HTMLDivElement>("loading").style.display = "none";
   store.start?.remove();
   store.end?.remove();
-  poiMarker?.remove();
-  store.start = store.end = poiMarker = null;
+  store.poiMarker?.remove();
+  store.start = store.end = store.poiMarker = null;
   store.loopParams = null;
   endWhatIf();
   clearOptionChips();
@@ -3447,44 +2900,6 @@ for (const [cls, label] of Object.entries(CLASS_LABELS) as [ProtectionClass, str
 // about dialog: methodology + live data freshness
 // ---------------------------------------------------------------------------
 
-interface DataMeta {
-  built: string;
-  sources: { name: string; retrieved: string; features: number }[];
-}
-
-function fillAbout(): void {
-  const multTable = el<HTMLTableElement>("mult-table");
-  if (multTable.rows.length > 0) return; // already filled
-  const yk = PROFILES.young_kids;
-  const rows = (Object.entries(yk.mult) as [ProtectionClass, number][])
-    .sort((a, b) => a[1] - b[1])
-    .map(
-      ([cls, m]) =>
-        `<tr><td>${classSwatch(cls, 28, 12)} ${CLASS_LABELS[cls]}</td>` +
-        `<td>×${m}</td></tr>`,
-    );
-  rows.push(
-    `<tr><td>painted lane on a busy road</td><td>×${yk.busyLane}</td></tr>`,
-    `<tr><td>buffered lane on a busy road</td><td>×${yk.busyBuffered}</td></tr>`,
-  );
-  multTable.innerHTML = `<tr><th>street type</th><th>cost</th></tr>${rows.join("")}`;
-  void dataReady
-    .then(() => loadJson<DataMeta>("meta.json"))
-    .then((meta: DataMeta | null) => {
-      if (!meta) return;
-      const remote = usingRemoteData();
-      el<HTMLElement>("built-date").textContent =
-        meta.built + (remote !== null ? " (live from the website)" : "");
-      const table = el<HTMLTableElement>("freshness-table");
-      for (const s of meta.sources) {
-        const tr = table.insertRow();
-        tr.insertCell().textContent = s.name.replace(/_/g, " ");
-        tr.insertCell().textContent = s.retrieved;
-        tr.insertCell().textContent = String(s.features);
-      }
-    })
-    .catch(() => undefined);
-}
 
 // ---------------------------------------------------------------------------
 // hazard reports (category + note + photo), stored on-device
@@ -3539,6 +2954,7 @@ function openHazardDialog(lon: number, lat: number): void {
   });
   el<HTMLDialogElement>("hazard").showModal();
 }
+links.openHazardDialog.set(openHazardDialog);
 
 function pendingHazardReport(): HazardReport | null {
   if (!hazardPendingLoc) return null;
@@ -3677,113 +3093,8 @@ for (const btn of document.querySelectorAll<HTMLButtonElement>("#nav-classify bu
 // ride history dialog
 // ---------------------------------------------------------------------------
 
-function showRideOnMap(ride: RideSummary): void {
-  getSource("history").setData({
-    type: "Feature",
-    geometry: { type: "LineString", coordinates: ride.polyline },
-    properties: {},
-  } as GeoJSON.GeoJSON);
-  const lons = ride.polyline.map((p) => p[0]);
-  const lats = ride.polyline.map((p) => p[1]);
-  if (lons.length > 1) {
-    map.fitBounds(
-      [
-        [Math.min(...lons), Math.min(...lats)],
-        [Math.max(...lons), Math.max(...lats)],
-      ],
-      { padding: 60, duration: 800 },
-    );
-  }
-}
+initRidesDialog();
 
-/** Share a stats card from a tap (see share.ts): the share sheet when the card
- * is ready and the browser has one, otherwise the picture saved and the text
- * copied — with the button saying so, instead of nothing happening. */
-function shareCard(text: string, image: PreparedImage, filename: string, btn: HTMLElement): void {
-  void shareImage(text, image, filename, {
-    canShare: typeof navigator.canShare === "function" ? (d) => navigator.canShare(d) : undefined,
-    share: typeof navigator.share === "function" ? (d) => navigator.share(d) : undefined,
-    copy: (t) => navigator.clipboard.writeText(t),
-    // in the app a save can fail, and shareImage says so
-    download: (b, f) => saveBlob(b, f),
-    tell: (message, ok) => {
-      const prev = btn.textContent;
-      // a tick over "Picture not saved" said two opposite things at once
-      btn.textContent = `${ok ? "✓" : "⚠"} ${message}`;
-      window.setTimeout(() => {
-        btn.textContent = prev;
-      }, 2500);
-    },
-  });
-}
-
-/** Cards drawn ahead of the tap, so share() can run inside it. */
-let totalsCard: PreparedImage | null = null;
-const rideCards = new Map<string, PreparedImage>();
-
-function rideCard(ride: RideSummary): PreparedImage {
-  let card = rideCards.get(ride.id);
-  if (card === undefined) {
-    card = new PreparedImage(drawRideCard(ride));
-    rideCards.set(ride.id, card);
-  }
-  return card;
-}
-
-function renderRides(): void {
-  const rides = loadRides();
-  render(
-    h(RideTotalsLine, { totals: rides.length === 0 ? null : rideTotals(rides, new Date()) }),
-    el<HTMLDivElement>("ride-totals"),
-  );
-  el<HTMLButtonElement>("rides-share").style.display = rides.length === 0 ? "none" : "inline-block";
-  render(
-    h(RideList, {
-      rides,
-      onMap: (ride) => {
-        showRideOnMap(ride);
-        el<HTMLDialogElement>("rides").close();
-      },
-      onSharePrepare: (ride) => {
-        rideCard(ride);
-      },
-      onShare: (ride, button) => {
-        shareCard(rideShareText(ride), rideCard(ride), "bike-ride.png", button);
-      },
-      onDelete: (ride) => {
-        deleteRide(ride.id);
-        renderRides();
-      },
-    }),
-    el<HTMLTableElement>("ride-list"),
-  );
-}
-
-el<HTMLButtonElement>("rides-btn").addEventListener("click", () => {
-  renderRides();
-  // the totals card is drawn while the list is read, not after the tap
-  const rides = loadRides();
-  rideCards.clear();
-  totalsCard = rides.length > 0 ? new PreparedImage(drawTotalsCard(rideTotals(rides, new Date()))) : null;
-  el<HTMLDialogElement>("rides").showModal();
-});
-el<HTMLButtonElement>("rides-close").addEventListener("click", () => {
-  el<HTMLDialogElement>("rides").close();
-});
-el<HTMLButtonElement>("rides-share").addEventListener("click", () => {
-  const totals = rideTotals(loadRides(), new Date());
-  totalsCard ??= new PreparedImage(drawTotalsCard(totals));
-  shareCard(totalsShareText(totals), totalsCard, "bike-stats.png", el("rides-share"));
-});
-
-el<HTMLButtonElement>("rides-clear").addEventListener("click", () => {
-  clearRides();
-  getSource("history").setData(emptyFC());
-  renderRides();
-});
-el<HTMLDialogElement>("rides").addEventListener("click", (e: MouseEvent) => {
-  if (e.target === el<HTMLDialogElement>("rides")) el<HTMLDialogElement>("rides").close();
-});
 // tap-outside is the reflex on a phone; #hazard was the one dialog ignoring it
 el<HTMLDialogElement>("hazard").addEventListener("click", (e: MouseEvent) => {
   if (e.target === el<HTMLDialogElement>("hazard")) el<HTMLDialogElement>("hazard").close();
@@ -3799,110 +3110,7 @@ el<HTMLButtonElement>("mapillary-save").addEventListener("click", () => {
     token === "" ? "cleared" : "✓ saved — hover any street";
 });
 
-function openAbout(): void {
-  el<HTMLInputElement>("mapillary-token").value = store.mapillaryToken;
-  fillAbout();
-  el<HTMLDialogElement>("about").showModal();
-}
-
-/** What build this page actually is.
- *
- * Substituted at assembly (scripts/assemble.sh) and at deploy (pages.yml). Baked
- * into the code rather than fetched, because the question it answers is "is the
- * page in front of me the current one?" — and a fetched answer describes the
- * server while the page could be a cached older build, which is precisely the
- * case where a wrong answer costs the most.
- */
-// Three plain tokens, not one JSON blob. The first version substituted JSON into
-// a double-quoted literal, and sed reads `\"` in a replacement as an escape for
-// `"` — so the backslashes vanished and app.js became a syntax error that broke
-// the entire app. Values with no quotes in them cannot be mangled that way.
-// Filled in by the build (vite.config.ts), not by sed on the output: a
-// substitution in the shell once turned app.js into a syntax error.
-const BUILD_VERSION = __BUILD_VERSION__;
-const BUILD_TIME = __BUILD_TIME__;
-const BUILD_COMMIT = __BUILD_COMMIT__;
-
-interface BuildInfo {
-  version?: string;
-  built?: string;
-  commit?: string;
-}
-
-/** This build, or null when the placeholders were never substituted — which
- * means the source is being served directly rather than from an assembled
- * bundle or a deploy. */
-function thisBuild(): BuildInfo | null {
-  if (BUILD_COMMIT.startsWith("__BUILD")) return null;
-  return { version: BUILD_VERSION, built: BUILD_TIME, commit: BUILD_COMMIT };
-}
-
-function whenBuilt(iso: string | undefined): string {
-  if (iso === undefined || iso === "") return "an unrecorded time";
-  const at = new Date(iso);
-  return Number.isNaN(at.getTime())
-    ? iso
-    : at.toLocaleString(undefined, {
-        year: "numeric",
-        month: "short",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-      });
-}
-
-/** Say which build this is, and whether the site has a newer one.
- *
- * The second half matters more than the first: a hard refresh that appears to
- * change nothing is indistinguishable from a deploy that never happened, and
- * without this there is no way to tell them apart from inside the app.
- */
-async function showBuildStamp(): Promise<void> {
-  const line = el<HTMLParagraphElement>("build-stamp");
-  const mine = thisBuild();
-  if (!mine) {
-    line.textContent = "Development build — served straight from source.";
-    return;
-  }
-  const named = mine.version !== undefined && mine.version !== "" && mine.version !== "web";
-  const commit = mine.commit === undefined ? "" : ` · ${mine.commit}`;
-  line.textContent = named
-    ? `You're running ${mine.version}, built ${whenBuilt(mine.built)}${commit}.`
-    : `You're running the build from ${whenBuilt(mine.built)}${commit}.`;
-
-  // What the site is serving now, uncached — so a stale page can say so.
-  try {
-    const resp = await fetch("build.json", { cache: "no-store" });
-    if (!resp.ok) return;
-    const live = (await resp.json()) as BuildInfo;
-    if (live.commit === undefined || live.commit === mine.commit) return;
-    const note = document.createElement("span");
-    note.className = "stale-build";
-    note.textContent =
-      ` The site has a newer build (${whenBuilt(live.built)} · ${live.commit}) — ` +
-      "this page is a cached copy. Reload to pick it up.";
-    line.appendChild(note);
-  } catch {
-    // offline, or the file isn't there: what this build is remains true
-  }
-}
-
-// two ways in: the labelled button in the footer, which says what's inside, and
-// the ℹ in the header, which is reachable without scrolling the panel
-for (const id of ["about-btn", "about-top"]) {
-  el<HTMLButtonElement>(id).addEventListener("click", () => {
-    openAbout();
-    // re-checked on every open: a page left sitting for a day is exactly the one
-    // whose reader wants to know whether it is still the current build
-    void showBuildStamp();
-  });
-}
-el<HTMLButtonElement>("about-close").addEventListener("click", () => {
-  el<HTMLDialogElement>("about").close();
-});
-el<HTMLDialogElement>("about").addEventListener("click", (e: MouseEvent) => {
-  if (e.target === el<HTMLDialogElement>("about")) el<HTMLDialogElement>("about").close();
-});
+initAppInfo();
 
 // ---------------------------------------------------------------------------
 // turn-by-turn navigation: follows the GPS along the selected route with a
@@ -3930,11 +3138,6 @@ const screenLock = new ScreenLock(
 document.addEventListener("visibilitychange", () => {
   void screenLock.onVisibilityChange();
 });
-/** A new build waits for the ride to end before the page reloads into it. */
-const swReload = new DeferredReload(
-  () => store.navActive,
-  () => location.reload(),
-);
 /** How long after a ride ends a held-back reload waits: long enough for the
  * "ride saved" line to be heard. */
 const RELOAD_AFTER_RIDE_MS = 5000;
@@ -5114,36 +4317,6 @@ map.on("mousedown", pauseFollowForInput);
 // service worker
 // ---------------------------------------------------------------------------
 
-el<HTMLButtonElement>("offline-btn").addEventListener("click", () => {
-  const sel = trip.selected;
-  if (!sel) return;
-  const btn = el<HTMLButtonElement>("offline-btn");
-  const tiles = routeTiles(buildTrack(sel.payload).coords, [13, BASEMAP_MAXZOOM]);
-  btn.disabled = true;
-  // Tiles only: the style is built in the page (basemap.ts), so a cold start
-  // offline has what it needs to paint them, in either theme.
-  void downloadOffline(
-    tiles,
-    (done, total) => {
-      btn.textContent = `⬇ ${done}/${total}…`;
-    },
-    tileDeps(),
-  )
-    .then(({ failed }) => {
-      // Say so when part of the route did not arrive, rather than "ready" over
-      // a map that will have holes in it.
-      btn.textContent = failed === 0 ? "✓ offline ready" : `⚠ ${failed} of ${tiles.length} tiles missing`;
-    })
-    .catch(() => {
-      btn.textContent = "offline download failed";
-    })
-    .finally(() => {
-      btn.disabled = false;
-      window.setTimeout(() => {
-        btn.textContent = "⬇ Offline map";
-      }, 4000);
-    });
-});
 
 // ---------------------------------------------------------------------------
 // dark mode (night rides): dark basemap + dark UI, persisted; light until
@@ -5159,12 +4332,7 @@ el<HTMLInputElement>("show-constr").addEventListener("change", (e: Event) => {
   }
 });
 
-renderPlacesAndRecent();
-// At load, not when a router is first built: that was load when the whole
-// graph came down at startup, and since the graph is tiled a router exists
-// only once a route is asked for, so the marks on the device went unlisted
-// until then.
-renderSketchy();
+initSketchy();
 
 // test hook: E2E (Playwright) asserts on live layer state through this
 declare global {
@@ -5197,56 +4365,7 @@ window._map = map;
 // against the latest release published next to the mirrored APK
 // ---------------------------------------------------------------------------
 
-// The release asset, not the Pages mirror. Pages has a ~100 GB/month bandwidth
-// allowance and the APK is 90 MB, so a thousand downloads would be the entire
-// month's budget and would take the site down with it. Release downloads don't
-// count against that at all.
-const APK_URL =
-  "https://github.com/pelednoam/safe-bikes-lanes/releases/latest/download/family-bike-router.apk";
 
-async function checkAppUpdate(): Promise<void> {
-  if (!isNativeApp()) return;
-  try {
-    const bundled = (await (await fetch("version.json")).json()) as { version?: string };
-    const resp = await fetch(
-      "https://pelednoam.github.io/safe-bikes-lanes/app/version.json",
-      { cache: "no-store" },
-    );
-    if (!resp.ok) return;
-    const latest = (await resp.json()) as { version?: string };
-    if (
-      bundled.version === undefined ||
-      latest.version === undefined ||
-      !isNewerAppVersion(bundled.version, latest.version)
-    ) {
-      return;
-    }
-    const banner = el<HTMLDivElement>("update-banner");
-    el<HTMLElement>("update-text").textContent =
-      `Update available: ${bundled.version} → ${latest.version}`;
-    banner.style.display = "flex";
-    const getBtn = el<HTMLAnchorElement>("update-get");
-    getBtn.href = APK_URL; // plain link: works even if the handler never runs
-    const text = el<HTMLElement>("update-text");
-    getBtn.addEventListener("click", (ev: Event) => {
-      ev.preventDefault();
-      // Says where to look, not that it worked.
-      //
-      // This used to read "downloading…" the instant the button was tapped,
-      // before anything had been asked of Android and whatever the answer was —
-      // so when the download silently went nowhere, the app still reported
-      // success. The wording now names the two places the file can appear and
-      // leaves the rider able to tell that it hasn't.
-      text.textContent = "asked Android to download it — look in your notifications, then Downloads";
-      startDownload(APK_URL, latest.version);
-    });
-    el<HTMLButtonElement>("update-dismiss").addEventListener("click", () => {
-      banner.style.display = "none";
-    });
-  } catch {
-    // offline or first launch — try again next time
-  }
-}
 // a ride interrupted by Back/reload/crash is saved on the next launch rather
 // than silently lost
 const interrupted = takeInProgress();
@@ -5255,60 +4374,9 @@ if (interrupted !== null) {
   renderRides();
 }
 
-void checkAppUpdate();
-// after the map exists, so the marker has something to land on
-void locateIfAlreadyAllowed();
+initAppUpdate();
+initMarkers();
 
-// service worker: register only on the website (PWA offline). In the native
-// app Capacitor already bundles everything offline, and a persistent SW would
-// serve a STALE app shell across APK updates (its origin outlives installs) —
-// so unregister any existing one, clear the cached shell, and reload once to
-// drop the stale shell immediately.
-if ("serviceWorker" in navigator) {
-  if (isNativeApp()) {
-    void (async () => {
-      const regs = await navigator.serviceWorker.getRegistrations();
-      let had = false;
-      for (const r of regs) {
-        had = true;
-        await r.unregister();
-      }
-      try {
-        // Only the stale shell a worker left behind. The bike-tiles* and
-        // bike-styles* caches are the rider's downloaded offline maps, which
-        // the app reads itself (tilecache.ts) — deleting them here, as this
-        // once did on every launch, made "⬇ Offline map" a no-op in the app.
-        for (const k of await caches.keys()) {
-          if (k.startsWith("family-bike-router")) await caches.delete(k);
-        }
-      } catch {
-        // caches API unavailable in this webview — nothing to clear
-      }
-      if (had && navigator.serviceWorker.controller && !sessionStorage.getItem("swCleared")) {
-        sessionStorage.setItem("swCleared", "1");
-        location.reload();
-      }
-    })();
-  } else {
-    // web PWA: auto-update to the newest build without a hard refresh.
-    // Reload once when a NEW service worker takes control — but only if one
-    // was already controlling at load (i.e. a genuine update, not first visit,
-    // so we never reload-loop on initial install/clients.claim).
-    if (navigator.serviceWorker.controller) {
-      let reloaded = false;
-      navigator.serviceWorker.addEventListener("controllerchange", () => {
-        if (reloaded) return;
-        reloaded = true;
-        swReload.request(); // not mid-ride: held until the ride ends
-      });
-    }
-    // updateViaCache:"none" — always fetch sw.js fresh so updates are detected
-    void navigator.serviceWorker
-      .register("sw.js", { updateViaCache: "none" })
-      .then((reg) => reg.update())
-      .catch(() => undefined);
-  }
-}
 
 // ---------------------------------------------------------------------------
 // "Where to build" — the city-facing view of pipeline/priorities.py
