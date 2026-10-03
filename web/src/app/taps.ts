@@ -12,7 +12,7 @@ import { type MapLayerMouseEvent } from "maplibre-gl";
  * both opened a card, and the fix for the first broke dismissing the ride's
  * stops menu. A layer now registers what a tap on it opens, and onMapTap picks
  * one thing to do. */
-export type TapOpen = (e: MapLayerMouseEvent) => void;
+type TapOpen = (e: MapLayerMouseEvent) => void;
 
 export interface TapTarget {
   open: TapOpen;
@@ -34,7 +34,7 @@ export const TAP_ORDER = [
   "pois",
 ] as const;
 
-export type TapLayer = (typeof TAP_ORDER)[number];
+type TapLayer = (typeof TAP_ORDER)[number];
 
 export const tapTargets = new Map<TapLayer, TapTarget>();
 

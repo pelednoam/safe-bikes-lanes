@@ -13,17 +13,6 @@ import { maplibregl } from "./maplibre.js";
 import { CLASS_COLORS } from "./weights.gen.js";
 import type { NativeFix } from "./native.js";
 import { askForRideNotifications, isNativeApp, keepScreenOn, lastNativeSpeechError, locationAdvice, minimizeApp, nativeSpeak, nativeStopSpeech, onAndroidBack, rideLocationState, startBackgroundWatcher, stopBackgroundWatcher, webVoiceCount } from "./native.js";
-import {
-  type Candidate,
-  GEOCODE_DEBOUNCE_MS,
-  geocodeDelayMs,
-  matchScore,
-  metresBetween,
-  rank as rankSearch,
-  describe as describeRow,
-  type Ranked,
-  worthGeocoding,
-} from "./search.js";
 import { CLASS_LABELS, clearPhotoCache, FACILITY_CLASSES, nearestMapillary, GRADE_COLORS, GRADE_TEXT } from "./segment.js";
 import type { Maneuver } from "./nav.js";
 import { distM, sunsetTime } from "./nav.js";
@@ -39,10 +28,9 @@ import {
   removeHazard,
   setHazardCategory,
 } from "./hazards.js";
-import { listPlaces, listRecent } from "./places.js";
 import { RideRecorder, saveRide, stashInProgress, takeInProgress } from "./rides.js";
 import { dataSource } from "./data.js";
-import { PROFILES, routeCacheKey } from "./router.js";
+import { PROFILES } from "./router.js";
 import {
   distVoice,
   fmtDist,
@@ -57,12 +45,10 @@ import {
   unitName,
   unitShort,
 } from "./units.js";
-import { COVERAGE } from "./coverage.js";
 import { Lane, type Ticket } from "./planner.js";
 import { type ComponentChild, h, render } from "preact";
 import { type Headline, NavHeadline, NavTripLine, type TripLine } from "./ui/NavBanner.js";
 import { OptionCards } from "./ui/OptionCards.js";
-import { type GradeView, SearchResults, type SearchRowView } from "./ui/SearchResults.js";
 import { Cautions, ClassBar, ClassKey, Ribbon, WhyList } from "./ui/RouteSummary.js";
 import { chipViews, paintChip } from "./chips.js";
 import { SegmentCardView } from "./ui/SegmentCard.js";
@@ -83,11 +69,11 @@ import { loopRejoinPoint, payloadLength, rejoinOption } from "./rejoin.js";
 import { decodePlan, encodePlan } from "./permalink.js";
 import { readItem, removeItem, writeItem } from "./storage.js";
 import { ScreenLock, type WakeLockApi } from "./lifecycle.js";
-import type { ProtectionClass, SafetyGrade, RouteOption, RouteSummary } from "./types.js";
-import { gradeLane, routeLane, routing, trip } from "./app/services.js";
+import type { ProtectionClass, RouteOption, RouteSummary } from "./types.js";
+import { routeLane, routing, trip } from "./app/services.js";
 import { applyBasemap, initDarkMode } from "./app/dark-mode.js";
 import { ensureLayer, getSource } from "./app/sources.js";
-import { announce, constructionReady, dataProgress, ensureRouter, initDataLoad, manifestReady, netTiles, networkReady, poisData, poisReady, refreshNetworkTiles, showStage } from "./app/data-load.js";
+import { announce, constructionReady, dataProgress, ensureRouter, initDataLoad, manifestReady, networkReady, poisData, poisReady, refreshNetworkTiles, showStage } from "./app/data-load.js";
 import { initRidesDialog, renderRides } from "./app/rides-dialog.js";
 import { initAppInfo } from "./app/app-info.js";
 import { initRouteExport } from "./app/route-export.js";
@@ -96,13 +82,18 @@ import { applyAvoidPoints, initAvoid, routePrefs, syncAvoidSummary } from "./app
 import { autoNamed, nameEnd } from "./app/names.js";
 import { currentPosition, initMarkers, makeMarker, setPoint, syncOD } from "./app/markers.js";
 import { initSketchy, openSketchyPopup, renderSketchy, saveSketchy } from "./app/sketchy.js";
-import { initPlaces, promptSavePlace, recordRecentRoute, renderPlacesAndRecent } from "./app/places.js";
+import { initPlaces, recordRecentRoute, renderPlacesAndRecent } from "./app/places.js";
 import { initAppUpdate, initServiceWorker, swReload } from "./app/app-update.js";
 import { TAP_ORDER, type TapTarget, onTap, tapTargets } from "./app/taps.js";
 import { build } from "./app/build-state.js";
 import { clearWhatIf, endWhatIf, showRealTrip } from "./app/build-whatif.js";
 import { ensureBuildMeta } from "./app/build-list.js";
 import { initBuildControls } from "./app/build-controls.js";
+import { clearSearchResults, initSearchResults } from "./app/search-results.js";
+import { regradeVisible } from "./app/search-grade.js";
+import { initPhoneSearch, leaveSearchMode } from "./app/phone-search.js";
+import { initSearchInput } from "./app/search-input.js";
+import { SHEET_HALF, initSheet, revealSheet, sheetLayout, showOptionsInSheet } from "./app/sheet.js";
 
 // The functions other modules call through src/app/links.ts, set first: all of them
 // are function declarations, so they exist from the moment this module runs, and
@@ -115,19 +106,12 @@ links.regradeVisible.set(regradeVisible);
 links.openHazardDialog.set(openHazardDialog);
 links.beginPlan.set(beginPlan);
 links.selectOption.set(selectOption);
+initSearchResults();
 
 // hazards are read once the routing data is in; not part of the chain that says
 // routing is ready, so a failure here can't take routing down with it
 void manifestReady.then(() => refreshHazards());
 
-interface NominatimResult {
-  display_name: string;
-  lon: string;
-  lat: string;
-  /** jsonv2's short label ("Kendall/MIT"), when it has one: the full
-   * display_name is five commas of address that no row has space for. */
-  name?: string;
-}
 
 // ---------------------------------------------------------------------------
 // constants
@@ -144,8 +128,6 @@ const LOOP_LIMITS: Record<"imperial" | "metric", [min: number, max: number]> = {
   imperial: [0.5, 30],
   metric: [1, 50],
 };
-
-const BBOX = COVERAGE;
 
 
 // ---------------------------------------------------------------------------
@@ -889,416 +871,6 @@ function planBetween(s: [number, number], e: [number, number]): void {
   void requestRoute();
 }
 
-
-// ---------------------------------------------------------------------------
-// address search (Nominatim, bounded to our area)
-// ---------------------------------------------------------------------------
-
-/** Everything already on the device that could answer a query.
- *
- * Assembled per keystroke rather than kept in an index: 2,500 POIs and a
- * viewport of streets is a few thousand string comparisons, which is nothing, and
- * an index would have to be invalidated every time a place is saved, a trip is
- * taken, or the map moves.
- */
-function localCandidates(): Candidate[] {
-  const out: Candidate[] = [];
-
-  for (const p of listPlaces()) {
-    out.push({ name: p.name, lon: p.lon, lat: p.lat, source: "place", kind: "saved place" });
-  }
-  // where they went, not where they started: the search box asks "where to?"
-  const seenRecent = new Set<string>();
-  for (const r of listRecent()) {
-    const key = `${r.e[0].toFixed(4)},${r.e[1].toFixed(4)}`;
-    if (seenRecent.has(key)) continue;
-    seenRecent.add(key);
-    // the stored label is "A to B"; the destination is what this row offers
-    const label = r.label.includes(" to ") ? (r.label.split(" to ").pop() ?? r.label) : r.label;
-    out.push({ name: label, lon: r.e[0], lat: r.e[1], source: "recent", kind: "you rode here" });
-  }
-  for (const poi of store.pois) {
-    const name = poi.properties.name;
-    if (typeof name !== "string" || name === "") continue;
-    const meta = POI_META[poi.properties.kind];
-    out.push({
-      name,
-      lon: poi.geometry.coordinates[0],
-      lat: poi.geometry.coordinates[1],
-      source: "poi",
-      kind: meta?.label ?? poi.properties.kind,
-    });
-  }
-  return out;
-}
-
-/** Streets from the tiles already loaded, each reduced to its nearest point.
- *
- * A street is long, so which point matters depends on where you are: "Elm
- * Street" should offer the end you could actually ride to, and its distance
- * should be to that end rather than to some midpoint in another town.
- */
-function streetCandidates(query: string, origin: [number, number] | undefined): Candidate[] {
-  const out: Candidate[] = [];
-  for (const st of netTiles.loadedStreets()) {
-    if (matchScore(query, st.name) === 0) continue; // name first: cheap, and most fail
-    let best = st.coords[0];
-    if (best === undefined) continue;
-    if (origin !== undefined) {
-      let bestD = Infinity;
-      for (const c of st.coords) {
-        const d = metresBetween(origin, c);
-        if (d < bestD) {
-          bestD = d;
-          best = c;
-        }
-      }
-    }
-    out.push({ name: st.name, lon: best[0], lat: best[1], source: "street", kind: "street" });
-  }
-  return out;
-}
-
-/** How many rows the search offers.
- *
- * Every one is graded, and every grade is a routing run on the main thread — five
- * in a row is already a visible pause on a phone. A longer list would mean rows
- * without letters, which is the one thing this search must not show. */
-const SEARCH_ROWS = 5;
-
-/** Where distances are measured from: the start if set, else what you're looking at. */
-function searchOrigin(): [number, number] | undefined {
-  const from = store.start?.getLngLat();
-  if (from) return [from.lng, from.lat];
-  const c = map.getCenter();
-  return [c.lng, c.lat];
-}
-
-/** When the geocoder was last asked. The policy itself is in search.ts, where it
- * can be tested as arithmetic rather than through browser timing. */
-let lastGeocodeAt = 0;
-
-async function searchAddress(query: string): Promise<NominatimResult[]> {
-  const url =
-    "https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&bounded=1" +
-    `&viewbox=${BBOX.west},${BBOX.north},${BBOX.east},${BBOX.south}` +
-    `&q=${encodeURIComponent(query)}`;
-  const resp = await fetch(url, { headers: { Accept: "application/json" } });
-  if (!resp.ok) throw new Error(`search failed (${resp.status})`);
-  return (await resp.json()) as NominatimResult[];
-}
-
-/** The rows currently on screen, so their letters can be withdrawn and redone
- * when the answer they state stops being true. */
-let gradedRows: { key: string; lngLat: [number, number] }[] = [];
-/** The timer that starts grading shortly after a list is drawn. */
-let gradeTimer: number | undefined;
-
-/** The letters on screen describe routes from a particular start under
- * particular settings. When either changes they are answers to a question
- * nobody asked any more, so withdraw them and work them out again. */
-function regradeVisible(): void {
-  if (gradedRows.length === 0) return;
-  // Never the start-picker list, even when it names the same places as the
-  // destination list that was graded: a letter there would describe the route
-  // from the current start to a candidate start, which nobody takes.
-  if (searchView.target !== "end") return;
-  // Never mid-ride. The "avoid this street" chip writes through saveSketchy,
-  // which lands here, and grading is up to five routing runs on the main thread
-  // — a stall in guidance while someone is riding, to refresh a search list
-  // that isn't even on screen.
-  if (store.navActive) return;
-  // the list is gone, or is another list: nothing to redo
-  const listed = new Set(searchView.rows.map((r) => r.key));
-  if (!gradedRows.every((r) => listed.has(r.key))) return;
-  window.__regradesStarted = (window.__regradesStarted ?? 0) + 1;
-  // the old letters go, from the tooltip and the label too, not just the pixel
-  for (const row of gradedRows) searchView.grades.set(row.key, { state: "pending" });
-  paintSearch();
-  void gradeSearchResults(gradedRows);
-}
-
-/** Take the placeholders away from a row that will never get a grade.
- *
- * The badge went but the subtitle kept saying "checking the safest way…", so a
- * result the router couldn't reach sat there claiming a computation was still
- * running. Nothing is a better answer than a promise that never resolves. */
-function clearGrading(row: { key: string }): void {
-  searchView.grades.set(row.key, { state: "hidden" });
-  paintSearch();
-}
-
-/** Put a row back in play. Without this, hiding was permanent: search with no
- * start, then set one, and the rows stayed blank for ever because nothing ever
- * undid the visibility. */
-function showGrading(row: { key: string }): void {
-  if (searchView.grades.get(row.key)?.state === "hidden") {
-    searchView.grades.set(row.key, { state: "pending" });
-    paintSearch();
-  }
-}
-
-/** Cancels grading when a new search lands: five routes take a moment, and the
- * answers to the last query must not appear against this one's rows. */
-const gradeCache = new Map<string, { grade: SafetyGrade; meters: number; minutes: number }>();
-
-/** Put the grade of the safest route on each result.
- *
- * The point of the app is that where you go is a safety decision, and until now
- * it only said so after you had chosen. A destination on the far side of an
- * arterial is a D before you set out, and that is worth knowing while you are
- * still looking at a list.
- *
- * Sequential on purpose. Each route needs the map along its corridor, and five
- * destinations in one neighbourhood overlap almost entirely — so the first costs
- * a corridor's worth of tiles and the rest are close to free, where five in
- * parallel would fetch five times over.
- */
-async function gradeSearchResults(rows: { key: string; lngLat: [number, number] }[]): Promise<void> {
-  const ticket = gradeLane.begin();
-  gradedRows = rows;
-  // One snapshot of every routing input, taken before the first await. Reading
-  // them per row let a preference change land mid-grade: the key was built from
-  // the old settings and the route computed with the new ones, so the answer was
-  // filed under a description of itself that was already wrong.
-  const snap = {
-    profileId: store.profileId,
-    preferFlat: store.preferFlat,
-    avoid: [...store.avoidTypes],
-    walkMaxM: store.walkMaxM,
-    avoidRevision: store.avoidRevision,
-  };
-  const from = store.start?.getLngLat();
-  if (!from) {
-    // no start yet: a grade needs somewhere to start from, and inventing one
-    // would be a safety claim about a route nobody asked for
-    for (const r of rows) clearGrading(r);
-    return;
-  }
-  const a: [number, number] = [from.lng, from.lat];
-  // Every row gets a letter, and the list is capped to make that affordable.
-  //
-  // This used to be a cap of five under a list of eight, which left three rows
-  // showing no grade for no reason a reader could see. The letter is the whole
-  // point of this app's search — a row without one is a destination with no
-  // safety claim — so the list length and this cap are the same number, and
-  // SEARCH_ROWS is where it is set.
-  const MAX_GRADED = SEARCH_ROWS;
-  for (const row of rows.slice(MAX_GRADED)) clearGrading(row);
-  for (const row of rows.slice(0, MAX_GRADED)) {
-    showGrading(row); // it may have been cleared by an earlier pass
-    if (ticket.stale()) return; // a newer search owns the list now
-    const key = routeCacheKey({
-      from: a,
-      to: row.lngLat,
-      profileId: snap.profileId,
-      preferFlat: snap.preferFlat,
-      avoid: snap.avoid,
-      walkMaxM: snap.walkMaxM,
-      avoidRevision: snap.avoidRevision,
-    });
-    let hit = gradeCache.get(key);
-    if (hit === undefined) {
-      try {
-        const mapped = await ensureRouter([a, row.lngLat], 1200, 1);
-        if (ticket.stale()) return;
-        // routed with the snapshot, so the answer matches the key it is filed
-        // under even if the rider changes a preference while this is running
-        // by id, not by index: the badge says "safest", and relying on the
-        // order routeOptions happens to build its candidates in makes that a
-        // safety claim held together by an array position
-        const opts = !mapped
-          ? undefined
-          : await routing.plan(a, row.lngLat, {
-              profileId: snap.profileId,
-              preferFlat: snap.preferFlat,
-              avoid: [...snap.avoid],
-              walkMaxM: snap.walkMaxM,
-            });
-        if (ticket.stale()) return;
-        const best = opts?.find((o) => o.id === "safest") ?? opts?.[0];
-        if (!best) throw new Error("no route");
-        hit = {
-          grade: best.grade,
-          meters: best.payload.summary.meters,
-          minutes: best.payload.summary.minutes,
-        };
-        gradeCache.set(key, hit);
-      } catch {
-        // unroutable, or off the edge of the mapped area: say nothing rather
-        // than showing a letter we can't stand behind
-        if (!ticket.stale()) clearGrading(row);
-        continue;
-      }
-    }
-    if (ticket.stale()) return;
-    searchView.grades.set(row.key, { state: "graded", grade: hit.grade, meters: hit.meters, minutes: hit.minutes });
-    paintSearch();
-  }
-}
-
-/** Nominatim's answers as candidates, so one ranking covers every source. */
-function geocoderCandidates(results: NominatimResult[]): Candidate[] {
-  const out: Candidate[] = [];
-  for (const r of results) {
-    const lon = parseFloat(r.lon);
-    const lat = parseFloat(r.lat);
-    // a malformed answer becomes NaN, which would reach the router and the
-    // cache key as a coordinate
-    if (!Number.isFinite(lon) || !Number.isFinite(lat)) continue;
-    const parts = r.display_name.split(",").map((p) => p.trim());
-    out.push({
-      name: r.name !== undefined && r.name !== "" ? r.name : (parts[0] ?? r.display_name),
-      lon,
-      lat,
-      source: "geocoder",
-      context: parts.slice(1, 3).join(", "),
-      // "123 Broadway" comes back as name "123" with the street in display_name,
-      // so scoring the short label alone dropped every address query — the one
-      // thing this geocoder is still called for.
-      match: r.display_name,
-    });
-  }
-  return out;
-}
-
-/** The search list, which is all the list is: drawn from here
- * (src/ui/SearchResults.tsx). Grading, the arrow keys and every way of
- * closing the list change this and redraw it, instead of reaching into rows
- * that a keystroke or the geocoder may already have replaced. */
-const searchView: {
-  rows: SearchRowView[];
-  target: "start" | "end";
-  active: string | null;
-  grades: Map<string, GradeView>;
-  message: string | null;
-} = { rows: [], target: "end", active: null, grades: new Map(), message: null };
-
-function paintSearch(): void {
-  render(
-    h(SearchResults, {
-      rows: searchView.rows,
-      target: searchView.target,
-      active: searchView.active,
-      grades: searchView.grades,
-      message: searchView.message,
-      gradeColors: GRADE_COLORS,
-      gradeText: GRADE_TEXT,
-      onChoose: chooseSearchRow,
-      onSave: (row) => {
-        promptSavePlace(row.lngLat[0], row.lngLat[1]);
-        clearSearchResults();
-      },
-    }),
-    el<HTMLDivElement>("search-results"),
-  );
-}
-
-/** Nothing listed: the list is going away. */
-function clearSearchResults(): void {
-  dropGrading(); // stop routing for a list that is gone, and the timer to start it
-  searchView.rows = [];
-  searchView.message = null;
-  searchView.active = null;
-  searchView.grades = new Map();
-  paintSearch();
-}
-
-/** Whether there is anything in the list at all, rows or a message. */
-function searchListShown(): boolean {
-  return searchView.rows.length > 0 || searchView.message !== null;
-}
-
-/** Everything about grading the list that was here: the run in flight, the
- * timer that would start one (clearing the run alone left the timer, which
- * went on to grade whatever list was there when it fired, a start-picker
- * list included), and which rows were being graded. */
-function dropGrading(): void {
-  gradeLane.cancel();
-  window.clearTimeout(gradeTimer);
-  gradedRows = [];
-}
-
-function renderSearchResults(rows: Ranked[], target: "start" | "end" = "end"): void {
-  dropGrading(); // abandon grading for whatever list was here before
-  searchView.target = target;
-  if (rows.length === 0) {
-    searchView.rows = [];
-    searchView.grades = new Map();
-    searchView.message = "no results in this area";
-    paintSearch();
-    announce("no results in this area", 700);
-    return;
-  }
-  announce(`${rows.length} place${rows.length === 1 ? "" : "s"} found`, 700);
-  const grades = new Map<string, GradeView>();
-  const grading: { key: string; lngLat: [number, number] }[] = [];
-  searchView.rows = rows.map((r) => {
-    // Identity, so an arrow-key selection survives the list being redrawn when
-    // the geocoder answers: without it Enter took the first row, not the chosen.
-    const key = `${r.name}|${r.lon.toFixed(5)},${r.lat.toFixed(5)}`;
-    const lngLat: [number, number] = [r.lon, r.lat];
-    // Still checked, for every source. Saved places and recent trips come from
-    // localStorage, which is editable and survives across app versions, and a
-    // NaN here reaches the router and the route cache key as a coordinate.
-    const usable = Number.isFinite(lngLat[0]) && Number.isFinite(lngLat[1]);
-    // Only for destinations. A grade on the start-picker list would describe the
-    // route from the CURRENT start to a candidate start: a journey nobody is
-    // taking, labelled as if they were.
-    const graded = usable && target === "end";
-    grades.set(key, { state: graded ? "pending" : "hidden" });
-    if (graded) grading.push({ key, lngLat });
-    return {
-      key,
-      name: r.name,
-      title: [r.name, r.context].filter((p) => p !== undefined && p !== "").join(" — "),
-      // What this place is and how far, until the grade replaces it. The old
-      // row said "checking the safest way…" and nothing else, so a list of five
-      // said the same thing five times while you waited.
-      where: describeRow(r, (m) => fmtDist(m)),
-      lngLat,
-    };
-  });
-  searchView.grades = grades;
-  searchView.message = null;
-  paintSearch();
-  if (grading.length > 0) scheduleGrading(grading);
-}
-
-/** A row picked: its place fills the field the list was searched from. */
-function chooseSearchRow(row: SearchRowView): void {
-  const target = searchView.target;
-  setPoint(target, row.lngLat);
-  const field = el<HTMLInputElement>(target === "start" ? "from-field" : "search");
-  field.value = row.name;
-  field.classList.remove("picking");
-  if (target === "start") store.activeField = "end";
-  syncOD();
-  map.flyTo({ center: row.lngLat, zoom: 15 });
-  clearSearchResults();
-  // Close the keyboard and give the map back: the place just chosen, and the
-  // route about to be drawn to it, are what the rider wants to see now.
-  field.blur();
-  leaveSearchMode(true);
-}
-
-/** Grade the list once it has stopped changing.
- *
- * The list is now rebuilt on every keystroke, and grading it is up to five routing
- * runs. Typing "playground" therefore queued fifty — each abandoned by the next
- * letter, all of them on the main thread, against a geocoder-rate-limited service
- * that also fetches routing tiles. The rows appear instantly; their letters arrive
- * a moment after the typing stops, which is when they can be read anyway.
- */
-function scheduleGrading(rows: { key: string; lngLat: [number, number] }[]): void {
-  window.clearTimeout(gradeTimer);
-  gradeTimer = window.setTimeout(() => {
-    // still the list these rows were drawn in, and still a list of destinations
-    const here = new Set(searchView.rows.map((r) => r.key));
-    if (searchView.target !== "end" || !rows.every((r) => here.has(r.key))) return;
-    void gradeSearchResults(rows);
-  }, 400);
-}
 
 // the reach map: app/shed.ts
 
@@ -2191,151 +1763,7 @@ for (const evt of ["touchend", "touchmove", "touchcancel"] as const) {
   });
 }
 
-// draggable bottom-sheet (mobile): peek / half / full snap states
-const SHEET_STATES = ["peek", "half", "full"] as const;
-type SheetState = (typeof SHEET_STATES)[number];
-/** The layout where the panel is a bottom sheet — the same query the CSS uses. */
-const sheetLayout = window.matchMedia("(max-width: 760px), (max-height: 500px)");
-/** The half sheet's max-height, as a share of the screen (#panel.half). */
-const SHEET_HALF = 0.52;
-function setSheet(state: SheetState): void {
-  const panel = el<HTMLDivElement>("panel");
-  panel.style.maxHeight = "";
-  panel.classList.remove("peek", "half", "full");
-  panel.classList.add(state);
-  const handle = el<HTMLButtonElement>("sheet-handle");
-  handle.setAttribute("aria-expanded", String(state !== "peek"));
-  handle.setAttribute(
-    "aria-label",
-    `Panel size: ${state === "peek" ? "collapsed" : state === "half" ? "half open" : "fully open"}`,
-  );
-}
-function currentSheet(): SheetState {
-  const panel = el<HTMLDivElement>("panel");
-  return SHEET_STATES.find((s) => panel.classList.contains(s)) ?? "half";
-}
-(function initSheet(): void {
-  const panel = el<HTMLDivElement>("panel");
-  const handle = el<HTMLButtonElement>("sheet-handle");
-  // start collapsed: the map is the point, and a route expands the sheet
-  // to "half" on its own (revealSheet)
-  if (sheetLayout.matches) setSheet("peek");
-  let dragging = false;
-  let startY = 0;
-  let startH = 0;
-  let moved = 0;
-  let liveH = 0;
-  handle.addEventListener("pointerdown", (e: PointerEvent) => {
-    dragging = true;
-    startY = e.clientY;
-    startH = panel.getBoundingClientRect().height;
-    liveH = startH;
-    moved = 0;
-    // kill the max-height transition for the duration: with it on, the sheet
-    // lags ~200 ms behind the thumb and the drag feels broken
-    panel.classList.add("dragging");
-    handle.setPointerCapture(e.pointerId);
-  });
-  handle.addEventListener("pointermove", (e: PointerEvent) => {
-    if (!dragging) return;
-    const dy = startY - e.clientY;
-    moved = Math.max(moved, Math.abs(dy));
-    liveH = Math.min(window.innerHeight * 0.88, Math.max(70, startH + dy));
-    panel.classList.remove("peek", "half", "full");
-    panel.style.maxHeight = `${liveH}px`;
-  });
-  const end = (): void => {
-    if (!dragging) return;
-    dragging = false;
-    panel.classList.remove("dragging");
-    // snap from where the drag actually ended, not from a mid-animation
-    // measurement of the element
-    const h = liveH;
-    panel.style.maxHeight = "";
-    if (moved < 6) {
-      // a tap cycles peek -> half -> full -> peek
-      const next = SHEET_STATES[(SHEET_STATES.indexOf(currentSheet()) + 1) % 3];
-      setSheet(next ?? "half");
-      return;
-    }
-    const vh = window.innerHeight;
-    setSheet(h < vh * 0.25 ? "peek" : h < vh * 0.68 ? "half" : "full");
-  };
-  handle.addEventListener("pointerup", end);
-  handle.addEventListener("pointercancel", end);
-  // From a keyboard (or a switch, or a screen reader's double-tap, which
-  // arrives as a click with no pointer before it): Enter and Space step through
-  // the sizes as a tap does; the arrows open and close.
-  handle.addEventListener("click", (e: MouseEvent) => {
-    if (e.detail !== 0) return; // a real pointer tap, already handled by end()
-    const next = SHEET_STATES[(SHEET_STATES.indexOf(currentSheet()) + 1) % 3];
-    setSheet(next ?? "half");
-  });
-  handle.addEventListener("keydown", (e: KeyboardEvent) => {
-    const i = SHEET_STATES.indexOf(currentSheet());
-    const to =
-      e.key === "ArrowUp"
-        ? SHEET_STATES[Math.min(2, i + 1)]
-        : e.key === "ArrowDown"
-          ? SHEET_STATES[Math.max(0, i - 1)]
-          : undefined;
-    if (to === undefined) return;
-    e.preventDefault();
-    setSheet(to);
-  });
-  // some WebViews revoke capture mid-gesture; without this the sheet sticks
-  handle.addEventListener("lostpointercapture", end);
-})();
-
-/** The trip whose answer was last brought into view, so a re-plan of the same
- * trip (a preference changed, further down the sheet) does not yank the reader
- * away from what they were changing. */
-let revealedTrip = "";
-/** Set when the next panel repaint should bring the route options into view. */
-let scrollToOptions = false;
-
-/** After a route computes, make sure the sheet is at least half-open (mobile),
- * and that the answer is what it shows.
- *
- * "half" alone was not enough: measured on a 390x820 phone, the round-trip
- * block, Recent routes and the rider switch filled the half-open sheet, and "3
- * ROUTE OPTIONS" started at y=784 — the grade and ▶ Navigate needed a scroll
- * nothing hinted at. A new trip now scrolls its options to the top of the
- * sheet; ▶ Navigate is kept at the sheet's foot by CSS. */
-function revealSheet(): void {
-  const wasPeek = currentSheet() === "peek";
-  if (wasPeek) setSheet("half");
-  if (!sheetLayout.matches) return;
-  const s = store.start?.getLngLat();
-  const e = store.end?.getLngLat();
-  const trip =
-    s && e ? `${s.lng.toFixed(5)},${s.lat.toFixed(5)}>${e.lng.toFixed(5)},${e.lat.toFixed(5)}` : "";
-  if (!wasPeek && trip === revealedTrip) return;
-  revealedTrip = trip;
-  scrollToOptions = true;
-}
-
-/** Scroll the sheet so the route options sit just under its handle. */
-function showOptionsInSheet(): void {
-  if (!scrollToOptions) return;
-  scrollToOptions = false;
-  if (!sheetLayout.matches || document.body.classList.contains("searching")) return;
-  const panel = el<HTMLDivElement>("panel");
-  const top = el<HTMLDivElement>("options").getBoundingClientRect().top;
-  const handle = el<HTMLButtonElement>("sheet-handle").offsetHeight;
-  panel.scrollTop += top - (panel.getBoundingClientRect().top + handle + 6);
-}
-
-/** iOS scrolls the whole page to bring a focused field above its keyboard, and
- * does not always scroll it back when the keyboard goes: the map and the sheet
- * were left shifted up by the keyboard's height. Nothing here is meant to
- * scroll the page itself, so any offset is leftover. */
-function resetPageScroll(): void {
-  if (window.scrollX !== 0 || window.scrollY !== 0) window.scrollTo(0, 0);
-}
-window.visualViewport?.addEventListener("resize", () => {
-  if (!document.body.classList.contains("searching")) resetPageScroll();
-});
+initSheet();
 
 /** Remembered once dismissed; a phone that has seen it once does not again. */
 const FIRST_RUN_KEY = "firstRunSeen";
@@ -2387,90 +1815,8 @@ const FIRST_RUN_KEY = "firstRunSeen";
   card.hidden = false;
 })();
 
-// ---------------------------------------------------------------------------
-// Searching on a phone
-//
-// The sheet starts collapsed at the bottom of the screen, which is exactly
-// where the keyboard opens. Measured on a 390x820 phone: tap "Where to?", type
-// "Davis", and the field sat at y=760-800 under a keyboard starting around 480,
-// while five results rendered at y=932 — below the screen, and clipped anyway
-// by the collapsed sheet's overflow. People were typing into a field they could
-// not see and getting answers they could not reach.
-//
-// It is worst in the Android app. Targeting SDK 35+ forces edge-to-edge, where
-// the keyboard overlays the WebView instead of resizing it, so nothing on the
-// page even learns the keyboard is there. Rather than depend on that — it
-// differs by Android version, WebView, and browser — searching moves the field
-// to the top of the screen, where no keyboard reaches, and puts the answers
-// directly under it.
-// ---------------------------------------------------------------------------
-
-/** Where the sheet was before a search took it over, to put it back. */
-let sheetBeforeSearch: SheetState | null = null;
-
-function enterSearchMode(field: HTMLInputElement): void {
-  if (!sheetLayout.matches) return;
-  if (sheetBeforeSearch === null) sheetBeforeSearch = currentSheet();
-  document.body.classList.add("searching");
-  const panel = el<HTMLDivElement>("panel");
-  // Open at once, not over the 0.2 s transition. Animated, the sheet was still
-  // growing when the field was lifted, so the lift ran twice (now and 250 ms
-  // later) and iOS, scrolling the focused field into view on its own schedule,
-  // could act on either height. "dragging" is the class that already turns the
-  // transition off; measuring below forces the full height to apply under it.
-  panel.classList.add("dragging");
-  setSheet("full");
-  // Field to the top of the sheet, just under its (sticky) handle.
-  const handle = el<HTMLButtonElement>("sheet-handle");
-  const lift = (): void => {
-    const gap = field.getBoundingClientRect().top - panel.getBoundingClientRect().top;
-    panel.scrollTop += gap - handle.offsetHeight - 6;
-  };
-  lift();
-  window.requestAnimationFrame(() => {
-    panel.classList.remove("dragging");
-    // content hidden a moment ago (the loop block) may have changed the layout
-    lift();
-  });
-}
-
-/** Leave search mode. `chose` means a place was picked, so the sheet should
- * show the route that is about to appear rather than go back to how it was. */
-function leaveSearchMode(chose: boolean): void {
-  if (!document.body.classList.contains("searching")) return;
-  document.body.classList.remove("searching");
-  const before = sheetBeforeSearch ?? "half";
-  sheetBeforeSearch = null;
-  el<HTMLDivElement>("panel").scrollTop = 0;
-  resetPageScroll();
-  // A chosen place gets the map back, with the route options under it — "half",
-  // the state a computed route asks for anyway (revealSheet). A search walked
-  // away from goes back to where it started.
-  setSheet(chose ? (before === "full" ? "full" : "half") : before);
-}
-
-el<HTMLButtonElement>("from-locate").addEventListener("click", () => {
-  // back to riding from wherever you are
-  store.start?.remove();
-  store.start = null;
-  store.fromCurrent = true;
-  store.activeField = "end";
-  const f = el<HTMLInputElement>("from-field");
-  f.classList.remove("picking");
-  f.value = "";
-  clearSearchResults();
-  syncOD();
-  void requestRoute();
-});
-
-el<HTMLButtonElement>("from-pick").addEventListener("click", () => {
-  // the next map tap sets the start
-  store.activeField = "start";
-  const f = el<HTMLInputElement>("from-field");
-  f.classList.add("picking");
-  f.value = "";
-  f.placeholder = "tap the map to set the start…";
-});
+// search on a phone: app/phone-search.ts
+initPhoneSearch();
 
 initPlaces();
 
@@ -2663,167 +2009,7 @@ for (const radio of document.querySelectorAll<HTMLInputElement>("input[name=prof
   });
 }
 
-/** Wire an address search to a field, so the origin is searchable too and not
- * only settable by tapping the map or using the current location. */
-/** Which field the visible result list belongs to.
- *
- * Both fields render into #search-results, and each attachSearch closure captures
- * its own target. A late geocoder answer for the start field could therefore
- * re-render the list while the reader was typing a destination — and every row in
- * it would then set the START when tapped. Wrong point, silently. */
-let searchOwner: HTMLInputElement | null = null;
-
-function attachSearch(input: HTMLInputElement, target: "start" | "end"): void {
-  let timer: number | undefined;
-  // The geocoder's last answer for the query still in the box, so a keystroke
-  // can re-rank without asking again — and so local and remote results appear in
-  // one list rather than the local ones being replaced when the network answers.
-  let remote: { query: string; rows: Candidate[] } = { query: "", rows: [] };
-  /** The row the arrow keys are on, by identity rather than by position. */
-  let activeKey: string | null = null;
-
-  const highlight = (key: string | null): void => {
-    activeKey = key;
-    searchView.active = key;
-    paintSearch();
-  };
-
-  const show = (q: string): void => {
-    if (searchOwner !== input) return; // the other field owns the list now
-    const origin = searchOrigin();
-    const candidates = [
-      ...localCandidates(),
-      ...streetCandidates(q, origin),
-      ...(remote.query === q ? remote.rows : []),
-    ];
-    renderSearchResults(rankSearch(q, candidates, { origin, limit: SEARCH_ROWS }), target);
-    // put the selection back where it was, or drop it if that place is gone —
-    // never leave it pointing at whatever row inherited the position
-    highlight(searchView.rows.some((r) => r.key === activeKey) ? activeKey : null);
-  };
-
-  input.addEventListener("focus", () => enterSearchMode(input));
-  input.addEventListener("blur", () => {
-    // Walked away without choosing. Only let the sheet go if nothing is left to
-    // tap: blur arrives on touchstart and the click only on touchend, so shrinking
-    // the sheet while a list is up would slide the row out from under the finger
-    // that was reaching for it. Deferred a tick so focus hopping to the other
-    // search field counts as still searching.
-    window.setTimeout(() => {
-      const active = document.activeElement;
-      if (active === el("search") || active === el("from-field")) return;
-      if (!searchListShown()) leaveSearchMode(false);
-    }, 0);
-  });
-
-  input.addEventListener("input", () => {
-    window.clearTimeout(timer);
-    searchOwner = input;
-    const q = input.value.trim();
-    if (q === "") {
-      clearSearchResults();
-      return;
-    }
-    // Local first, on every keystroke, from the first letter. This is the part
-    // that makes the box feel like it is answering rather than thinking: 2,500
-    // named places and the streets on screen are already here, and waiting 400 ms
-    // to ask a geocoder for what we have on the device is waiting for nothing.
-    highlight(null); // a new query is a new list
-    show(q);
-
-    // Then the geocoder, for house numbers and businesses we do not have — as a
-    // fallback, and on its terms. See worthGeocoding and GEOCODE_MIN_GAP_MS.
-    const localHits = searchView.rows.length;
-    if (!worthGeocoding(q, localHits)) return;
-    timer = window.setTimeout(() => {
-      const wait = geocodeDelayMs(Date.now(), lastGeocodeAt);
-      if (wait > 0) {
-        // too soon: ask again once the floor has passed, rather than dropping the
-        // query or hammering the service
-        timer = window.setTimeout(() => {
-          if (input.value.trim() === q) input.dispatchEvent(new Event("input"));
-        }, wait);
-        return;
-      }
-      lastGeocodeAt = Date.now();
-      searchAddress(q)
-        .then((results) => {
-          if (input.value.trim() !== q) return; // a later keystroke moved on
-          if (searchOwner !== input) return; // and the other field owns the list
-          remote = { query: q, rows: geocoderCandidates(results) };
-          // Not while a row is chosen. Re-ranking under a committed selection is
-          // how someone ends up riding to a place they did not pick; the answers
-          // are kept and merge into the next keystroke's list instead.
-          //
-          // Deliberately redundant with the highlight restore in show(): either
-          // alone keeps the selection, and a test can only kill both together.
-          // This one avoids the churn; that one covers re-renders from any other
-          // cause, which is where the bug came from in the first place.
-          if (activeKey !== null) return;
-          show(q);
-        })
-        .catch(() => {
-          // The local list is still on screen and still useful, so this is a
-          // footnote rather than an error state — the old code replaced
-          // everything with "search unavailable". And only for the query and the
-          // field it was asked for: a slow failure used to be able to write over a
-          // list the reader had since moved on from.
-          if (input.value.trim() !== q || searchOwner !== input) return;
-          if (searchView.rows.length === 0) {
-            searchView.message = "search unavailable";
-            paintSearch();
-          }
-        });
-    }, GEOCODE_DEBOUNCE_MS);
-  });
-
-  // Arrow keys and Enter, because a list you can only reach with a mouse is a
-  // list you cannot use one-handed.
-  input.addEventListener("keydown", (e: KeyboardEvent) => {
-    // The keys walk the list as the search's state has it, not as it was drawn.
-    const rows = searchView.rows;
-    if (rows.length === 0) return;
-    const current = rows.findIndex((r) => r.key === searchView.active);
-    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-      e.preventDefault();
-      const next =
-        e.key === "ArrowDown" ? Math.min(current + 1, rows.length - 1) : Math.max(current - 1, 0);
-      const chosen = rows[next === -1 ? 0 : next];
-      highlight(chosen?.key ?? null);
-      if (chosen !== undefined) {
-        const drawn = el<HTMLDivElement>("search-results").querySelector<HTMLElement>(
-          `.search-row[data-key="${CSS.escape(chosen.key)}"]`,
-        );
-        drawn?.scrollIntoView({ block: "nearest" });
-      }
-    } else if (e.key === "Enter") {
-      e.preventDefault();
-      // Enter with nothing highlighted takes the first row, which is what the
-      // ranking is for: the best answer should need no aiming at all.
-      const chosen = rows[current === -1 ? 0 : current];
-      if (chosen !== undefined) chooseSearchRow(chosen);
-    } else if (e.key === "Escape" && activeKey !== null) {
-      // Step back out of the list without wiping the query — and show whatever the
-      // geocoder answered while a row was selected, which was deliberately held
-      // back then and would otherwise never have appeared at all.
-      e.preventDefault();
-      e.stopPropagation();
-      highlight(null);
-      show(input.value.trim());
-    }
-  });
-}
-attachSearch(el<HTMLInputElement>("search"), "end");
-attachSearch(el<HTMLInputElement>("from-field"), "start");
-// once you type over a name we filled in, it's yours and we leave it alone
-for (const [kind, id] of [
-  ["start", "from-field"],
-  ["end", "search"],
-] as const) {
-  el<HTMLInputElement>(id).addEventListener("input", () => {
-    autoNamed[kind] = false;
-  });
-}
+initSearchInput();
 
 document.addEventListener("keydown", (e: KeyboardEvent) => {
   if (e.key === "Escape") {

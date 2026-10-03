@@ -1,7 +1,7 @@
 // Who owns a planner output while a computation waits, how a what-if is kept
 // from outliving the question it answers, and how every routing call gets
 // every preference.
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -124,7 +124,14 @@ describe("planOptions", () => {
         .map((line) => line.trim())
         .filter((line) => !line.startsWith("//") && !line.startsWith("*"));
 
-    for (const name of ["app.ts", "routing.ts"]) {
+    // the page is app.ts and the modules split out of it (src/app/)
+    const appFiles = [
+      "app.ts",
+      ...readdirSync(join(src, "app"))
+        .filter((f) => f.endsWith(".ts"))
+        .map((f) => `app/${f}`),
+    ];
+    for (const name of [...appFiles, "routing.ts"]) {
       const direct = code(name).filter((line) => /\.routeOptions\(/.test(line));
       expect(direct, `${name} plans around planOptions`).toEqual([]);
     }
@@ -134,7 +141,7 @@ describe("planOptions", () => {
     // Every plan the page asks for: the arguments after the two points are the
     // rider's preferences, routePrefs(), or (search grades, planned against a
     // snapshot of them) an object that names every field of RoutePrefs.
-    const app = code("app.ts").join("\n");
+    const app = appFiles.flatMap(code).join("\n");
     const calls = [...app.matchAll(/routing\.plan(?:With)?\(/g)].map((m) => {
       // the call's own arguments, up to its matching parenthesis
       let depth = 1;
@@ -146,7 +153,7 @@ describe("planOptions", () => {
       }
       return app.slice(from, i - 1);
     });
-    expect(calls.length, "app.ts no longer plans through the worker").toBeGreaterThan(4);
+    expect(calls.length, "the app no longer plans through the worker").toBeGreaterThan(4);
     for (const call of calls) {
       const complete =
         call.includes("routePrefs()") ||

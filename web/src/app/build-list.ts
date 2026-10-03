@@ -14,10 +14,10 @@ import { ensureLayer } from "./sources.js";
 import { clearWhatIf } from "./build-whatif.js";
 
 /** Where the project data is: drawn by the list, which nothing else writes. */
-export let buildListStatus: BuildListStatus = "idle";
+let buildListStatus: BuildListStatus = "idle";
 
 /** Preview a project's line on the map while its row is hovered or focused. */
-export function previewProject(pid: string | null): void {
+function previewProject(pid: string | null): void {
   if (map.getLayer("build-hover") === undefined) return;
   map.setFilter("build-hover", ["==", ["get", "pid"], pid ?? ""]);
   // only useful once the layer is drawable; focusProject turns it on
@@ -47,7 +47,7 @@ export function renderBuildList(): void {
   );
 }
 
-export function describeMeta(meta: PriorityMeta): void {
+function describeMeta(meta: PriorityMeta): void {
   const pct = meta.access?.stranded_pct;
   const headcount = meta.population?.is_headcount === true;
   const who = headcount ? "residents" : "homes (estimated from street length)";
@@ -94,7 +94,7 @@ export function describeMeta(meta: PriorityMeta): void {
  * every phone pulled three megabytes of project geometry to render a panel
  * almost nobody opens. Absent metadata hides the section entirely: a published
  * data snapshot can predate this module. */
-export let buildMetaStarted = false;
+let buildMetaStarted = false;
 
 export function ensureBuildMeta(): void {
   if (buildMetaStarted) return;
@@ -118,7 +118,7 @@ export function ensureBuildMeta(): void {
 }
 
 /** Load the projects themselves, on first real use. */
-export let buildDataStarted = false;
+let buildDataStarted = false;
 
 export function ensureBuildData(): void {
   if (buildDataStarted) return;

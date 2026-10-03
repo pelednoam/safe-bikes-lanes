@@ -6,6 +6,7 @@
 import { hook } from "../hooks.js";
 import type { Ticket } from "../planner.js";
 import type { RouteOption } from "../types.js";
+import type { SearchRowView } from "../ui/SearchResults.js";
 
 export const links = {
   /** Plan the route for the two ends as they stand. */
@@ -23,6 +24,15 @@ export const links = {
   beginPlan: hook<[], Ticket>("beginPlan"),
   /** Make one of the planned options the drawn one. */
   selectOption: hook<[id: RouteOption["id"]], void>("selectOption"),
+  /** Take a row of the search list. Set by initSearchResults; only a tap on a row
+   * calls it. */
+  chooseSearchRow: hook<[row: SearchRowView], void>("chooseSearchRow"),
+  /** Save a row of the search list as a place and clear the list. Set by
+   * initSearchResults; only a tap on its save button calls it. */
+  saveSearchRow: hook<[row: SearchRowView], void>("saveSearchRow"),
+  /** Put the sheet back after a search took it over. Set by initPhoneSearch: callable
+   * once start-up has reached it, and only a tap on a search row does. */
+  leaveSearchMode: hook<[chose: boolean], void>("leaveSearchMode"),
   /** Close the card that follows the pointer over the map. */
   dropHoverCard: hook<[], void>("dropHoverCard"),
   /** Open the hazard report dialog at a place. */

@@ -30,7 +30,7 @@ export function publishedWeightPositions(): Record<WeightKey, string> | null {
   return out;
 }
 
-export function weightValues(): Record<WeightKey, number> {
+function weightValues(): Record<WeightKey, number> {
   const raw = {} as Record<WeightKey, number>;
   let total = 0;
   for (const key of WEIGHT_KEYS) {

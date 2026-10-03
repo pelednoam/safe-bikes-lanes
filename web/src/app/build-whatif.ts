@@ -17,7 +17,7 @@ import { type RouteOption } from "../types.js";
 import { routePrefs } from "./avoid.js";
 
 /** A what-if answered with reach (no trip planned): the newest question wins. */
-export const whatIfLane = new Lane();
+const whatIfLane = new Lane();
 
 /** Leave the what-if view without touching what is drawn — for a new plan,
  * which is about to replace the drawn trip anyway. */
@@ -29,7 +29,7 @@ export function endWhatIf(): void {
   el<HTMLDivElement>("whatif-result").textContent = "";
 }
 
-export function whatIfPoints(pid: string): [number, number][] {
+function whatIfPoints(pid: string): [number, number][] {
   const feature = build.projectFC?.features.find(
     (f) => (f.properties as { pid?: string } | null)?.pid === pid,
   );

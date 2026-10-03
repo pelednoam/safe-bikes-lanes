@@ -63,12 +63,19 @@ module is cut, and each commit should correct them here.
 | `app/taps.ts` | 20 | what a tap on a map layer opens: the registry |
 | `app/build-state.ts` | 53 | where-to-build data and its typed state |
 | `app/build-controls.ts` | 98 | the panel's listeners and map taps |
+| `app/search-candidates.ts` | 94 | local, street and geocoder answers |
+| `app/search-view.ts` | 31 | the list as it is on screen, and drawing it |
+| `app/search-results.ts` | 75 | rows, choosing one, clearing the list |
+| `app/search-grade.ts` | 106 | a letter for the route to each candidate |
+| `app/search-input.ts` | 115 | the two boxes: typing, keys |
+| `app/phone-search.ts` | 56 | the sheet giving way to the keyboard; the From-field buttons |
+| `app/sheet.ts` | 114 | the bottom sheet: heights, dragging, revealing options |
 | `hooks.ts` (in `src/`) | 17 | the registry the hooks are made with |
 | `tests/appsize.test.ts` | | the size and cycle guard |
 
-Steps 0, 1 and 2 ("where to build") are done, and the core pieces the leaves needed (the old step 3's
+Steps 0, 1, 2 ("where to build") and 4 (search) are done, and the core pieces the leaves needed (the old step 3's
 `sources`, `data-load`, `markers`, `names`, `avoid`). Counts are from the same counter
-the guard uses. `app.ts` is down to 3,308 code lines (4,334 with comments).
+the guard uses. `app.ts` is down to 2,769 code lines (3,520 with comments).
 
 ## The rest (estimated code lines)
 
@@ -82,15 +89,10 @@ the guard uses. `app.ts` is down to 3,308 code lines (4,334 with comments).
 | `app/summary.ts` | 100 | summary, ribbon, cautions, street photos |
 | `app/permalink.ts` | 100 | `parseHash`, `updateHash`, restoring a plan |
 
-### Search (about 640)
+### Search (what is left)
 
 | File | ~Lines | Holds |
 |---|---|---|
-| `app/search-candidates.ts` | 130 | local, street and geocoder candidates, ranking |
-| `app/search-grade.ts` | 100 | `gradeSearchResults`, regrading, the grading timer |
-| `app/search-results.ts` | 130 | painting the rows, choosing one |
-| `app/search-input.ts` | 120 | `attachSearch` and the input handling |
-| `app/phone-search.ts` | 100 | search mode on a phone |
 | `app/first-run.ts` | 60 | the first-run notice |
 
 ### The map-load closure, 685 lines in one function, cut by feature (about 950)
@@ -108,7 +110,6 @@ The closure has only 9 locals of its own, so each feature becomes an
 | `app/hazard-layers.ts` | 70 | hazard points and taps |
 | `app/hover-cards.ts` | 150 | hover and tap cards, hover state |
 | `app/map-taps.ts` | 130 | `onTap`, `onMapTap`, the tap targets |
-| `app/sheet.ts` | 130 | `setSheet`, `currentSheet`, `revealSheet`, scroll reset |
 
 ### Navigation (about 900)
 
@@ -149,7 +150,7 @@ From the survey, by function name:
 1. Leaves: done (with the core pieces they needed, below).
 2. "Where to build": done (six `build-*` files and `taps`).
 3. Core: `sources`, `data-load`, `markers`, `names`, `avoid` done with step 1; the rest of the state section (taps and hover, the lets used by the planner) goes with its users.
-4. Search: the six `search-*` and phone files.
+4. Search: done (five `search-*` files, `phone-search`, and `sheet`, which phone search needed).
 5. Planning: `plan-route`, `plan-options`, `summary`, `permalink`.
 6. Navigation and hazards: the eight files, with the hooks.
 7. The load closure: one commit per layer file, then `hover-cards`, `map-taps`, `sheet`.
