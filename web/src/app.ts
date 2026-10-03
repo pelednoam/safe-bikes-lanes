@@ -1,8 +1,9 @@
 // Frontend for the family bike router. Routing runs fully in the browser
 // (see router.ts); class colors mirror pipeline/config.py.
 import "./app/started.js";
-import { AVOIDABLE, loadSketchy, SKETCHY_KEY, store } from "./app/store.js";
-import { CLASS_MARKS, CONSTRUCTION_SWATCH, MARK_INK, NETWORK_MARK_LAYERS, POI_META, RIBBON_PATTERNS, TICK_INK_DARK, classSwatch, classWidth, constructionIcon, isTick } from "./app/classes.js";
+import { links } from "./app/links.js";
+import { AVOIDABLE, type ConstructionFC, SKETCHY_KEY, loadSketchy, store } from "./app/store.js";
+import { CLASS_MARKS, CONSTRUCTION_SWATCH, MARK_INK, NETWORK_MARK_LAYERS, POI_META, RIBBON_PATTERNS, classSwatch, classWidth, constructionIcon } from "./app/classes.js";
 import { el, emptyFC } from "./app/dom.js";
 // the map is built by importing this: app/map.js
 import { map, scaleBar } from "./app/map.js";
@@ -16,36 +17,12 @@ import type {
   Popup,
 } from "maplibre-gl";
 
-import {
-  BASEMAP_MAXZOOM,
-  type BasemapTheme,
-  createBasemap,
-  tileDeps,
-} from "./basemap.js";
+import { BASEMAP_MAXZOOM, tileDeps } from "./basemap.js";
 import { maplibregl } from "./maplibre.js";
 import { CLASS_COLORS } from "./weights.gen.js";
 import { downloadOffline, routeTiles } from "./tilecache.js";
 import type { NativeFix } from "./native.js";
-import {
-  askForRideNotifications,
-  isNativeApp,
-  isNewerAppVersion,
-  keepScreenOn,
-  lastNativeSpeechError,
-  locationAdvice,
-  minimizeApp,
-  nativeLocationAllowed,
-  nativeSpeak,
-  nativeStopSpeech,
-  onAndroidBack,
-  rideLocationState,
-  type SaveResult,
-  setSystemBarsDark,
-  startDownload,
-  startBackgroundWatcher,
-  stopBackgroundWatcher,
-  webVoiceCount,
-} from "./native.js";
+import { askForRideNotifications, isNativeApp, isNewerAppVersion, keepScreenOn, lastNativeSpeechError, locationAdvice, minimizeApp, nativeLocationAllowed, nativeSpeak, nativeStopSpeech, onAndroidBack, rideLocationState, type SaveResult, startDownload, startBackgroundWatcher, stopBackgroundWatcher, webVoiceCount } from "./native.js";
 import {
   type Candidate,
   GEOCODE_DEBOUNCE_MS,
@@ -102,7 +79,7 @@ import {
   stashInProgress,
   takeInProgress,
 } from "./rides.js";
-import { dataSource, dataUrl, initDataSource, loadJson, usingRemoteData } from "./data.js";
+import { dataSource, dataUrl, loadJson, usingRemoteData } from "./data.js";
 import { buildCues, PROFILES, routeCacheKey, toGPX } from "./router.js";
 import {
   distVoice,
@@ -118,11 +95,9 @@ import {
   unitName,
   unitShort,
 } from "./units.js";
-import { NetworkTiles } from "./tiles.js";
-import { withRetry } from "./retry.js";
-import { COVERAGE, HOME, outsideCoverage } from "./coverage.js";
+import { COVERAGE } from "./coverage.js";
 import { Lane, type Ticket } from "./planner.js";
-import { Trip, type TripSnapshot } from "./trip.js";
+import { type TripSnapshot } from "./trip.js";
 import { type ComponentChild, h, render } from "preact";
 import { type Headline, NavHeadline, NavTripLine, type TripLine } from "./ui/NavBanner.js";
 import { OptionCards } from "./ui/OptionCards.js";
@@ -145,9 +120,7 @@ import {
   PlaceCard,
   textOf,
 } from "./ui/MapCards.js";
-import type { RoutingApi, WirePrefs } from "./routing.js";
-import { reportCaught } from "./report.js";
-import { WORKER_FAILED, wrap } from "./rpc.js";
+import type { WirePrefs } from "./routing.js";
 import { type SpeakPriority, SpeechQueue } from "./speech.js";
 import { loopRejoinPoint, payloadLength, rejoinOption } from "./rejoin.js";
 import { decodePlan, encodePlan } from "./permalink.js";
@@ -155,13 +128,11 @@ import { PreparedImage, saveBlob, shareImage } from "./share.js";
 import { readItem, readJson, removeItem, trimRecord, writeItem } from "./storage.js";
 import { DeferredReload, ScreenLock, type WakeLockApi } from "./lifecycle.js";
 import { drawRideCard, drawTotalsCard, rideShareText, totalsShareText } from "./sharecard.js";
-import type {
-  PoiFeature,
-  ProtectionClass,
-  SafetyGrade,
-  RouteOption,
-  RouteSummary,
-} from "./types.js";
+import type { ProtectionClass, SafetyGrade, RouteOption, RouteSummary } from "./types.js";
+import { dataReady, gradeLane, routeLane, routing, shedLane, trip } from "./app/services.js";
+import { applyBasemap, initDarkMode } from "./app/dark-mode.js";
+import { ensureLayer, getSource } from "./app/sources.js";
+import { announce, constructionReady, dataProgress, ensureRouter, initDataLoad, manifestReady, netTiles, networkReady, poisData, poisReady, refreshNetworkTiles, showStage } from "./app/data-load.js";
 
 interface NominatimResult {
   display_name: string;
@@ -189,7 +160,6 @@ const LOOP_LIMITS: Record<"imperial" | "metric", [min: number, max: number]> = {
 };
 
 const BBOX = COVERAGE;
-const DARK_KEY = "darkMode";
 
 // ---------------------------------------------------------------------------
 // helpers
@@ -207,13 +177,6 @@ function saveSketchy(marks: [number, number][]): void {
 // state
 // ---------------------------------------------------------------------------
 
-/** Routing runs in a worker (routing.ts): the tiles, the graph and every
- * search, off this thread, so the map and the buttons keep working while a
- * route is found. The page asks and awaits. */
-const routing = wrap<RoutingApi>(new Worker(new URL("./routing.worker.ts", import.meta.url)));
-/** The basemap's layers, injected under everything this app draws. A theme's
- * layers are added the first time that theme is shown — see applyBasemap. */
-const basemap = createBasemap(map, () => map.getStyle().layers.find((l) => l.id !== "ground")?.id);
 let poiMarker: Marker | null = null;
 let shedMarker: Marker | null = null;
 /** Every routing choice the rider has made, as the router takes them — the one
@@ -272,17 +235,7 @@ const tapTargets = new Map<TapLayer, TapTarget>();
 function onTap(layer: TapLayer, open: TapOpen, alsoSetsPoint = false): void {
   tapTargets.set(layer, { open, alsoSetsPoint });
 }
-/** The route options on screen and the chosen one (trip.ts): a plan's answer
- * is published with the ticket it was planned under, and refused if stale. */
-const trip = new Trip();
 let shedCenter: [number, number] | null = null;
-interface ConstructionFC {
-  features: {
-    geometry: { type: string; coordinates: unknown };
-    properties: { src: string; name: string; detail?: string; start: string; end: string };
-  }[];
-}
-let constructionFC: ConstructionFC | null = null;
 
 /** Sample construction geometries into avoid-points for the router. */
 function constructionAvoidPoints(fc: ConstructionFC): [number, number][] {
@@ -316,291 +269,15 @@ function applyAvoidPoints(): void {
   ]);
 }
 let pendingSelect: RouteOption["id"] | null = null;
-/** Who owns each output while planning waits (see planner.ts): the route
- * options (a trip, a round trip, a what-if), the reach map, and the letters on
- * the search list. Every await in their code is followed by a staleness check. */
-const routeLane = new Lane();
-const shedLane = new Lane();
-const gradeLane = new Lane();
 
-const dataReady: Promise<void> = initDataSource();
+initDataLoad();
 
-// first launch after a website data refresh downloads layers from the site;
-// surface that as progress (native only — bundled loads are instant)
-const DATA_STEPS = 4; // tile manifest + network + pois + construction (overlays are lazy)
-let dataDone = 0;
-function dataProgress(): void {
-  if (usingRemoteData() === null) return;
-  dataDone += 1;
-  const box = el<HTMLDivElement>("data-update");
-  if (dataDone >= DATA_STEPS) box.style.display = "none";
-  else {
-    box.textContent = `\u2b07 Updating map data\u2026 ${dataDone}/${DATA_STEPS}`;
-    box.style.display = "block";
-  }
-}
-void dataReady.then(() => {
-  if (usingRemoteData() !== null) {
-    const box = el<HTMLDivElement>("data-update");
-    box.textContent = "\u2b07 Updating map data\u2026";
-    box.style.display = "block";
-  }
-});
-
-// Routing graph is tiled (pipeline/export_web.py): the browser loads only the
-// tiles covering a route's corridor, so coverage can scale toward all of MA
-// without a giant download. The worker (re)builds the graph over whatever
-// tiles are loaded; ensureRouter has it fetch the ones an area needs first.
-/** What the loading line is doing right now.
- *
- * Routing was showing a motionless "routing…" for the whole wait, which is
- * mostly the map downloading — about 90 tiles for an ordinary trip — so the app
- * looked frozen while it was in fact busy and fine. Say which of the two things
- * is happening, and show the one that has a denominator.
- *
- * The count is reported to whoever asked for the tiles, per call. It used to be
- * a module global that only a failed route cleared, so after any successful one
- * the reach map and search grading reported their own tile loads through the
- * route's callback, and "Loading the map around your route… 40 of 40" stayed
- * over the map with nothing loading at all.
- */
-/** Say something to a screen reader without putting it on screen.
- *
- * Route results, grades and search answers all arrive by redrawing part of the
- * panel, which a screen reader does not notice: a blind parent asked for a
- * route and heard nothing at all. `delayMs` lets a burst — a list redrawn on
- * every keystroke — settle into one announcement. */
-let announceTimer: number | undefined;
-function announce(text: string, delayMs = 0): void {
-  window.clearTimeout(announceTimer);
-  announceTimer = window.setTimeout(() => {
-    const box = document.getElementById("sr-status");
-    if (box === null) return;
-    // the same words twice in a row are only announced if the node changes
-    box.textContent = box.textContent === text ? `${text}\u00a0` : text;
-  }, delayMs);
-}
-
-function showStage(text: string, sub = ""): void {
-  const box = el<HTMLDivElement>("loading");
-  box.innerHTML =
-    `<span class="spinner" aria-hidden="true"></span><span>${esc(text)}</span>` +
-    (sub === "" ? "" : `<small>${esc(sub)}</small>`);
-  box.style.display = "flex";
-}
-
-/** Have the worker load the tiles covering `points` (± padM metres, plus a
- * margin) and build the graph over them. False if the area has no mapped tiles. */
-async function ensureRouter(
-  points: [number, number][],
-  padM: number,
-  margin = 1,
-  onProgress?: (done: number, total: number) => void,
-): Promise<boolean> {
-  await manifestReady;
-  // Corridor, not bounding box: for a cross-metro trip the endpoints' bbox
-  // covers most of the map, so we'd download hundreds of tiles to route along
-  // one line through them. Widen the corridor by however much padding the
-  // caller asked for (a reach-map flood still wants a real area, so it passes
-  // a single point and a big pad, which comes out round anyway).
-  // Corridor, not bounding box: same tiles that matter, ~27% fewer fetched on
-  // a cross-metro trip (measured: 164 -> 120 tiles, identical route). The
-  // padding is deliberately NOT trimmed further — a narrower corridor was
-  // measurably cheaper but produced a less safe route (50% -> 34% protected
-  // on Wellesley->Revere), which is the wrong trade for this app.
-  const marginCells = margin + Math.round(padM / 2200);
-  const { ready } = await routing.ensure(points, marginCells, onProgress);
-  if (!ready) return false;
-  store.routerReady = true;
-  return true;
-}
-
-/** Say, in words, that something the app needs did not load and when it will
- * be tried again (see retry.ts). The error line used to read "failed to load
- * routing tiles: TypeError: Failed to fetch" under a "loading map…" that never
- * went away, and nothing was ever tried again. */
-function dataLoadTrouble(what: string, delayMs: number): void {
-  const errBox = el<HTMLDivElement>("error");
-  errBox.textContent =
-    `Couldn't load ${what} — trying again in ${Math.round(delayMs / 1000)} s. ` +
-    "Check the phone has a connection.";
-  errBox.dataset["from"] = "dataload";
-  errBox.style.display = "block";
-}
-
-/** Take the message down once what it was about has loaded — only if it is
- * still that message, and not a routing error written since. */
-function dataLoadRecovered(): void {
-  const errBox = el<HTMLDivElement>("error");
-  if (errBox.dataset["from"] !== "dataload") return;
-  delete errBox.dataset["from"];
-  errBox.style.display = "none";
-}
-
-const manifestReady: Promise<void> = dataReady
-  .then(() => routing.configure(dataSource(), getUnits()))
-  .then(() =>
-    withRetry(() => routing.loadManifest(), {
-      onRetry: (err, _attempt, delayMs) => {
-        // a route finder that never started is not a slow network: waiting
-        // and retrying won't bring it back, and the rider should know
-        if (err instanceof Error && err.message === WORKER_FAILED) {
-          reportCaught("worker", err);
-          const errBox = el<HTMLDivElement>("error");
-          errBox.textContent = `Can't plan routes: ${WORKER_FAILED}.`;
-          errBox.dataset["from"] = "dataload";
-          errBox.style.display = "block";
-          return;
-        }
-        dataLoadTrouble("the map data", delayMs);
-      },
-    }),
-  )
-  .then(() => {
-    dataLoadRecovered();
-    void refreshHazards();
-    el<HTMLDivElement>("loading").style.display = "none";
-    dataProgress();
-  });
-el<HTMLDivElement>("loading").textContent = "loading map…";
-el<HTMLDivElement>("loading").style.display = "block";
-
-// The display network also tiles, but loads by VIEWPORT rather than by route
-// corridor (it's shown by default across the whole visible area). Below this
-// zoom individual streets aren't legible and the viewport spans too many
-// tiles, so the layer clears — pan/zoom in and it repopulates.
-const NET_MIN_ZOOM = 12;
-const netTiles = new NetworkTiles(loadJson);
-const networkReady: Promise<void> = dataReady.then(() =>
-  withRetry(() => netTiles.loadManifest(), {
-    onRetry: (_err, _attempt, delayMs) => dataLoadTrouble("the street safety map", delayMs),
-  }).then(dataLoadRecovered),
-);
-let netToken = 0;
-
-/** Fill the network source with the streets in the current viewport. */
-async function refreshNetworkTiles(): Promise<void> {
-  await networkReady;
-  const src = map.getSource("network") as GeoJSONSource | undefined;
-  if (!src) return;
-  // hidden layer: don't spend bandwidth or battery fetching tiles for it
-  // (setNetworkVisible refreshes when it's switched back on)
-  if (map.getLayoutProperty("network", "visibility") === "none") return;
-  if (map.getZoom() < NET_MIN_ZOOM) {
-    src.setData(emptyFC());
-    return;
-  }
-  const b = map.getBounds();
-  const box = {
-    west: b.getWest(),
-    south: b.getSouth(),
-    east: b.getEast(),
-    north: b.getNorth(),
-  };
-  const token = ++netToken;
-  let features: Awaited<ReturnType<typeof netTiles.visibleFeatures>>;
-  try {
-    features = await netTiles.visibleFeatures(box, 1);
-  } catch {
-    // a tile that would not load: keep what is drawn, the next move asks again
-    return;
-  }
-  if (token !== netToken) return; // a newer move superseded this fetch
-  src.setData({ type: "FeatureCollection", features });
-}
-// Debounced: the follow camera drives the map every animation frame while
-// navigating, and each move fires moveend — without this the whole network
-// layer would be re-queried and re-rendered ~60x/second mid-ride.
-let netRefreshTimer: number | undefined;
-/** Outside the mapped area there is nothing to draw: no streets, no basemap
- * (it is this area's too), no safety network. A phone located elsewhere
- * opened on a blank grey map with nothing to say why; now the map says what
- * it covers, and takes the rider there. */
-function showCoverage(): void {
-  const b = map.getBounds();
-  const out = !store.navActive && outsideCoverage({
-    west: b.getWest(),
-    south: b.getSouth(),
-    east: b.getEast(),
-    north: b.getNorth(),
-  });
-  el<HTMLDivElement>("outside").style.display = out ? "flex" : "none";
-}
-// a jump, not a flight: animating across a continent of empty map is a long
-// wait with nothing to look at
-el<HTMLButtonElement>("outside-go").addEventListener("click", () => {
-  map.jumpTo({ center: HOME.center, zoom: HOME.zoom });
-});
-map.on("load", showCoverage);
-map.on("moveend", showCoverage);
-map.on("moveend", () => {
-  window.clearTimeout(netRefreshTimer);
-  netRefreshTimer = window.setTimeout(() => void refreshNetworkTiles(), 300);
-});
-
-void dataReady
-  .then(() => loadJson<{ mapillary?: string }>("keys.json"))
-  .then((keys) => {
-    store.mapillaryToken = readItem("mapillaryToken") ?? keys.mapillary ?? "";
-  })
-  .catch(() => undefined);
-
-const constructionReady: Promise<void> = dataReady
-  .then(() => loadJson<ConstructionFC>("construction.geojson"))
-  .then((fc) => {
-    constructionFC = fc;
-  })
-  .catch(() => undefined);
 
 // construction avoidance for the router as soon as the zones load (the worker
 // keeps it, and applies it to every graph it builds)
 void constructionReady.then(() => {
-  if (constructionFC) void routing.setConstructionPoints(constructionAvoidPoints(constructionFC));
+  if (store.constructionFC) void routing.setConstructionPoints(constructionAvoidPoints(store.constructionFC));
 });
-
-/** pois.geojson, fetched and parsed once. The loop planner reads its features
- * and the map's POI layer draws the same collection; each used to load the
- * 786 KB file for itself. null when it could not be loaded. */
-const poisData: Promise<{ features: PoiFeature[] } | null> = dataReady
-  .then(() => loadJson<{ features: PoiFeature[] }>("pois.geojson"))
-  .catch(() => null);
-
-const poisReady: Promise<void> = poisData.then((fc) => {
-  if (fc) store.pois = fc.features;
-});
-
-function getSource(id: string): GeoJSONSource {
-  const src = map.getSource(id);
-  if (src === undefined) throw new Error(`missing source ${id}`);
-  return src as GeoJSONSource;
-}
-
-// Heavy overlays load their data the first time they're shown, not at startup.
-const LAZY_LAYER_FILES: Record<string, string> = {
-  heatmap: "heatmap.geojson",
-  lanemap: "lanemap.geojson",
-  elevmap: "elevation.geojson",
-  gateways: "gateways.geojson",
-  access: "access.geojson",
-  build: "priorities.geojson",
-  crossings: "severance.geojson",
-};
-const lazyLoaded = new Set<string>();
-
-/** Fetch an overlay's data once, the first time its toggle is turned on. */
-function ensureLayer(id: string): void {
-  const file = LAZY_LAYER_FILES[id];
-  if (file === undefined || lazyLoaded.has(id)) return;
-  lazyLoaded.add(id);
-  void dataReady
-    .then(() => loadJson<GeoJSON.GeoJSON>(file))
-    .then((d) => {
-      (map.getSource(id) as GeoJSONSource).setData(d);
-    })
-    .catch(() => {
-      lazyLoaded.delete(id); // let a later toggle retry
-    });
-}
 
 function currentPosition(): Promise<[number, number]> {
   return new Promise((resolve, reject) => {
@@ -2911,9 +2588,9 @@ map.on("load", () => {
   void networkReady.then(() => refreshNetworkTiles()).finally(() => dataProgress());
   void constructionReady
     .then(() => {
-      if (constructionFC) {
+      if (store.constructionFC) {
         (map.getSource("construction") as GeoJSONSource).setData(
-          constructionFC as unknown as GeoJSON.GeoJSON,
+          store.constructionFC as unknown as GeoJSON.GeoJSON,
         );
       }
     })
@@ -3839,6 +3516,7 @@ async function refreshHazards(): Promise<void> {
     } as GeoJSON.GeoJSON);
   }
 }
+links.refreshHazards.set(refreshHazards);
 
 function openHazardDialog(lon: number, lat: number): void {
   hazardPendingLoc = [lon, lat];
@@ -5472,115 +5150,7 @@ el<HTMLButtonElement>("offline-btn").addEventListener("click", () => {
 // the rider turns it on, whatever the system theme (see applyDark below)
 // ---------------------------------------------------------------------------
 
-function applyBasemap(): void {
-  const dark = document.body.classList.contains("dark");
-  const aerial = el<HTMLInputElement>("show-aerial").checked;
-  const netOn = el<HTMLInputElement>("show-net").checked;
-  // while riding, the map is turned to the heading: drop the basemap's baked
-  // labels and draw our own, which stay the right way up
-  const plain = store.navActive;
-  const setVis = (): void => {
-    // Skip layers that aren't added yet: this runs during map load too, from
-    // whichever data callback lands first, and setLayoutProperty throws on an
-    // unknown id — which took the calling chain (and the route panel) with it.
-    const vis = (id: string, on: boolean): void => {
-      if (map.getLayer(id) !== undefined) {
-        map.setLayoutProperty(id, "visibility", on ? "visible" : "none");
-      }
-    };
-    vis("aerial", aerial);
-    // One theme at a time, its label layers dropped while riding, and the whole
-    // basemap off under the aerial view. show() is instant for a theme already
-    // installed; ensure() covers the first use of one, then shows it.
-    const wanted = {
-      theme: (dark ? "dark" : "light") as BasemapTheme,
-      labels: !plain,
-      on: !aerial,
-    };
-    basemap.show(wanted);
-    void basemap
-      .ensure(wanted.theme)
-      .then(() => basemap.show(wanted))
-      .catch((err: unknown) => {
-        // No basemap is a degraded map, not a broken app: the route, the
-        // network and the aerial view all still draw, over the ground colour.
-        // But say so — "the basemap is quietly missing" is a failure this app
-        // has shipped before, and it looks identical to a slow network.
-        console.warn("basemap failed to load", err);
-      });
-    // not gated on the network toggle: with the basemap's labels gone, hiding
-    // the network would leave a map with no names on it at all
-    vis("street-labels", plain);
-    if (map.getLayer("street-labels") !== undefined) {
-      map.setPaintProperty("street-labels", "text-color", dark || aerial ? "#f2f5fa" : "#1d2430");
-      map.setPaintProperty(
-        "street-labels",
-        "text-halo-color",
-        dark || aerial ? "rgba(10,14,22,0.9)" : "rgba(255,255,255,0.92)",
-      );
-    }
-    if (map.getLayer("route-casing") !== undefined) {
-      map.setPaintProperty("route-casing", "line-color", dark || aerial ? "#9db8ff" : "#1440a0");
-    }
-    if (map.getLayer("alts") !== undefined) {
-      map.setPaintProperty("alts", "line-color", dark || aerial ? "#ccc" : "#777");
-    }
-    // over photos the lanes need contrast: dark halo + thicker, solid lines
-    vis("network-casing", aerial && netOn);
-    const [lo, hi] = aerial ? [2.0, 5.0] : [1.2, 3.5];
-    const width = classWidth(lo, hi);
-    for (const m of CLASS_MARKS) {
-      const id = `network-mark-${m.id}`;
-      if (map.getLayer(id) === undefined) continue;
-      map.setPaintProperty(id, "line-width", classWidth(lo, hi, m.scale));
-      map.setPaintProperty(id, "line-opacity", plain ? 0.3 : 0.75);
-      if (isTick(m)) {
-        map.setPaintProperty(id, "line-color", dark && !aerial ? TICK_INK_DARK : MARK_INK);
-      }
-    }
-    for (const layer of ["network", "network-unconfirmed"]) {
-      if (map.getLayer(layer) === undefined) continue;
-      map.setPaintProperty(layer, "line-width", width);
-      // the network is drawn in the same palette as the route, so while riding
-      // it steps back: the line you're following has to be the obvious one.
-      // This lives here rather than in startNav because any later call would
-      // otherwise undo the dim.
-      map.setPaintProperty(layer, "line-opacity", plain ? 0.35 : aerial ? 0.95 : 0.75);
-    }
-  };
-  // map.loaded() is false whenever tiles are streaming, and "load" fires only
-  // once per map — gate on layer existence instead, or toggles made while
-  // tiles load would be silently dropped.
-  //
-  // "aerial" is the first layer the load handler adds, so its presence means
-  // the others are there too. It used to be "osm-dark", one of the raster
-  // basemaps; when those gave way to the vector basemap the id stopped
-  // existing, this test went permanently false, and every call queued itself
-  // behind a "load" event that had already fired — leaving the basemap added
-  // but invisible, with nothing logged.
-  if (map.getLayer("aerial") !== undefined) setVis();
-  else map.once("load", setVis);
-}
-
-function applyDark(dark: boolean): void {
-  document.body.classList.toggle("dark", dark);
-  el<HTMLInputElement>("dark-mode").checked = dark;
-  setSystemBarsDark(dark); // the status bar icons follow the app's theme, not the phone's
-  applyBasemap();
-}
-
-// Light by default: this is a daylight map, and the basemap + safety colours
-// are tuned for it. Dark is opt-in and remembered — following the phone's
-// system theme turned it on for riders who never asked for it.
-applyDark(readItem(DARK_KEY) === "1");
-
-el<HTMLInputElement>("dark-mode").addEventListener("change", (e: Event) => {
-  const dark = (e.target as HTMLInputElement).checked;
-  writeItem(DARK_KEY, dark ? "1" : "0");
-  applyDark(dark);
-});
-
-el<HTMLInputElement>("show-aerial").addEventListener("change", applyBasemap);
+initDarkMode();
 
 el<HTMLInputElement>("show-constr").addEventListener("change", (e: Event) => {
   const on = (e.target as HTMLInputElement).checked;

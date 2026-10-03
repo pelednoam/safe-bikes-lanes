@@ -33,6 +33,13 @@ export function loadSketchy(): [number, number][] {
 // unguarded read here stopped the whole app on load (see storage.ts).
 const storedAvoid = readJson<unknown>("avoidTypes", []);
 
+export interface ConstructionFC {
+  features: {
+    geometry: { type: string; coordinates: unknown };
+    properties: { src: string; name: string; detail?: string; start: string; end: string };
+  }[];
+}
+
 export interface Store {
   /** True once some tiles are loaded and the graph is built over them. */
   routerReady: boolean;
@@ -54,6 +61,8 @@ export interface Store {
   /** Turn-by-turn is running. */
   navActive: boolean;
   loopParams: { km: number; kind: string } | null;
+  /** The construction zones, once loaded: what the router avoids and the map draws. */
+  constructionFC: ConstructionFC | null;
 }
 
 export const store: Store = {
@@ -73,4 +82,5 @@ export const store: Store = {
   mapillaryToken: "",
   navActive: false,
   loopParams: null,
+  constructionFC: null,
 };
