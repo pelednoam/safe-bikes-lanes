@@ -10,9 +10,9 @@ import { endWhatIf, showRealTrip } from "./build-whatif.js";
 import { el } from "./dom.js";
 import { type Marker } from "maplibre-gl";
 import { store } from "./store.js";
-import { ensureRouter, manifestReady, showStage } from "./data-load.js";
+import { ensureRouter, showStage } from "./data-load.js";
 import { currentPosition, makeMarker, syncOD } from "./markers.js";
-import { avoidPointsSent, routePrefs } from "./avoid.js";
+import { routePrefs, routingInputsReady } from "./avoid.js";
 import { type RouteOption } from "../types.js";
 import { clearOptionChips, renderOptions, selectOption } from "./plan-options.js";
 import { recordRecentRoute } from "./places.js";
@@ -114,8 +114,7 @@ export async function requestRoute(): Promise<void> {
   }
   const ticket = beginPlan();
   if (!store.end) return;
-  await manifestReady;
-  await avoidPointsSent();
+  await routingInputsReady();
   if (ticket.stale()) return;
   const errBox = el<HTMLDivElement>("error");
   errBox.style.display = "none";

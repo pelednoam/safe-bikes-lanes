@@ -1,6 +1,7 @@
 // Frontend for the family bike router. Routing runs fully in the browser
 // (see router.ts); class colors mirror pipeline/config.py.
 import "./app/started.js";
+import { reportCaught } from "./report.js";
 import { links } from "./app/links.js";
 import { AVOIDABLE, store } from "./app/store.js";
 import { CLASS_MARKS, CONSTRUCTION_SWATCH, MARK_INK, NETWORK_MARK_LAYERS, POI_META, classSwatch, classWidth, constructionIcon } from "./app/classes.js";
@@ -60,7 +61,7 @@ import { initRidesDialog, renderRides } from "./app/rides-dialog.js";
 import { initAppInfo } from "./app/app-info.js";
 import { initRouteExport } from "./app/route-export.js";
 import { computeShed, exitShedMode, initShed } from "./app/shed.js";
-import { applyAvoidPoints, initAvoid, routePrefs, syncAvoidSummary } from "./app/avoid.js";
+import { applyAvoidPoints, avoidPointsSent, initAvoid, routePrefs, syncAvoidSummary } from "./app/avoid.js";
 import { initMarkers, setPoint, syncOD } from "./app/markers.js";
 import { initSketchy, openSketchyPopup, renderSketchy, saveSketchy } from "./app/sketchy.js";
 import { initPlaces, renderPlacesAndRecent } from "./app/places.js";
@@ -69,8 +70,8 @@ import { TAP_ORDER, type TapTarget, onTap, tapTargets } from "./app/taps.js";
 import { clearWhatIf } from "./app/build-whatif.js";
 import { ensureBuildMeta } from "./app/build-list.js";
 import { initBuildControls } from "./app/build-controls.js";
-import { initSearchResults } from "./app/search-results.js";
-import { dropGrading, initSearchGrade, regradeVisible } from "./app/search-grade.js";
+import { clearSearchResults, initSearchResults } from "./app/search-results.js";
+import { initSearchGrade, regradeVisible } from "./app/search-grade.js";
 import { initPhoneSearch, leaveSearchMode } from "./app/phone-search.js";
 import { initSearchInput } from "./app/search-input.js";
 import { SHEET_HALF, initSheet, sheetLayout } from "./app/sheet.js";
@@ -1270,12 +1271,23 @@ for (const [cls, label] of Object.entries(CLASS_LABELS) as [ProtectionClass, str
  * go with the report. */
 const hazardPhotos = new PhotoUrls(getHazardPhoto);
 
+/** The newest refresh wins: a slow older read must not put an older list back over a
+ * newer one (a backup restore while the start-up read is still waiting). */
+let hazardsGen = 0;
+
 async function refreshHazards(): Promise<void> {
+  const gen = ++hazardsGen;
+  let list: HazardReport[];
   try {
-    store.hazards = await listHazards();
-  } catch {
-    store.hazards = [];
+    list = await listHazards();
+  } catch (err) {
+    // neither the database nor its mirror could be read: nothing to avoid is known, and
+    // that is worth knowing about
+    reportCaught("error", err);
+    list = [];
   }
+  if (gen !== hazardsGen) return;
+  store.hazards = list;
   applyAvoidPoints();
   hazardPhotos.prune(new Set(store.hazards.filter((h) => h.hasPhoto).map((h) => h.id)));
   const features = store.hazards.map((h) => ({
@@ -1737,6 +1749,8 @@ const rerouteLane = new Lane();
  * something changed what the router must avoid. */
 async function replanRide(): Promise<void> {
   if (!store.routerReady || !navLastPos) return;
+  // a ride resumed after the page reloaded must not reroute before its hazards are in
+  await avoidPointsSent();
   // The destination pin may be why: dragged mid-ride, it used to re-plan to
   // where the ride had been going, with the pin and the guidance apart. On a
   // detour the pin is still the ride's destination, the one Resume returns to;
@@ -2192,15 +2206,18 @@ let rideGen = 0;
 async function startNav(): Promise<void> {
   // a ride follows the streets as they are, never a what-if's proposed lane
   clearWhatIf();
-  // and the main thread is the guidance's: a search list left open would go on
-  // grading, up to five routing runs, while the rider is on the bike
-  dropGrading();
   const chosen = trip.selected;
   navLoop = chosen !== undefined && chosen.id.startsWith("loop") ? chosen : null;
   rideEngine.start();
   if (!rebuildNavFromSelected()) return;
   const destLngLat = store.end?.getLngLat() ?? store.start?.getLngLat();
   if (!destLngLat) return;
+  // The ride has started, and the main thread is the guidance's: a search list left
+  // open would go on grading, up to five routing runs, while the rider is on the bike.
+  // Cleared only here, after the checks that can still send the rider back to the
+  // plan, so a start that didn't happen leaves the list as it was. (A grade already
+  // sent to the router still finishes there, one run; none is started after.)
+  clearSearchResults();
   navDest = [destLngLat.lng, destLngLat.lat];
   // A round trip has no destination field of its own; the one on screen still
   // names wherever the rider last searched for.

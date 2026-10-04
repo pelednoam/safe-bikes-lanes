@@ -77,7 +77,8 @@ export function parseHash(): void {
     }
     syncAvoidSummary();
   }
-  if (link.option !== null) store.pendingSelect = link.option;
+  // a link that names no option clears one an earlier link left behind
+  store.pendingSelect = link.option;
   const s = link.start;
   if (s !== null && link.loop !== null) {
     // shared loop: restore controls, place the start, and re-plan it

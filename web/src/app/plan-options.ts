@@ -67,7 +67,12 @@ export function renderOptionChips(): void {
  * return from its own check before removing them, so every option switched
  * past before its line was drawn left a render handler behind — running
  * queryRenderedFeatures on every frame for the rest of the session. */
-export let cancelPanelPaint: (() => void) | null = null;
+let cancelPending: (() => void) | null = null;
+
+/** Withdraw a paint that is still waiting for its line to draw. */
+export function cancelPanelPaint(): void {
+  cancelPending?.();
+}
 
 /** Run the panel's DOM writes once the route line is actually on the map.
  *
@@ -76,7 +81,7 @@ export let cancelPanelPaint: (() => void) | null = null;
  * numbers a frame or two before the route appeared — planners read the gap as
  * the app having routed somewhere else and then corrected itself. */
 export function paintPanelWithRoute(paint: () => void): void {
-  cancelPanelPaint?.(); // the newest selection is the only one to paint
+  cancelPending?.(); // the newest selection is the only one to paint
   let done = false;
   let renders = 0;
   let parsed = false;
@@ -87,7 +92,7 @@ export function paintPanelWithRoute(paint: () => void): void {
     map.off("sourcedata", onData);
     window.clearTimeout(soft);
     window.clearTimeout(hard);
-    if (cancelPanelPaint === stop) cancelPanelPaint = null;
+    if (cancelPending === stop) cancelPending = null;
     window.__panelPaintsWaiting = (window.__panelPaintsWaiting ?? 1) - 1;
   };
   const fire = (): void => {
@@ -117,7 +122,7 @@ export function paintPanelWithRoute(paint: () => void): void {
     if (renders === 0) fire();
   }, 600);
   const hard = window.setTimeout(fire, 3000);
-  cancelPanelPaint = stop;
+  cancelPending = stop;
 }
 
 export function selectOption(id: RouteOption["id"]): void {

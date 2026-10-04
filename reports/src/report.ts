@@ -153,8 +153,8 @@ const LABELLED = new RegExp(`(?:${AXIS}|${NAMED})\\s*${QUOTE}\\s*[-+]?\\d+(?:\\.
  * z/x/y or z_x_y, which are. */
 const TILE_RUN = /-?\d+(?:\.\d+)?(?:\s*[x×]\s*-?\d+(?:\.\d+)?){2,}/gi;
 /** What may sit between the parts of a tile written as axes: a space, comma, slash,
- * point, colon, semicolon, bar, underscore or hyphen. */
-const AXIS_SEP = String.raw`[_\s,/.;:|-]*`;
+ * point, colon, semicolon, bar, ampersand, plus, underscore or hyphen. */
+const AXIS_SEP = String.raw`[_\s,/.;:|&+-]*`;
 /** One axis and its number, with a fraction: "x4953", "y 6060.5". */
 const axis = (letters: string): string => String.raw`[${letters}][_\s-]*\d+(?:\.\d+)?`;
 /** Axes as a log writes them, after a word ("tileX4953Y6060", "tile x4953 y6060") or
@@ -164,7 +164,10 @@ const axis = (letters: string): string => String.raw`[${letters}][_\s-]*\d+(?:\.
  * before DECIMAL: the fraction would otherwise be cut off first and leave
  * "z14_x4953_y‹n›" behind. A y and an x are both needed, so "1920 x 1080" is not one. */
 const TILE_AXES = new RegExp(
-  String.raw`(?<![0-9])(?:[zZ][_\s-]*\d+${AXIS_SEP})?` +
+  // not in the middle of a word ("index 3: y 4", "max 2; y 5"), unless it is
+  // camelCase ("tileX4953Y6060") or the word is tile ("tilex4953y6060")
+  String.raw`(?<![0-9])(?:(?<![A-Za-z])|(?<=[a-z])(?=[XYZ])|(?<=tile)(?=[xyz]))` +
+    String.raw`(?:[zZ][_\s-]*\d+${AXIS_SEP})?` +
     String.raw`(?:${axis("xX")}${AXIS_SEP}${axis("yY")}|${axis("yY")}${AXIS_SEP}${axis("xX")})`,
   "g",
 );
@@ -341,10 +344,12 @@ export function scrubbed(r: Report): Report {
  * or each build would open a new issue for the same bug. */
 export function signature(r: Report): string {
   const message = r.message
-    // a number is a number whether the scrubber took it out or it was short, and a
-    // chain of them joined by points ("1.2.3", which became "‹n›.3" before the
-    // scrubber took the whole chain) is one, so a message keeps its fingerprint
-    .replace(/(?:‹n›|\d+)(?:\s*\.\s*(?:‹n›|\d+))*/g, "#")
+    // a number is a number whether the scrubber took it out or it was short. (A
+    // message with a dotted chain in it, "120.0.6099", was scrubbed to "‹n›.6099" and
+    // is scrubbed whole now, so it has a different fingerprint from the one an issue
+    // filed under the old scrubber carries: a one-time duplicate for those, accepted;
+    // they are version numbers, addresses and positions, and rarely a bug's message.)
+    .replace(/‹n›|\d+/g, "#")
     .replace(/\s+/g, " ")
     .trim();
   const frame = (r.frames[0] ?? "")

@@ -1,8 +1,7 @@
 // A round trip: how long it may be, and planning it from where the rider is.
 
 import { store } from "./store.js";
-import { ensureRouter, manifestReady, poisReady, showStage } from "./data-load.js";
-import { avoidPointsSent } from "./avoid.js";
+import { ensureRouter, poisReady, showStage } from "./data-load.js";
 import { el } from "./dom.js";
 import { fmtDistTight, getUnits, toMeters, unitName, unitShort } from "../units.js";
 import { routing, trip } from "./services.js";
@@ -11,6 +10,7 @@ import { maplibregl } from "../maplibre.js";
 import { map } from "./map.js";
 import { POI_META } from "./classes.js";
 import { beginPlan, locateStart, plainError } from "./plan-route.js";
+import { routingInputsReady } from "./avoid.js";
 
 /** How long a round trip can be, in the units the rider types in. The field's
  * own min/max are advice a browser doesn't enforce on typing: Firebase Test
@@ -27,8 +27,7 @@ export const LOOP_LIMITS: Record<"imperial" | "metric", [min: number, max: numbe
 export async function requestLoop(): Promise<void> {
   if (store.navActive) return; // a new round trip is not something to swap in mid-ride
   const ticket = beginPlan();
-  await manifestReady;
-  await avoidPointsSent();
+  await routingInputsReady();
   if (ticket.stale()) return;
   const errBox = el<HTMLDivElement>("error");
   errBox.style.display = "none";

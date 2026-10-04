@@ -18,9 +18,9 @@ export function printProject(pid: string): void {
     t.replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" })[c] ?? c);
   const headcount = meta?.population?.is_headcount === true;
   const rows: [string, string][] = [
-    ["Where", `${esc(p.name)}${p.towns ? ` — ${esc(p.towns)}` : ""}`],
+    ["Where", `${p.name}${p.towns ? ` — ${p.towns}` : ""}`],
     ["Length", fmtDist(p.length_m)],
-    ["Today", esc(p.cls.replace(/_/g, " "))],
+    ["Today", p.cls.replace(/_/g, " ")],
     ["Kind", p.kind === "spot_fix" ? "spot fix (one location)" : "corridor"],
     // join_m is the smaller of the two sides — the streets connected in, not the
     // network they connect to. The /build workspace says it this way too; two

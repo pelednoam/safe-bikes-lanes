@@ -57,6 +57,26 @@ describe("hazard reports in the backup", () => {
     await wipeDevice();
   });
 
+  it("are still listed from the mirror when the database won't open, so routes still avoid them", async () => {
+    await addHazard(report("a", 1000, "pothole by the bridge"), null);
+    await addHazard(report("b", 2000), null);
+    const open = indexedDB.open.bind(indexedDB);
+    // blocked site data, a private window: opening the database fails
+    indexedDB.open = (() => {
+      throw new Error("indexeddb unavailable");
+    }) as typeof indexedDB.open;
+    try {
+      const listed = await listHazards();
+      expect(listed.map((h) => h.id)).toEqual(["b", "a"]);
+      expect(listed.every((h) => !h.hasPhoto)).toBe(true);
+      // and with no mirror to fall back on, the failure is the caller's to know
+      localStorage.clear();
+      await expect(listHazards()).rejects.toThrow("indexeddb unavailable");
+    } finally {
+      indexedDB.open = open;
+    }
+  });
+
   it("survive a wipe and a restore, without their photos", async () => {
     await addHazard(report("a", 1000, "pothole by the bridge"), new Blob(["jpeg"]));
     await addHazard(report("b", 2000), null);

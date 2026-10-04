@@ -1,6 +1,8 @@
 // Saved places and recent routes: Home and Work, the list of rides just taken, and
 // backing all of it up to a file.
 
+import { applyAvoidPoints } from "./avoid.js";
+import { reportCaught } from "../report.js";
 import { links } from "./links.js";
 import { trip } from "./services.js";
 import { clearRecent, deletePlace, exportBackup, importBackup, listPlaces, listRecent, pushRecent, savePlace } from "../places.js";
@@ -98,13 +100,19 @@ export function initPlaces(): void {
         const n = importBackup(JSON.parse(text));
         renderPlacesAndRecent();
         store.sketchyMarks = loadSketchy();
-        // the hazards a backup brings back are in the mirror that listHazards merges
-        // into the device's store: read them again, which also tells the router (with
-        // the marks), instead of keeping the list from before the restore
-        await links.refreshHazards.call();
+        // the marks reach the router now, whatever happens to the hazard read below
+        applyAvoidPoints();
         links.renderSketchy.call();
         el<HTMLDivElement>("backup-note").textContent =
           `Restored ${n} item${n === 1 ? "" : "s"} — ${listPlaces().length} saved places.`;
+        // the hazards a backup brings back are in the mirror that listHazards merges
+        // into the device's store: read them again, which also tells the router (with
+        // the marks), instead of keeping the list from before the restore
+        try {
+          await links.refreshHazards.call();
+        } catch (err) {
+          reportCaught("error", err);
+        }
       })
       .catch((err: unknown) => {
         el<HTMLDivElement>("backup-note").textContent =

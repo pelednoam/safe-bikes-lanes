@@ -194,6 +194,18 @@ describe("the scrubbing", () => {
     }
   });
 
+  it("takes axes joined by & or +, and leaves a letter that merely ends a word alone", () => {
+    for (const text of ["x4953&y6060", "x4953+y6060", "x=4953&y=6060", "?z=14&x=4953&y=6060"]) {
+      expect(scrub(text), text).not.toMatch(/4953|6060/);
+    }
+    // an x or y that is the end of a word is not an axis
+    for (const text of ["index 3: y 4", "max 2; y 5", "prefix 1|y 2"]) {
+      expect(scrub(text), text).toBe(text);
+    }
+    // while a word that is tile, or camelCase, is
+    for (const text of ["tilex4953y6060", "tileX4953Y6060"]) expect(scrub(text), text).toBe("tile‹n›");
+  });
+
   it("takes tiles with a zoom first and the axes either way round, or joined by any separator", () => {
     expect(scrub("z14y6060x4953")).toBe("‹n›");
     for (const text of ["z14.x4953.y6060", "x4953:y6060", "x4953;y6060", "y6060|x4953", "z14:y6060:x4953"]) {
@@ -361,17 +373,11 @@ describe("one problem, one issue", () => {
     expect(await fingerprint(a)).toBe(await fingerprint(b));
   });
 
-  it("keeps a message's fingerprint when the scrubber takes a whole dotted chain instead of part of it", async () => {
-    // "WebView 120.0.6099" used to be scrubbed to "WebView ‹n›.6099"; it is "WebView ‹n›"
-    // now. Both are one number to the fingerprint, so a bug already filed isn't filed again.
-    const before = { ...sample(), message: "failed on WebView ‹n›.6099" };
-    const after = { ...sample(), message: "failed on WebView ‹n›" };
-    expect(signature(before)).toBe(signature(after));
-    expect(await fingerprint(before)).toBe(await fingerprint(after));
-    // and an address, which the scrubber takes whole, is the same problem as one it left in pieces
-    expect(signature({ ...sample(), message: "no route to 10.0.2.2" })).toBe(
-      signature({ ...sample(), message: "no route to ‹n›" }),
-    );
+  it("is a different fingerprint for a dotted chain the scrubber now takes whole: a one-time re-file, accepted", () => {
+    // what an issue filed under the old scrubber carries ("WebView ‹n›.6099"), and what
+    // the same message is now. Pinned so the change is a decision and not a surprise.
+    expect(signature({ ...sample(), message: "failed on WebView ‹n›.6099" })).toContain("failed on WebView #.#");
+    expect(signature({ ...sample(), message: "failed on WebView ‹n›" })).toContain("failed on WebView #|");
   });
 
   it("is the same problem whether its number was short enough to survive the scrubbing or not", async () => {

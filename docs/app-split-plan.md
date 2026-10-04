@@ -2,7 +2,7 @@
 
 **Budget:** about 200 lines of code per file, not counting comments or blank
 lines. `app.ts` had 4,964 code lines (6,486 with comments, 6,717 at the start of
-the split); it has 2,150 (2,734) after steps 0, 1, 2, 4 and 5, so the rest is about
+the split); it has 2,158 (2,751) after steps 0, 1, 2, 4 and 5, so the rest is about
 11 files of 200 lines at the very least. Grouping by topic instead of filling files to the brim gives
 about 38, averaging about 130. A file under budget is fine; one over it is not.
 
@@ -45,17 +45,17 @@ module is cut, and each commit should correct them here.
 | `app/classes.ts` | 131 | class widths, marks, swatches, construction icon |
 | `app/dom.ts` | 8 | `el`, `emptyFC` |
 | `app/map.ts` | 29 | the map and its controls |
-| `app/store.ts` | 73 | the shared variables, `AVOIDABLE`, `loadSketchy` |
-| `app/links.ts` | 13 | the hooks other modules call; set by app.ts until a function moves out |
+| `app/store.ts` | 75 | the shared variables, `AVOIDABLE`, `loadSketchy` |
+| `app/links.ts` | 23 | the hooks other modules call; set by app.ts until a function moves out |
 | `app/services.ts` | 14 | the routing worker, basemap, trip, lanes, `dataReady` (runs at import) |
 | `app/sources.ts` | 32 | `getSource`, `ensureLayer`, the lazily loaded layer files |
 | `app/data-load.ts` | 175 | manifest, network tiles, construction, points of interest, progress |
 | `app/dark-mode.ts` | 84 | night rides: the dark basemap and UI |
-| `app/avoid.ts` | 46 | what the router avoids; bumps the grade revision |
+| `app/avoid.ts` | 84 | what the router avoids; bumps the grade revision |
 | `app/names.ts` | 79 | reverse geocoding and the name cache |
 | `app/markers.ts` | 80 | the trip's markers, setting a point, the rider's position |
 | `app/sketchy.ts` | 75 | marked spots, their list and popup |
-| `app/places.ts` | 103 | saved places, recent routes, backup |
+| `app/places.ts` | 109 | saved places, recent routes, backup |
 | `app/shed.ts` | 59 | the reach map |
 | `app/rides-dialog.ts` | 104 | ride history dialog |
 | `app/app-info.ts` | 115 | about dialog and build stamp |
@@ -71,13 +71,13 @@ module is cut, and each commit should correct them here.
 | `app/search-candidates.ts` | 94 | local, street and geocoder answers |
 | `app/search-view.ts` | 31 | the list as it is on screen, and drawing it |
 | `app/search-results.ts` | 75 | rows, choosing one, clearing the list |
-| `app/search-grade.ts` | 106 | a letter for the route to each candidate |
+| `app/search-grade.ts` | 111 | a letter for the route to each candidate |
 | `app/search-input.ts` | 115 | the two boxes: typing, keys |
 | `app/phone-search.ts` | 56 | the sheet giving way to the keyboard; the From-field buttons |
-| `app/sheet.ts` | 114 | the bottom sheet: heights, dragging, revealing options |
-| `app/plan-route.ts` | 173 | asking for a route: start, planning, errors, planning between two picked points |
-| `app/plan-loop.ts` | 97 | a round trip: its limits, planning it |
-| `app/plan-options.ts` | 152 | the options: cards, chips, choosing one, painting the panel |
+| `app/sheet.ts` | 112 | the bottom sheet: heights, dragging, revealing options |
+| `app/plan-route.ts` | 172 | asking for a route: start, planning, errors, planning between two picked points |
+| `app/plan-loop.ts` | 96 | a round trip: its limits, planning it |
+| `app/plan-options.ts` | 155 | the options: cards, chips, choosing one, painting the panel |
 | `app/plan-controls.ts` | 59 | reset, swap and the round-trip button |
 | `app/summary.ts` | 111 | the route's summary, ribbon, cautions, street-photo preview |
 | `app/permalink.ts` | 115 | the link to this trip: write, read, share |
@@ -86,7 +86,7 @@ module is cut, and each commit should correct them here.
 
 Steps 0, 1, 2 ("where to build"), 4 (search) and 5 (planning) are done, and the core pieces the leaves needed (the old step 3's
 `sources`, `data-load`, `markers`, `names`, `avoid`). Counts are from the same counter
-the guard uses. `app.ts` is down to 2,150 code lines (2,734 with comments).
+the guard uses. `app.ts` is down to 2,158 code lines (2,751 with comments).
 
 ## The rest (estimated code lines)
 
@@ -143,9 +143,9 @@ From the survey, by function name:
 - planning to "where to build": `endWhatIf`, `showRealTrip`; and back: `beginPlan`, `selectOption`
 - planning to the sheet: `revealSheet`, `showOptionsInSheet`
 - planning to places: `recordRecentRoute`; places to planning: `requestRoute`
-- planning to permalink: `updateHash`; permalink to planning: `requestLoop`
+- planning to permalink: `updateHash` (hook); permalink to planning: `requestLoop`
 - search to phone search: `leaveSearchMode`; search view to search results: `chooseSearchRow`,
-  `saveSearchRow`; permalink to phone search: `resetPlan`
+  `saveSearchRow`; permalink to plan controls: `resetPlan` (hook)
 
 ## Order of work (each line is one or two commits)
 

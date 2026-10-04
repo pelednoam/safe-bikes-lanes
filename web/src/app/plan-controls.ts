@@ -23,13 +23,15 @@ export function resetPlan(clearLink = true): void {
   // and a plan that has finished but not yet painted its panel: the paint waits
   // for the line to draw (up to 3 s), and a Reset in that gap got its summary
   // put back over the empty map
-  cancelPanelPaint?.();
+  cancelPanelPaint();
   el<HTMLDivElement>("loading").style.display = "none";
   store.start?.remove();
   store.end?.remove();
   store.poiMarker?.remove();
   store.start = store.end = store.poiMarker = null;
   store.loopParams = null;
+  // a choice a link asked for belongs to that link's plan, not to the next trip
+  store.pendingSelect = null;
   endWhatIf();
   clearOptionChips();
   store.fromCurrent = true;
@@ -44,8 +46,7 @@ export function resetPlan(clearLink = true): void {
   getSource("alts").setData(emptyFC());
   el<HTMLDivElement>("summary").style.display = "none";
   el<HTMLDivElement>("error").style.display = "none";
-  if (!clearLink) return;
-  forgetLink();
+  if (clearLink) forgetLink();
 }
 
 export function initPlanControls(): void {
