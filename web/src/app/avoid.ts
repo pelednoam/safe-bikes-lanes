@@ -51,13 +51,24 @@ export function constructionAvoidPoints(fc: ConstructionFC): [number, number][] 
  * and a marked spot all land here. The search rows are graded again after the
  * router has the new points, not before, or they would be graded against the old. */
 export function applyAvoidPoints(): void {
-  void routing.setSketchyMarks([
+  const points = [
     ...store.sketchyMarks,
     ...store.hazards.map((h): [number, number] => [h.lon, h.lat]),
-  ]);
+  ];
+  void routing.setSketchyMarks(points);
+  // Only a change in where the points are makes a grade stale. This also runs at
+  // start-up (twice), and for a hazard whose category alone changed, and bumping the
+  // revision then would throw away every grade worked out and start the work again.
+  // (The worker answers in the order it was asked, so the points are in before the
+  // grading's first plan; a second call while one is grading takes over its lane.)
+  const signature = JSON.stringify(points);
+  if (signature === lastAvoidPoints) return;
+  lastAvoidPoints = signature;
   store.avoidRevision++;
   links.regradeVisible.call();
 }
+
+let lastAvoidPoints = "";
 
 export function initAvoid(): void {
   // construction avoidance for the router as soon as the zones load (the worker

@@ -2,7 +2,8 @@
 
 **Budget:** about 200 lines of code per file, not counting comments or blank
 lines. `app.ts` had 4,964 code lines (6,486 with comments, 6,717 at the start of
-the split); it has 3,880 (5,052) after step 1, so about 25 files at the very least. Grouping by topic instead of filling files to the brim gives
+the split); it has 2,779 (3,539) after steps 0, 1, 2 and 4, so the rest is about
+14 files of 200 lines at the very least. Grouping by topic instead of filling files to the brim gives
 about 38, averaging about 130. A file under budget is fine; one over it is not.
 
 The numbers below were counted on 2026-10-02 from the file as it stands
@@ -62,7 +63,11 @@ module is cut, and each commit should correct them here.
 | `app/app-update.ts` | 85 | APK update check, service worker |
 | `app/taps.ts` | 20 | what a tap on a map layer opens: the registry |
 | `app/build-state.ts` | 53 | where-to-build data and its typed state |
-| `app/build-controls.ts` | 98 | the panel's listeners and map taps |
+| `app/build-score.ts` | 85 | published weights, scoring, ranking, repainting the layer |
+| `app/build-whatif.ts` | 131 | `runWhatIf`, `endWhatIf`, `clearWhatIf`, `showRealTrip` |
+| `app/build-list.ts` | 177 | loading the projects, the list, `focusProject` |
+| `app/build-print.ts` | 67 | `printProject` |
+| `app/build-controls.ts` | 87 | the panel's listeners and map taps |
 | `app/search-candidates.ts` | 94 | local, street and geocoder answers |
 | `app/search-view.ts` | 31 | the list as it is on screen, and drawing it |
 | `app/search-results.ts` | 75 | rows, choosing one, clearing the list |
@@ -142,7 +147,8 @@ From the survey, by function name:
 - planning to the sheet: `revealSheet`, `showOptionsInSheet`
 - planning to places: `recordRecentRoute`; places to planning: `requestRoute`
 - planning to permalink: `updateHash`; permalink to planning: `requestLoop`
-- search to phone search: `leaveSearchMode`; permalink to phone search: `resetPlan`
+- search to phone search: `leaveSearchMode`; search view to search results: `chooseSearchRow`,
+  `saveSearchRow`; permalink to phone search: `resetPlan`
 
 ## Order of work (each line is one or two commits)
 
@@ -153,7 +159,7 @@ From the survey, by function name:
 4. Search: done (five `search-*` files, `phone-search`, and `sheet`, which phone search needed).
 5. Planning: `plan-route`, `plan-options`, `summary`, `permalink`.
 6. Navigation and hazards: the eight files, with the hooks.
-7. The load closure: one commit per layer file, then `hover-cards`, `map-taps`, `sheet`.
+7. The load closure: one commit per layer file, then `hover-cards`, `map-taps`.
 8. `app.ts` reduced to the entry.
 
 Steps 6 and 7 are the riskiest. Re-decide there, with the real line counts.

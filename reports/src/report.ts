@@ -152,19 +152,26 @@ const LABELLED = new RegExp(`(?:${AXIS}|${NAMED})\\s*${QUOTE}\\s*[-+]?\\d+(?:\\.
  * report that loses every window size is a worse report; the app writes a tile as
  * z/x/y or z_x_y, which are. */
 const TILE_RUN = /-?\d+(?:\.\d+)?(?:\s*[x×]\s*-?\d+(?:\.\d+)?){2,}/gi;
-/** Axes as a log writes them, with a space, comma, slash or underscore between,
- * after a word ("tileX4953Y6060", "tile x4953 y6060") or alone, with a fraction
- * ("z14_x4953_y6060.5"). Not after a digit, which is a hex code ("0x4953y1") or a
- * number. Taken before DECIMAL: the fraction would otherwise be cut off first and
- * leave "z14_x4953_y‹n›" behind. A y and an x are both needed, in either order
- * ("y 6060 x 4953"), so "1920 x 1080" is not one. */
+/** What may sit between the parts of a tile written as axes: a space, comma, slash,
+ * point, colon, semicolon, bar, underscore or hyphen. */
+const AXIS_SEP = String.raw`[_\s,/.;:|-]*`;
+/** One axis and its number, with a fraction: "x4953", "y 6060.5". */
+const axis = (letters: string): string => String.raw`[${letters}][_\s-]*\d+(?:\.\d+)?`;
+/** Axes as a log writes them, after a word ("tileX4953Y6060", "tile x4953 y6060") or
+ * alone, with separators between ("z14.x4953.y6060", "x4953:y6060"), a zoom first
+ * ("z14y6060x4953"), a fraction ("z14_x4953_y6060.5"), either way round ("y 6060 x
+ * 4953"). Not after a digit, which is a hex code ("0x4953y1") or a number. Taken
+ * before DECIMAL: the fraction would otherwise be cut off first and leave
+ * "z14_x4953_y‹n›" behind. A y and an x are both needed, so "1920 x 1080" is not one. */
 const TILE_AXES = new RegExp(
-  "(?<![0-9])(?:" +
-    "(?:[zZ][_\\s-]*\\d+[_\\s,/-]*)?[xX][_\\s-]*\\d+(?:\\.\\d+)?[_\\s,/-]*[yY][_\\s-]*\\d+(?:\\.\\d+)?" +
-    "|[yY][_\\s-]*\\d+(?:\\.\\d+)?[_\\s,/-]*[xX][_\\s-]*\\d+(?:\\.\\d+)?" +
-    ")",
+  String.raw`(?<![0-9])(?:[zZ][_\s-]*\d+${AXIS_SEP})?` +
+    String.raw`(?:${axis("xX")}${AXIS_SEP}${axis("yY")}|${axis("yY")}${AXIS_SEP}${axis("xX")})`,
   "g",
 );
+/** Three or more numbers joined by points: degrees, minutes and seconds that "marks"
+ * wrote out ("42.23.48"), all of it and not just the first pair, or the seconds stay
+ * behind ("‹n›.48"). A version number or an address goes with it. */
+const DOTTED_CHAIN = /-?\d+(?:\s*\.\s*\d+){2,}/g;
 /** A lone axis letter and its number ("x 4953"). An x after a number is not one:
  * "1920 x 1080" is a screen size, which is decided to stay. A y or z is, wherever
  * it is ("zoom 14 y 6060"). */
@@ -288,10 +295,7 @@ export function scrub(text: string): string {
     .replace(ADDRESS, "‹address›")
     .replace(DMS, "‹n›");
   return marks(plain)
-    // a chain of three or more numbers joined by points is degrees, minutes and
-    // seconds that "marks" wrote out ("42.23.48"): all of it, not just the first
-    // pair, or the seconds stay behind ("‹n›.48"). A version number goes with it.
-    .replace(/-?\d+(?:\s*\.\s*\d+){2,}/g, "‹n›")
+    .replace(DOTTED_CHAIN, "‹n›")
     // tiles before decimals: "z14_x4953_y6060.5" must go whole, not lose its
     // fraction first and leave "z14_x4953_y‹n›" behind
     .replace(TILE_AXES, "‹n›")
@@ -337,8 +341,10 @@ export function scrubbed(r: Report): Report {
  * or each build would open a new issue for the same bug. */
 export function signature(r: Report): string {
   const message = r.message
-    // a number is a number whether the scrubber took it out or it was short
-    .replace(/‹n›|\d+/g, "#")
+    // a number is a number whether the scrubber took it out or it was short, and a
+    // chain of them joined by points ("1.2.3", which became "‹n›.3" before the
+    // scrubber took the whole chain) is one, so a message keeps its fingerprint
+    .replace(/(?:‹n›|\d+)(?:\s*\.\s*(?:‹n›|\d+))*/g, "#")
     .replace(/\s+/g, " ")
     .trim();
   const frame = (r.frames[0] ?? "")

@@ -9,9 +9,13 @@ import type { RouteOption } from "../types.js";
 import type { SearchRowView } from "../ui/SearchResults.js";
 
 export const links = {
+  /** Read the hazards stored on the device (and a restored backup's), tell the router,
+   * and redraw them. */
+  refreshHazards: hook<[], Promise<void>>("refreshHazards"),
   /** Plan the route for the two ends as they stand. */
   requestRoute: hook<[], Promise<void>>("requestRoute"),
-  /** Grade the search rows on screen again, after something that changes the grade. */
+  /** Grade the search rows on screen again, after something that changes the grade.
+   * Set by initSearchGrade, early in app.ts. */
   regradeVisible: hook<[], void>("regradeVisible"),
   /** Plan between two points the rider picked from a list. */
   planBetween: hook<[start: [number, number], end: [number, number]], void>("planBetween"),
@@ -30,8 +34,10 @@ export const links = {
   /** Save a row of the search list as a place and clear the list. Set by
    * initSearchResults; only a tap on its save button calls it. */
   saveSearchRow: hook<[row: SearchRowView], void>("saveSearchRow"),
-  /** Put the sheet back after a search took it over. Set by initPhoneSearch: callable
-   * once start-up has reached it, and only a tap on a search row does. */
+  /** Put the sheet back after a search took it over. Set by initPhoneSearch. The search
+   * results need the hook (importing phone-search would make a cycle) and call it when
+   * a row is chosen, by a tap or by Enter in a search box; the search box itself
+   * imports the function. */
   leaveSearchMode: hook<[chose: boolean], void>("leaveSearchMode"),
   /** Close the card that follows the pointer over the map. */
   dropHoverCard: hook<[], void>("dropHoverCard"),

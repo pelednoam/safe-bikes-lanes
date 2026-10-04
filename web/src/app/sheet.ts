@@ -82,78 +82,76 @@ export function resetPageScroll(): void {
 }
 
 export function initSheet(): void {
-  {
-    const panel = el<HTMLDivElement>("panel");
-    const handle = el<HTMLButtonElement>("sheet-handle");
-    // start collapsed: the map is the point, and a route expands the sheet
-    // to "half" on its own (revealSheet)
-    if (sheetLayout.matches) setSheet("peek");
-    let dragging = false;
-    let startY = 0;
-    let startH = 0;
-    let moved = 0;
-    let liveH = 0;
-    handle.addEventListener("pointerdown", (e: PointerEvent) => {
-      dragging = true;
-      startY = e.clientY;
-      startH = panel.getBoundingClientRect().height;
-      liveH = startH;
-      moved = 0;
-      // kill the max-height transition for the duration: with it on, the sheet
-      // lags ~200 ms behind the thumb and the drag feels broken
-      panel.classList.add("dragging");
-      handle.setPointerCapture(e.pointerId);
-    });
-    handle.addEventListener("pointermove", (e: PointerEvent) => {
-      if (!dragging) return;
-      const dy = startY - e.clientY;
-      moved = Math.max(moved, Math.abs(dy));
-      liveH = Math.min(window.innerHeight * 0.88, Math.max(70, startH + dy));
-      panel.classList.remove("peek", "half", "full");
-      panel.style.maxHeight = `${liveH}px`;
-    });
-    const end = (): void => {
-      if (!dragging) return;
-      dragging = false;
-      panel.classList.remove("dragging");
-      // snap from where the drag actually ended, not from a mid-animation
-      // measurement of the element
-      const h = liveH;
-      panel.style.maxHeight = "";
-      if (moved < 6) {
-        // a tap cycles peek -> half -> full -> peek
-        const next = SHEET_STATES[(SHEET_STATES.indexOf(currentSheet()) + 1) % 3];
-        setSheet(next ?? "half");
-        return;
-      }
-      const vh = window.innerHeight;
-      setSheet(h < vh * 0.25 ? "peek" : h < vh * 0.68 ? "half" : "full");
-    };
-    handle.addEventListener("pointerup", end);
-    handle.addEventListener("pointercancel", end);
-    // From a keyboard (or a switch, or a screen reader's double-tap, which
-    // arrives as a click with no pointer before it): Enter and Space step through
-    // the sizes as a tap does; the arrows open and close.
-    handle.addEventListener("click", (e: MouseEvent) => {
-      if (e.detail !== 0) return; // a real pointer tap, already handled by end()
+  const panel = el<HTMLDivElement>("panel");
+  const handle = el<HTMLButtonElement>("sheet-handle");
+  // start collapsed: the map is the point, and a route expands the sheet
+  // to "half" on its own (revealSheet)
+  if (sheetLayout.matches) setSheet("peek");
+  let dragging = false;
+  let startY = 0;
+  let startH = 0;
+  let moved = 0;
+  let liveH = 0;
+  handle.addEventListener("pointerdown", (e: PointerEvent) => {
+    dragging = true;
+    startY = e.clientY;
+    startH = panel.getBoundingClientRect().height;
+    liveH = startH;
+    moved = 0;
+    // kill the max-height transition for the duration: with it on, the sheet
+    // lags ~200 ms behind the thumb and the drag feels broken
+    panel.classList.add("dragging");
+    handle.setPointerCapture(e.pointerId);
+  });
+  handle.addEventListener("pointermove", (e: PointerEvent) => {
+    if (!dragging) return;
+    const dy = startY - e.clientY;
+    moved = Math.max(moved, Math.abs(dy));
+    liveH = Math.min(window.innerHeight * 0.88, Math.max(70, startH + dy));
+    panel.classList.remove("peek", "half", "full");
+    panel.style.maxHeight = `${liveH}px`;
+  });
+  const end = (): void => {
+    if (!dragging) return;
+    dragging = false;
+    panel.classList.remove("dragging");
+    // snap from where the drag actually ended, not from a mid-animation
+    // measurement of the element
+    const h = liveH;
+    panel.style.maxHeight = "";
+    if (moved < 6) {
+      // a tap cycles peek -> half -> full -> peek
       const next = SHEET_STATES[(SHEET_STATES.indexOf(currentSheet()) + 1) % 3];
       setSheet(next ?? "half");
-    });
-    handle.addEventListener("keydown", (e: KeyboardEvent) => {
-      const i = SHEET_STATES.indexOf(currentSheet());
-      const to =
-        e.key === "ArrowUp"
-          ? SHEET_STATES[Math.min(2, i + 1)]
-          : e.key === "ArrowDown"
-            ? SHEET_STATES[Math.max(0, i - 1)]
-            : undefined;
-      if (to === undefined) return;
-      e.preventDefault();
-      setSheet(to);
-    });
-    // some WebViews revoke capture mid-gesture; without this the sheet sticks
-    handle.addEventListener("lostpointercapture", end);
-  }
+      return;
+    }
+    const vh = window.innerHeight;
+    setSheet(h < vh * 0.25 ? "peek" : h < vh * 0.68 ? "half" : "full");
+  };
+  handle.addEventListener("pointerup", end);
+  handle.addEventListener("pointercancel", end);
+  // From a keyboard (or a switch, or a screen reader's double-tap, which
+  // arrives as a click with no pointer before it): Enter and Space step through
+  // the sizes as a tap does; the arrows open and close.
+  handle.addEventListener("click", (e: MouseEvent) => {
+    if (e.detail !== 0) return; // a real pointer tap, already handled by end()
+    const next = SHEET_STATES[(SHEET_STATES.indexOf(currentSheet()) + 1) % 3];
+    setSheet(next ?? "half");
+  });
+  handle.addEventListener("keydown", (e: KeyboardEvent) => {
+    const i = SHEET_STATES.indexOf(currentSheet());
+    const to =
+      e.key === "ArrowUp"
+        ? SHEET_STATES[Math.min(2, i + 1)]
+        : e.key === "ArrowDown"
+          ? SHEET_STATES[Math.max(0, i - 1)]
+          : undefined;
+    if (to === undefined) return;
+    e.preventDefault();
+    setSheet(to);
+  });
+  // some WebViews revoke capture mid-gesture; without this the sheet sticks
+  handle.addEventListener("lostpointercapture", end);
 
   window.visualViewport?.addEventListener("resize", () => {
     if (!document.body.classList.contains("searching")) resetPageScroll();

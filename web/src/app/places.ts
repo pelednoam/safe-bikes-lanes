@@ -11,7 +11,6 @@ import { map } from "./map.js";
 import { el } from "./dom.js";
 import { saveBlob } from "../share.js";
 import { loadSketchy, store } from "./store.js";
-import { applyAvoidPoints } from "./avoid.js";
 
 /** Label a just-planned route from its street names for the recent list. */
 export function recordRecentRoute(s: [number, number], e: [number, number]): void {
@@ -95,11 +94,14 @@ export function initPlaces(): void {
     if (!file) return;
     void file
       .text()
-      .then((text) => {
+      .then(async (text) => {
         const n = importBackup(JSON.parse(text));
         renderPlacesAndRecent();
         store.sketchyMarks = loadSketchy();
-        applyAvoidPoints();
+        // the hazards a backup brings back are in the mirror that listHazards merges
+        // into the device's store: read them again, which also tells the router (with
+        // the marks), instead of keeping the list from before the restore
+        await links.refreshHazards.call();
         links.renderSketchy.call();
         el<HTMLDivElement>("backup-note").textContent =
           `Restored ${n} item${n === 1 ? "" : "s"} — ${listPlaces().length} saved places.`;

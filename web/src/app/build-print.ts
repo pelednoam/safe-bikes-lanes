@@ -57,17 +57,17 @@ export function printProject(pid: string): void {
     <h1>${esc(p.name)}</h1>
     <p class="sub">${esc(p.summary)}</p>
     <table>${rows
-      .map(([k, v]) => `<tr><th>${k}</th><td>${v}</td></tr>`)
+      .map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`)
       .join("")}</table>
     <p class="method"><b>How this was measured.</b> Streets a child can't use are
     cut into candidate projects and each is scored on four things: the kid-safe
     streets it would connect in, how much closer it brings people to
-    ${meta?.destinations === undefined ? "the" : String(meta.destinations)} schools,
+    ${meta?.destinations === undefined ? "the" : esc(String(meta.destinations))} schools,
     playgrounds and libraries it counted, its recorded
     bike crashes, and how many residents gain a safe route at all. Population:
     ${esc(meta?.population?.source ?? "not available")}.
     ${esc(meta?.access?.budget_note ?? "")}
-    Data built ${esc(meta?.built ?? "—")}; ${meta?.candidates ?? 0} candidates
+    Data built ${esc(meta?.built ?? "—")}; ${esc(String(meta?.candidates ?? 0))} candidates
     were measured.</p>
     <p class="limits"><b>What these numbers do not mean:</b></p>
     <ul class="limits">${(meta?.limits ?? [])

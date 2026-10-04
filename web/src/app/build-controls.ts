@@ -1,5 +1,5 @@
-// Wiring the where-to-build panel: its toggles, the weight sliders, the town
-// filter, print and CSV, and what a tap or hover on a project or crossing does.
+// Wiring the where-to-build panel: its toggles, the weight sliders, the town filter,
+// print and CSV, what a tap on a project or crossing does, and the pointer over them.
 
 import { el } from "./dom.js";
 import { ensureLayer } from "./sources.js";
@@ -12,8 +12,6 @@ import { publishedWeightPositions } from "./build-score.js";
 import { dataUrl } from "../data.js";
 import { onTap } from "./taps.js";
 import { type MapLayerMouseEvent } from "maplibre-gl";
-
-
 
 export function initBuildControls(): void {
   // wiring: the two toggles, the filter, the sliders, and the CSV
@@ -82,7 +80,7 @@ export function initBuildControls(): void {
   });
 
   // clicking a project on the map selects it in the list, and the other way round
-  onTap("build", (e: MapLayerMouseEvent) => {
+  const openProject = (e: MapLayerMouseEvent): void => {
     const pid = (e.features?.[0]?.properties as { pid?: string } | undefined)?.pid;
     if (pid !== undefined) {
       if (!el<HTMLDetailsElement>("build-box").open) {
@@ -90,33 +88,18 @@ export function initBuildControls(): void {
       }
       focusProject(pid);
     }
-  });
+  };
+  onTap("build", openProject);
+  onTap("crossings", openProject);
 
-  onTap("crossings", (e: MapLayerMouseEvent) => {
-    const pid = (e.features?.[0]?.properties as { pid?: string } | undefined)?.pid;
-    if (pid !== undefined) {
-      if (!el<HTMLDetailsElement>("build-box").open) {
-        el<HTMLDetailsElement>("build-box").open = true;
-      }
-      focusProject(pid);
-    }
-  });
-
-  map.on("mouseenter", "crossings", () => {
-    map.getCanvas().style.cursor = "pointer";
-  });
-
-  map.on("mouseleave", "crossings", () => {
-    map.getCanvas().style.cursor = "";
-  });
-
-  map.on("mouseenter", "build", () => {
-    map.getCanvas().style.cursor = "pointer";
-  });
-
-  map.on("mouseleave", "build", () => {
-    map.getCanvas().style.cursor = "";
-  });
+  for (const layer of ["crossings", "build"] as const) {
+    map.on("mouseenter", layer, () => {
+      map.getCanvas().style.cursor = "pointer";
+    });
+    map.on("mouseleave", layer, () => {
+      map.getCanvas().style.cursor = "";
+    });
+  }
 
   el<HTMLDetailsElement>("build-box").addEventListener("toggle", () => {
     if (el<HTMLDetailsElement>("build-box").open) ensureBuildData();

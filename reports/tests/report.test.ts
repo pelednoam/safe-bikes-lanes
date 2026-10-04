@@ -194,6 +194,13 @@ describe("the scrubbing", () => {
     }
   });
 
+  it("takes tiles with a zoom first and the axes either way round, or joined by any separator", () => {
+    expect(scrub("z14y6060x4953")).toBe("‹n›");
+    for (const text of ["z14.x4953.y6060", "x4953:y6060", "x4953;y6060", "y6060|x4953", "z14:y6060:x4953"]) {
+      expect(scrub(text), text).not.toMatch(/4953|6060/);
+    }
+  });
+
   it("takes a tile written y first, and a lone y or z axis after a number", () => {
     for (const text of ["y 6060 x 4953", "y6060x4953", "y=6060 x=4953"]) {
       expect(scrub(text), text).not.toMatch(/4953|6060/);
@@ -352,6 +359,19 @@ describe("one problem, one issue", () => {
     expect(a.frames[0]).toBe("f (app-AbCd1234.js:1:9876)");
     expect(b.frames[0]).toBe("f (app-ZyXw5678.js:1:12345)");
     expect(await fingerprint(a)).toBe(await fingerprint(b));
+  });
+
+  it("keeps a message's fingerprint when the scrubber takes a whole dotted chain instead of part of it", async () => {
+    // "WebView 120.0.6099" used to be scrubbed to "WebView ‹n›.6099"; it is "WebView ‹n›"
+    // now. Both are one number to the fingerprint, so a bug already filed isn't filed again.
+    const before = { ...sample(), message: "failed on WebView ‹n›.6099" };
+    const after = { ...sample(), message: "failed on WebView ‹n›" };
+    expect(signature(before)).toBe(signature(after));
+    expect(await fingerprint(before)).toBe(await fingerprint(after));
+    // and an address, which the scrubber takes whole, is the same problem as one it left in pieces
+    expect(signature({ ...sample(), message: "no route to 10.0.2.2" })).toBe(
+      signature({ ...sample(), message: "no route to ‹n›" }),
+    );
   });
 
   it("is the same problem whether its number was short enough to survive the scrubbing or not", async () => {

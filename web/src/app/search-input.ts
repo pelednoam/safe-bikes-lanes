@@ -13,8 +13,6 @@ import { autoNamed } from "./names.js";
  * can be tested as arithmetic rather than through browser timing. */
 let lastGeocodeAt = 0;
 
-/** Wire an address search to a field, so the origin is searchable too and not
- * only settable by tapping the map or using the current location. */
 /** Which field the visible result list belongs to.
  *
  * Both fields render into #search-results, and each attachSearch closure captures
@@ -23,6 +21,8 @@ let lastGeocodeAt = 0;
  * it would then set the START when tapped. Wrong point, silently. */
 let searchOwner: HTMLInputElement | null = null;
 
+/** Wire an address search to a field, so the origin is searchable too and not
+ * only settable by tapping the map or using the current location. */
 function attachSearch(input: HTMLInputElement, target: "start" | "end"): void {
   let timer: number | undefined;
   // The geocoder's last answer for the query still in the box, so a keystroke

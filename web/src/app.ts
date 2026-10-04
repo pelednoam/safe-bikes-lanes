@@ -1,6 +1,7 @@
 // Frontend for the family bike router. Routing runs fully in the browser
 // (see router.ts); class colors mirror pipeline/config.py.
 import "./app/started.js";
+import { reportCaught } from "./report.js";
 import { links } from "./app/links.js";
 import { AVOIDABLE, store } from "./app/store.js";
 import { CLASS_MARKS, CONSTRUCTION_SWATCH, MARK_INK, NETWORK_MARK_LAYERS, POI_META, RIBBON_PATTERNS, classSwatch, classWidth, constructionIcon } from "./app/classes.js";
@@ -90,27 +91,40 @@ import { clearWhatIf, endWhatIf, showRealTrip } from "./app/build-whatif.js";
 import { ensureBuildMeta } from "./app/build-list.js";
 import { initBuildControls } from "./app/build-controls.js";
 import { clearSearchResults, initSearchResults } from "./app/search-results.js";
-import { regradeVisible } from "./app/search-grade.js";
+import { dropGrading, initSearchGrade, regradeVisible } from "./app/search-grade.js";
 import { initPhoneSearch, leaveSearchMode } from "./app/phone-search.js";
 import { initSearchInput } from "./app/search-input.js";
 import { SHEET_HALF, initSheet, revealSheet, sheetLayout, showOptionsInSheet } from "./app/sheet.js";
 
-// The functions other modules call through src/app/links.ts, set first: all of them
-// are function declarations, so they exist from the moment this module runs, and
-// nothing that runs at start-up can reach one before it is set. (renderSketchy is
-// set by initSketchy, and only a click on the backup button calls it.)
+// The functions other modules call through src/app/links.ts, set before anything at
+// start-up runs. Seven are function declarations in this module, so they exist from
+// the moment it runs; the two inits set the hooks of the modules that moved
+// (regradeVisible, and the search list's chooseSearchRow and saveSearchRow). Set later,
+// by their modules' own inits, and called only by a click: renderSketchy (a backup
+// restore) and leaveSearchMode (a tap on a search row, Enter in a search box).
 links.dropHoverCard.set(dropHoverCard);
 links.requestRoute.set(requestRoute);
 links.planBetween.set(planBetween);
-links.regradeVisible.set(regradeVisible);
 links.openHazardDialog.set(openHazardDialog);
 links.beginPlan.set(beginPlan);
+links.refreshHazards.set(refreshHazards);
 links.selectOption.set(selectOption);
+initSearchGrade();
 initSearchResults();
 
-// hazards are read once the routing data is in; not part of the chain that says
-// routing is ready, so a failure here can't take routing down with it
-void manifestReady.then(() => refreshHazards());
+// The saved hazards and marks reach the router once the routing data is in. Not part
+// of the chain that says routing is ready, so a failure here can't take routing down
+// with it; but a plan waits for it (avoidPointsSent), or the first route of a session
+// could be drawn through a hazard the rider reported, and never planned again.
+const avoidReady: Promise<void> = manifestReady
+  .then(() => refreshHazards())
+  .catch((err: unknown) => reportCaught("error", err));
+
+/** Wait for the saved hazards and marks to reach the router, for a moment at most: a
+ * device store that hangs must not stop every route. */
+async function avoidPointsSent(): Promise<void> {
+  await Promise.race([avoidReady, new Promise<void>((resolve) => window.setTimeout(resolve, 3000))]);
+}
 
 
 // ---------------------------------------------------------------------------
@@ -263,6 +277,7 @@ async function requestRoute(): Promise<void> {
   const ticket = beginPlan();
   if (!store.end) return;
   await manifestReady;
+  await avoidPointsSent();
   if (ticket.stale()) return;
   const errBox = el<HTMLDivElement>("error");
   errBox.style.display = "none";
@@ -350,6 +365,7 @@ async function requestLoop(): Promise<void> {
   if (store.navActive) return; // a new round trip is not something to swap in mid-ride
   const ticket = beginPlan();
   await manifestReady;
+  await avoidPointsSent();
   if (ticket.stale()) return;
   const errBox = el<HTMLDivElement>("error");
   errBox.style.display = "none";
@@ -2981,6 +2997,9 @@ let rideGen = 0;
 async function startNav(): Promise<void> {
   // a ride follows the streets as they are, never a what-if's proposed lane
   clearWhatIf();
+  // and the main thread is the guidance's: a search list left open would go on
+  // grading, up to five routing runs, while the rider is on the bike
+  dropGrading();
   const chosen = trip.selected;
   navLoop = chosen !== undefined && chosen.id.startsWith("loop") ? chosen : null;
   rideEngine.start();

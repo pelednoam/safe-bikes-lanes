@@ -2,6 +2,7 @@
 // few at a time, kept for the session, and thrown away when anything that changes
 // the answer changes.
 
+import { links } from "./links.js";
 import { paintSearch, searchView } from "./search-view.js";
 import { store } from "./store.js";
 import { type SafetyGrade } from "../types.js";
@@ -26,10 +27,10 @@ export function regradeVisible(): void {
   // destination list that was graded: a letter there would describe the route
   // from the current start to a candidate start, which nobody takes.
   if (searchView.target !== "end") return;
-  // Never mid-ride. The "avoid this street" chip writes through saveSketchy,
-  // which lands here, and grading is up to five routing runs on the main thread
-  // — a stall in guidance while someone is riding, to refresh a search list
-  // that isn't even on screen.
+  // Never mid-ride. Anything that changes what the router avoids lands here, through
+  // applyAvoidPoints (the "avoid this street" chip, a hazard reported from the bike),
+  // and grading is up to five routing runs on the main thread — a stall in guidance
+  // while someone is riding, to refresh a search list that isn't even on screen.
   if (store.navActive) return;
   // the list is gone, or is another list: nothing to redo
   const listed = new Set(searchView.rows.map((r) => r.key));
@@ -61,8 +62,9 @@ function showGrading(row: { key: string }): void {
   }
 }
 
-/** Cancels grading when a new search lands: five routes take a moment, and the
- * answers to the last query must not appear against this one's rows. */
+/** Grades already worked out, by routeCacheKey. The key includes avoidRevision, so a
+ * change to what the router avoids (applyAvoidPoints bumps it) makes every entry
+ * unreachable rather than wrong. */
 const gradeCache = new Map<string, { grade: SafetyGrade; meters: number; minutes: number }>();
 
 /** Put the grade of the safest route on each result.
@@ -181,9 +183,15 @@ export function dropGrading(): void {
 export function scheduleGrading(rows: { key: string; lngLat: [number, number] }[]): void {
   window.clearTimeout(gradeTimer);
   gradeTimer = window.setTimeout(() => {
+    // not on the bike: grading is up to five routing runs on the main thread
+    if (store.navActive) return;
     // still the list these rows were drawn in, and still a list of destinations
     const here = new Set(searchView.rows.map((r) => r.key));
     if (searchView.target !== "end" || !rows.every((r) => here.has(r.key))) return;
     void gradeSearchResults(rows);
   }, 400);
+}
+
+export function initSearchGrade(): void {
+  links.regradeVisible.set(regradeVisible);
 }
