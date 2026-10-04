@@ -39,6 +39,18 @@ export const links = {
    * a row is chosen, by a tap or by Enter in a search box; the search box itself
    * imports the function. */
   leaveSearchMode: hook<[chose: boolean], void>("leaveSearchMode"),
+  /** Frame a route on the map, for the part of the screen the sheet leaves free. */
+  frameRoute: hook<[option: RouteOption], void>("frameRoute"),
+  /** Rebuild the ride's track from the selected option (false if there is none). */
+  rebuildNavFromSelected: hook<[], boolean>("rebuildNavFromSelected"),
+  /** Plan again from where the rider is, mid-ride. */
+  replanRide: hook<[], Promise<void>>("replanRide"),
+  /** Write the trip into the address bar. Set by initPermalink; the planners call it
+   * when an option is chosen, which is after a plan has arrived. */
+  updateHash: hook<[], void>("updateHash"),
+  /** Clear the trip (and, unless told not to, the link). Set by initPlanControls; the
+   * permalink calls it when the address changes under a trip, which is an event. */
+  resetPlan: hook<[clearLink?: boolean], void>("resetPlan"),
   /** Close the card that follows the pointer over the map. */
   dropHoverCard: hook<[], void>("dropHoverCard"),
   /** Open the hazard report dialog at a place. */

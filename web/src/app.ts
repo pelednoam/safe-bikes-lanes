@@ -1,22 +1,20 @@
 // Frontend for the family bike router. Routing runs fully in the browser
 // (see router.ts); class colors mirror pipeline/config.py.
 import "./app/started.js";
-import { reportCaught } from "./report.js";
 import { links } from "./app/links.js";
 import { AVOIDABLE, store } from "./app/store.js";
-import { CLASS_MARKS, CONSTRUCTION_SWATCH, MARK_INK, NETWORK_MARK_LAYERS, POI_META, RIBBON_PATTERNS, classSwatch, classWidth, constructionIcon } from "./app/classes.js";
+import { CLASS_MARKS, CONSTRUCTION_SWATCH, MARK_INK, NETWORK_MARK_LAYERS, POI_META, classSwatch, classWidth, constructionIcon } from "./app/classes.js";
 import { el, emptyFC } from "./app/dom.js";
 // the map is built by importing this: app/map.js
 import { map, scaleBar } from "./app/map.js";
 import type { GeoJSONSource, Map as MLMap, MapLayerMouseEvent, MapMouseEvent, Marker, Popup } from "maplibre-gl";
 
 import { maplibregl } from "./maplibre.js";
-import { CLASS_COLORS } from "./weights.gen.js";
 import type { NativeFix } from "./native.js";
 import { askForRideNotifications, isNativeApp, keepScreenOn, lastNativeSpeechError, locationAdvice, minimizeApp, nativeSpeak, nativeStopSpeech, onAndroidBack, rideLocationState, startBackgroundWatcher, stopBackgroundWatcher, webVoiceCount } from "./native.js";
-import { CLASS_LABELS, clearPhotoCache, FACILITY_CLASSES, nearestMapillary, GRADE_COLORS, GRADE_TEXT } from "./segment.js";
+import { CLASS_LABELS, clearPhotoCache, FACILITY_CLASSES } from "./segment.js";
 import type { Maneuver } from "./nav.js";
-import { distM, sunsetTime } from "./nav.js";
+import { distM } from "./nav.js";
 import { type LoopLeg, navDistText, RideEngine, type RideEffect } from "./ride.js";
 import type { HazardCategory, HazardReport } from "./hazards.js";
 import {
@@ -32,26 +30,10 @@ import {
 import { RideRecorder, saveRide, stashInProgress, takeInProgress } from "./rides.js";
 import { dataSource } from "./data.js";
 import { PROFILES } from "./router.js";
-import {
-  distVoice,
-  fmtDist,
-  fmtClimb,
-  fmtDistTight,
-  fmtSpeedRound,
-  fromMeters,
-  getUnits,
-  lengthVoice,
-  setUnits,
-  toMeters,
-  unitName,
-  unitShort,
-} from "./units.js";
+import { distVoice, fmtDist, fmtDistTight, fmtSpeedRound, fromMeters, getUnits, lengthVoice, setUnits, toMeters, unitShort } from "./units.js";
 import { Lane, type Ticket } from "./planner.js";
 import { type ComponentChild, h, render } from "preact";
 import { type Headline, NavHeadline, NavTripLine, type TripLine } from "./ui/NavBanner.js";
-import { OptionCards } from "./ui/OptionCards.js";
-import { Cautions, ClassBar, ClassKey, Ribbon, WhyList } from "./ui/RouteSummary.js";
-import { chipViews, paintChip } from "./chips.js";
 import { SegmentCardView } from "./ui/SegmentCard.js";
 import { PhotoUrls } from "./photourls.js";
 import {
@@ -67,81 +49,56 @@ import {
 } from "./ui/MapCards.js";
 import { type SpeakPriority, SpeechQueue } from "./speech.js";
 import { loopRejoinPoint, payloadLength, rejoinOption } from "./rejoin.js";
-import { decodePlan, encodePlan } from "./permalink.js";
 import { readItem, removeItem, writeItem } from "./storage.js";
 import { ScreenLock, type WakeLockApi } from "./lifecycle.js";
-import type { ProtectionClass, RouteOption, RouteSummary } from "./types.js";
-import { routeLane, routing, trip } from "./app/services.js";
+import type { ProtectionClass, RouteOption } from "./types.js";
+import { routing, trip } from "./app/services.js";
 import { applyBasemap, initDarkMode } from "./app/dark-mode.js";
 import { ensureLayer, getSource } from "./app/sources.js";
-import { announce, constructionReady, dataProgress, ensureRouter, initDataLoad, manifestReady, networkReady, poisData, poisReady, refreshNetworkTiles, showStage } from "./app/data-load.js";
+import { constructionReady, dataProgress, initDataLoad, networkReady, poisData, refreshNetworkTiles } from "./app/data-load.js";
 import { initRidesDialog, renderRides } from "./app/rides-dialog.js";
 import { initAppInfo } from "./app/app-info.js";
 import { initRouteExport } from "./app/route-export.js";
 import { computeShed, exitShedMode, initShed } from "./app/shed.js";
 import { applyAvoidPoints, initAvoid, routePrefs, syncAvoidSummary } from "./app/avoid.js";
-import { autoNamed, nameEnd } from "./app/names.js";
-import { currentPosition, initMarkers, makeMarker, setPoint, syncOD } from "./app/markers.js";
+import { initMarkers, setPoint, syncOD } from "./app/markers.js";
 import { initSketchy, openSketchyPopup, renderSketchy, saveSketchy } from "./app/sketchy.js";
-import { initPlaces, recordRecentRoute, renderPlacesAndRecent } from "./app/places.js";
+import { initPlaces, renderPlacesAndRecent } from "./app/places.js";
 import { initAppUpdate, initServiceWorker, swReload } from "./app/app-update.js";
 import { TAP_ORDER, type TapTarget, onTap, tapTargets } from "./app/taps.js";
-import { build } from "./app/build-state.js";
-import { clearWhatIf, endWhatIf, showRealTrip } from "./app/build-whatif.js";
+import { clearWhatIf } from "./app/build-whatif.js";
 import { ensureBuildMeta } from "./app/build-list.js";
 import { initBuildControls } from "./app/build-controls.js";
-import { clearSearchResults, initSearchResults } from "./app/search-results.js";
+import { initSearchResults } from "./app/search-results.js";
 import { dropGrading, initSearchGrade, regradeVisible } from "./app/search-grade.js";
 import { initPhoneSearch, leaveSearchMode } from "./app/phone-search.js";
 import { initSearchInput } from "./app/search-input.js";
-import { SHEET_HALF, initSheet, revealSheet, sheetLayout, showOptionsInSheet } from "./app/sheet.js";
+import { SHEET_HALF, initSheet, sheetLayout } from "./app/sheet.js";
+import { showSummary } from "./app/summary.js";
+import { initPermalink, parseHash, updateHash } from "./app/permalink.js";
+import { initPlanOptions, renderOptionChips, renderOptions, selectOption } from "./app/plan-options.js";
+import { LOOP_LIMITS } from "./app/plan-loop.js";
+import { initPlanRoute, requestRoute } from "./app/plan-route.js";
+import { initPlanControls } from "./app/plan-controls.js";
 
 // The functions other modules call through src/app/links.ts, set before anything at
-// start-up runs. Seven are function declarations in this module, so they exist from
-// the moment it runs; the two inits set the hooks of the modules that moved
-// (regradeVisible, and the search list's chooseSearchRow and saveSearchRow). Set later,
-// by their modules' own inits, and called only by a click: renderSketchy (a backup
-// restore) and leaveSearchMode (a tap on a search row, Enter in a search box).
+// start-up runs. Six are function declarations still in this module, so they exist
+// from the moment it runs. The four inits set the hooks of modules that moved:
+// regradeVisible, the search list's chooseSearchRow and saveSearchRow, and the
+// planner's requestRoute, planBetween, beginPlan and selectOption. Four more are set
+// by their modules' own inits further down and reached only by an event or after a
+// plan has arrived: renderSketchy (a backup restore), leaveSearchMode (choosing a
+// search row), updateHash (choosing an option) and resetPlan (the address changing).
 links.dropHoverCard.set(dropHoverCard);
-links.requestRoute.set(requestRoute);
-links.planBetween.set(planBetween);
 links.openHazardDialog.set(openHazardDialog);
-links.beginPlan.set(beginPlan);
 links.refreshHazards.set(refreshHazards);
-links.selectOption.set(selectOption);
+links.frameRoute.set(frameRoute);
+links.rebuildNavFromSelected.set(rebuildNavFromSelected);
+links.replanRide.set(replanRide);
 initSearchGrade();
 initSearchResults();
-
-// The saved hazards and marks reach the router once the routing data is in. Not part
-// of the chain that says routing is ready, so a failure here can't take routing down
-// with it; but a plan waits for it (avoidPointsSent), or the first route of a session
-// could be drawn through a hazard the rider reported, and never planned again.
-const avoidReady: Promise<void> = manifestReady
-  .then(() => refreshHazards())
-  .catch((err: unknown) => reportCaught("error", err));
-
-/** Wait for the saved hazards and marks to reach the router, for a moment at most: a
- * device store that hangs must not stop every route. */
-async function avoidPointsSent(): Promise<void> {
-  await Promise.race([avoidReady, new Promise<void>((resolve) => window.setTimeout(resolve, 3000))]);
-}
-
-
-// ---------------------------------------------------------------------------
-// constants
-// ---------------------------------------------------------------------------
-
-/** How long a round trip can be, in the units the rider types in. The field's
- * own min/max are advice a browser doesn't enforce on typing: Firebase Test
- * Lab's explorer typed 44,303 and then 57,773 miles, and both were taken. A
- * loop's corridor reaches half its length in every direction, so an absurd one
- * would try to pull in every routing tile there is. Round numbers per unit
- * system, not one limit converted: "31.1 mi" can't be both what the message
- * says and what the check allows. */
-const LOOP_LIMITS: Record<"imperial" | "metric", [min: number, max: number]> = {
-  imperial: [0.5, 30],
-  metric: [1, 50],
-};
+initPlanRoute();
+initPlanOptions();
 
 
 // ---------------------------------------------------------------------------
@@ -162,730 +119,22 @@ function dropHoverCard(): void {
 let hazardPendingLoc: [number, number] | null = null;
 let hazardPhoto: Blob | null = null;
 
-let pendingSelect: RouteOption["id"] | null = null;
-
 initDataLoad();
 
 initAvoid();
 
 
-// ── what the ends are called ──────────────────────────────────────────────
-// A permalink (or a tap on the map) sets a destination that has no name, and
-// the field sat empty: the trip was drawn but the panel couldn't say where to,
-// and the voice announced "you have arrived" at nowhere in particular. Ask
-// Nominatim once per spot, remember the answer, and never make routing wait
-// for it — a name is a nicety, the route is the product.
-
-
-// ---------------------------------------------------------------------------
-// routing
-// ---------------------------------------------------------------------------
-
-/** What went wrong, in words for a parent rather than for whoever wrote the
- * router. Its messages ("start and end snap to the same intersection", "no
- * path found", "failed to load routing tiles: TypeError: Failed to fetch")
- * reached the screen as they were. The router keeps its own wording, which its
- * tests and logs rely on; this only decides what is shown. */
-function plainError(err: unknown): string {
-  const raw = err instanceof Error ? err.message : String(err);
-  // the round trip's own messages are already written for people
-  if (/try another distance/i.test(raw)) return `${raw.charAt(0).toUpperCase()}${raw.slice(1)}.`;
-  if (/same intersection/i.test(raw)) {
-    return (
-      "The start and the destination are the same spot. " +
-      "Pick a destination a little further away."
-    );
-  }
-  if (/no path found|no route/i.test(raw)) {
-    return (
-      "There's no way to ride between these two points on the streets we have mapped. " +
-      "Try a spot on a nearby street for either end."
-    );
-  }
-  if (/too far from the mapped/i.test(raw)) {
-    return (
-      "That spot is too far from any street we have mapped. " +
-      "Pick a point on or next to a street."
-    );
-  }
-  if (/isn't mapped|unmapped/i.test(raw)) {
-    return (
-      "This area isn't mapped for routing yet — the map covers Cambridge, Somerville " +
-      "and the towns around them."
-    );
-  }
-  if (/fetch|network|load|TypeError/i.test(raw)) {
-    return "Couldn't download the map needed for this route. Check your connection and try again.";
-  }
-  console.warn("route failed", err);
-  return "Something went wrong planning this route. Try again, or pick a slightly different spot.";
-}
-
-/** Take the route options for a new plan. Whatever was planning before is now
- * stale and will not write its answer; the loading line is this plan's to show
- * or not, so an abandoned plan's spinner is taken down here rather than left for
- * a request that has returned without drawing anything. */
-function beginPlan(): Ticket {
-  const ticket = routeLane.begin();
-  // A hypothetical trip belongs to the ends and settings it was asked about.
-  // The real trip goes back on screen, not just out of memory: forgotten, the
-  // proposed lane's routes stayed up whenever this plan stopped short or
-  // failed, and ▶ Navigate rode a lane that doesn't exist.
-  const real = build.whatIfReal;
-  endWhatIf();
-  if (real !== null) showRealTrip(real);
-  el<HTMLDivElement>("loading").style.display = "none";
-  return ticket;
-}
-
-/** Where the rider is, as the start, once a location wait is over. Null when
- * the wait was superseded or withdrawn (Reset, a newer plan) — the start is then
- * not this plan's to set. Someone else may have put a start down while we
- * waited, the load-time locate or a tap on the map; that one stands, rather
- * than a second pin going down on top of it. */
-async function locateStart(ticket: Ticket, onFail: string): Promise<Marker | null> {
-  if (store.start !== null) return store.start;
-  showStage("Finding your location…");
-  let here: [number, number];
-  try {
-    here = await currentPosition();
-  } catch {
-    if (ticket.stale()) return null;
-    el<HTMLDivElement>("loading").style.display = "none";
-    const errBox = el<HTMLDivElement>("error");
-    errBox.textContent = onFail;
-    errBox.style.display = "block";
-    return null;
-  }
-  if (ticket.stale()) return null;
-  if (store.start === null) {
-    store.start = makeMarker(here, "#2b83ba", "start");
-    syncOD();
-  }
-  return store.start;
-}
-
-async function requestRoute(): Promise<void> {
-  // Mid-ride, a re-plan is a way on from here. Marking a sketchy street,
-  // filing a hazard or dragging a pin all end up here, and used to re-plan the
-  // whole trip from the start pin — which navigation then switched to, telling
-  // a rider a mile down the road to go back to the beginning.
-  if (store.navActive) {
-    void replanRide();
-    return;
-  }
-  const ticket = beginPlan();
-  if (!store.end) return;
-  await manifestReady;
-  await avoidPointsSent();
-  if (ticket.stale()) return;
-  const errBox = el<HTMLDivElement>("error");
-  errBox.style.display = "none";
-  const loading = el<HTMLDivElement>("loading");
-  if (!store.start) {
-    if (!store.fromCurrent) return;
-    const located = await locateStart(
-      ticket,
-      "Couldn't find where you are. Type a start in \u201cYour location\u201d, tap 🗺 to " +
-        "pick it on the map, or allow location access.",
-    );
-    if (located === null) return;
-  }
-  showStage("Loading the map around your route…");
-  const progress = (done: number, total: number): void => {
-    // only once there are enough for the count to mean something
-    if (total > 4 && !ticket.stale()) {
-      showStage("Loading the map around your route…", `${done} of ${total}`);
-    }
-  };
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  // Reset, or a newer plan, while we yielded: both ends may be gone
-  if (ticket.stale() || !store.start || !store.end) return;
-  try {
-    const s = store.start.getLngLat();
-    const d = store.end.getLngLat();
-    const a: [number, number] = [s.lng, s.lat];
-    const b: [number, number] = [d.lng, d.lat];
-    // load the tiles along the corridor, then route; a safe route can detour
-    // well outside the straight A–B box, so widen the loaded area once if the
-    // first attempt finds nothing.
-    const route = (): Promise<RouteOption[]> => {
-      showStage("Finding the safest way…");
-      return routing.plan(a, b, routePrefs());
-    };
-    // Computed into a local and only published once this plan is known to be
-    // the current one: `options` is what the cards, the chips and navigation
-    // all read, and an abandoned plan must not have written it.
-    let found: RouteOption[] = [];
-    // a narrow corridor first — it covers ordinary detours and keeps a long
-    // trip from pulling a big slice of the map; the retry below widens it
-    let mapped = await ensureRouter([a, b], 1200, 1, progress);
-    if (ticket.stale()) return;
-    try {
-      if (!mapped) throw new Error("unmapped");
-      found = await route();
-      if (!found.length) throw new Error("no route");
-    } catch {
-      if (ticket.stale()) return;
-      mapped = await ensureRouter([a, b], 5000, 2, progress);
-      if (ticket.stale()) return;
-      if (!mapped) throw new Error("this area isn't mapped for routing yet");
-      found = await route();
-    }
-    const fallback = found[0];
-    if (!fallback) throw new Error("no route found");
-    if (!trip.publish(ticket, found)) return;
-    // an A-to-B trip replaces a round trip, and its stop
-    store.poiMarker?.remove();
-    store.poiMarker = null;
-    store.loopParams = null;
-    const wanted = pendingSelect;
-    pendingSelect = null;
-    selectOption(wanted !== null && trip.options.some((o) => o.id === wanted) ? wanted : fallback.id);
-    recordRecentRoute([s.lng, s.lat], [d.lng, d.lat]);
-    revealSheet();
-    frameRoute(fallback);
-  } catch (err) {
-    if (ticket.stale()) return;
-    store.poiMarker?.remove();
-    store.poiMarker = null;
-    store.loopParams = null;
-    trip.clear();
-    renderOptions();
-    clearOptionChips();
-    errBox.textContent = plainError(err);
-    errBox.style.display = "block";
-  } finally {
-    // a newer plan owns the loading line now; hiding it would hide theirs
-    if (!ticket.stale()) loading.style.display = "none";
-  }
-}
-
-async function requestLoop(): Promise<void> {
-  if (store.navActive) return; // a new round trip is not something to swap in mid-ride
-  const ticket = beginPlan();
-  await manifestReady;
-  await avoidPointsSent();
-  if (ticket.stale()) return;
-  const errBox = el<HTMLDivElement>("error");
-  errBox.style.display = "none";
-  // the distance first: an impossible one shouldn't ask for the rider's
-  // location before saying so
-  const typed = Number(el<HTMLInputElement>("loop-dist").value);
-  if (!Number.isFinite(typed) || typed <= 0) {
-    errBox.textContent = `How far would you like to ride? Enter a distance in ${unitName()}.`;
-    errBox.style.display = "block";
-    return;
-  }
-  const [loopMin, loopMax] = LOOP_LIMITS[getUnits()];
-  if (typed < loopMin || typed > loopMax) {
-    errBox.textContent =
-      `A round trip can be ${loopMin} to ${loopMax} ${unitShort()} long. ` +
-      "How far would you like to ride?";
-    errBox.style.display = "block";
-    return;
-  }
-  const targetM = toMeters(typed);
-  if (!store.start) {
-    // A round trip starts where you are, so find that rather than refusing.
-    // Telling someone to "click the map to set a start point first" is asking
-    // them to do work the app can do, in answer to a button they just pressed.
-    const located = await locateStart(
-      ticket,
-      "Couldn't get your location — tap 🗺 next to the start field to pick where the ride begins.",
-    );
-    if (located === null) return;
-  }
-  await poisReady;
-  if (ticket.stale()) return;
-  const km = targetM / 1000;
-  const kind = el<HTMLSelectElement>("loop-stop").value;
-  // null is "no stop wanted" — the router picks a turnaround geometrically,
-  // because sometimes the point is just to be out. An empty list is different:
-  // it means the stop they asked for has none near enough, which is an error.
-  const candidates =
-    kind === "none" ? null : kind === "any" ? store.pois : store.pois.filter((p) => p.properties.kind === kind);
-  const loading = el<HTMLDivElement>("loading");
-  showStage("Loading the map around you…");
-  const progress = (done: number, total: number): void => {
-    if (total > 4 && !ticket.stale()) {
-      showStage("Loading the map around you…", `${done} of ${total}`);
-    }
-  };
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  if (ticket.stale() || !store.start) return;
-  try {
-    const s = store.start.getLngLat();
-    // a loop can range out to roughly half its length from the start
-    const mapped = await ensureRouter([[s.lng, s.lat]], targetM / 2, 2, progress);
-    if (ticket.stale()) return;
-    if (!mapped) throw new Error("this area isn't mapped for routing yet");
-    showStage(`Finding a ${fmtDistTight(targetM)} loop…`);
-    const { option, poi, more } = await routing.loopRoute(
-      [s.lng, s.lat],
-      targetM,
-      candidates,
-      store.profileId,
-      store.preferFlat,
-    );
-    if (ticket.stale()) return;
-    store.end?.remove();
-    store.end = null;
-    // a choice of loops, not a verdict: the runner-ups go in the same option
-    // cards the point-to-point router uses, so picking between them is the
-    // gesture the rider already knows
-    if (!trip.publish(ticket, [option, ...more.map((m) => m.option)])) return;
-    store.loopParams = { km, kind };
-    selectOption("loop");
-    store.poiMarker?.remove();
-    store.poiMarker = null;
-    if (poi !== null) {
-      // no marker on a ride with no stop: the loop is the whole of it
-      store.poiMarker = new maplibregl.Marker({ color: "#e67e22" })
-        .setLngLat(poi.geometry.coordinates)
-        .addTo(map);
-      const meta = POI_META[poi.properties.kind];
-      store.poiMarker.getElement().title =
-        `${meta?.emoji ?? ""} ${poi.properties.name || meta?.label || "stop"}`;
-    }
-  } catch (err) {
-    if (ticket.stale()) return;
-    errBox.textContent = plainError(err);
-    errBox.style.display = "block";
-  } finally {
-    if (!ticket.stale()) loading.style.display = "none";
-  }
-}
-
-/** The badges on the map, one per option (src/chips.ts), kept across
- * repaints and updated in place: a badge the keyboard is on stays the element
- * it is on. */
-const optionChips = new Map<RouteOption["id"], Marker>();
-function clearOptionChips(): void {
-  for (const chip of optionChips.values()) chip.remove();
-  optionChips.clear();
-}
-
-function renderOptionChips(): void {
-  const views = chipViews(trip.options, trip.selectedId, GRADE_COLORS, GRADE_TEXT);
-  const listed = new Set(views.map((v) => v.id));
-  for (const [id, chip] of optionChips) {
-    if (listed.has(id)) continue;
-    chip.remove();
-    optionChips.delete(id);
-  }
-  for (const v of views) {
-    let chip = optionChips.get(v.id);
-    if (chip === undefined) {
-      const badge = document.createElement("div");
-      // reachable and pressable from a keyboard, like the cards they mirror
-      badge.tabIndex = 0;
-      badge.setAttribute("role", "button");
-      badge.addEventListener("click", (ev: Event) => {
-        ev.stopPropagation();
-        selectOption(v.id);
-      });
-      badge.addEventListener("keydown", (ev: KeyboardEvent) => {
-        if (ev.key !== "Enter" && ev.key !== " ") return;
-        ev.preventDefault();
-        ev.stopPropagation();
-        selectOption(v.id);
-      });
-      chip = new maplibregl.Marker({ element: badge }).setLngLat(v.at).addTo(map);
-      optionChips.set(v.id, chip);
-    } else {
-      chip.setLngLat(v.at);
-    }
-    paintChip(chip.getElement(), v);
-  }
-}
-
-/** Takes the pending panel paint's listeners off. A superseded paint used to
- * return from its own check before removing them, so every option switched
- * past before its line was drawn left a render handler behind — running
- * queryRenderedFeatures on every frame for the rest of the session. */
-let cancelPanelPaint: (() => void) | null = null;
-
-/** Run the panel's DOM writes once the route line is actually on the map.
- *
- * The line goes through MapLibre's worker (parse, re-tile, render) while the
- * summary is a synchronous DOM write, so putting both in one task painted the
- * numbers a frame or two before the route appeared — planners read the gap as
- * the app having routed somewhere else and then corrected itself. */
-function paintPanelWithRoute(paint: () => void): void {
-  cancelPanelPaint?.(); // the newest selection is the only one to paint
-  let done = false;
-  let renders = 0;
-  let parsed = false;
-  const stop = (): void => {
-    if (done) return;
-    done = true;
-    map.off("render", onRender);
-    map.off("sourcedata", onData);
-    window.clearTimeout(soft);
-    window.clearTimeout(hard);
-    if (cancelPanelPaint === stop) cancelPanelPaint = null;
-    window.__panelPaintsWaiting = (window.__panelPaintsWaiting ?? 1) - 1;
-  };
-  const fire = (): void => {
-    if (done) return;
-    stop();
-    paint();
-  };
-  const onData = (): void => {
-    if (map.isSourceLoaded("route")) parsed = true;
-  };
-  // "the source is loaded" is not "the line is drawn" — the frame after parsing
-  // is the one that draws it. Waiting for rendered geometry is the real signal;
-  // a route that lands off-screen has none, so a couple of frames after the
-  // data parsed counts as the map having had its chance.
-  const onRender = (): void => {
-    renders++;
-    if (map.getLayer("route") === undefined) return;
-    if (map.queryRenderedFeatures(undefined, { layers: ["route"] }).length > 0) fire();
-    else if (parsed && renders > 2) fire();
-  };
-  map.on("sourcedata", onData);
-  map.on("render", onRender);
-  window.__panelPaintsWaiting = (window.__panelPaintsWaiting ?? 0) + 1;
-  // a map that isn't rendering at all (hidden tab, no WebGL) must not hold the
-  // numbers hostage; a busy one gets until the hard stop to draw
-  const soft = window.setTimeout(() => {
-    if (renders === 0) fire();
-  }, 600);
-  const hard = window.setTimeout(fire, 3000);
-  cancelPanelPaint = stop;
-}
-
-function selectOption(id: RouteOption["id"]): void {
-  // While navigating, guidance follows its own copy of the track. Swapping the
-  // drawn route underneath (a mid-ride hazard mark re-plans) would show one
-  // line while the voice read another, so keep them in step.
-  const wasNavigating = store.navActive;
-  if (!trip.select(id)) return;
-  const chosen = trip.selected as RouteOption;
-  getSource("route").setData(chosen.payload.geojson as GeoJSON.GeoJSON);
-  const altFeatures = trip.options
-    .filter((o) => o.id !== id)
-    .flatMap((o) => o.payload.geojson.features);
-  getSource("alts").setData({
-    type: "FeatureCollection",
-    features: altFeatures,
-  } as GeoJSON.GeoJSON);
-  // the permalink is written now, not with the panel: a reload a beat after
-  // routing used to lose the trip
-  updateHash();
-  paintPanelWithRoute(() => {
-    renderOptions();
-    renderOptionChips();
-    showSummary(chosen);
-    showOptionsInSheet();
-    const s = chosen.payload.summary;
-    announce(
-      `${chosen.label} route, grade ${chosen.grade}: ${fmtDist(s.meters)}, ${s.minutes} min, ` +
-        `${s.pct_protected}% protected.` +
-        (trip.options.length > 1 ? ` ${trip.options.length} route options.` : ""),
-    );
-  });
-  if (wasNavigating && store.navActive) {
-    // keep the spoken guidance on the line that is actually drawn
-    rebuildNavFromSelected();
-  }
-}
-
-/** The card to give focus back to once the cards are rebuilt. */
-let optionToFocus: RouteOption["id"] | null = null;
-
-function renderOptions(): void {
-  const box = el<HTMLDivElement>("options");
-  box.style.display = trip.options.length === 0 ? "none" : "block";
-  // One choice among several: a radio group to assistive tech, and walked with
-  // the arrow keys. They were click-only divs, so a keyboard could not pick
-  // Balanced or Direct at all.
-  box.setAttribute("role", "radiogroup");
-  box.setAttribute("aria-label", "Route options");
-  const focusId = optionToFocus;
-  optionToFocus = null;
-  render(
-    h(OptionCards, {
-      options: trip.options,
-      selectedId: trip.selectedId,
-      focusId,
-      gradeColors: GRADE_COLORS,
-      gradeText: GRADE_TEXT,
-      onSelect: (id, keepFocus) => {
-        // the cards are redrawn when the panel repaints; keep the focus with
-        // the choice rather than dropping it on the page
-        if (keepFocus) optionToFocus = id;
-        selectOption(id);
-      },
-      // hovering a card previews that route on the map; leaving puts the
-      // chosen one back
-      onPreview: (o) => {
-        const shown = o ?? trip.selected;
-        if (shown) getSource("route").setData(shown.payload.geojson as GeoJSON.GeoJSON);
-      },
-    }),
-    box,
-  );
-}
-
-// ---------------------------------------------------------------------------
-// summary + ribbon + cautions
-// ---------------------------------------------------------------------------
-
-/** The kinds whose map mark the ribbon repeats (see CLASS_MARKS). */
-const RIBBON_MARKED: ReadonlySet<string> = new Set(CLASS_MARKS.map((m) => m.cls));
-
-function renderRibbon(option: RouteOption): void {
-  render(
-    h(Ribbon, {
-      segs: option.payload.ribbon ?? [],
-      colors: CLASS_COLORS,
-      labels: CLASS_LABELS,
-      marked: RIBBON_MARKED,
-      patterns: RIBBON_PATTERNS,
-      climb: fmtClimb,
-    }),
-    el<HTMLDivElement>("ribbon"),
-  );
-}
-
-function showSummary(option: RouteOption): void {
-  const s: RouteSummary = option.payload.summary;
-  el<HTMLDivElement>("summary").style.display = "block";
-  el<HTMLElement>("s-dist").textContent = fmtDist(s.meters);
-  el<HTMLElement>("s-time").textContent =
-    `~${s.minutes} min` + ((s.walk_m ?? 0) > 0 ? ` · 🚶 ${fmtDist(s.walk_m ?? 0)}` : "");
-  el<HTMLElement>("s-prot").textContent = `${s.pct_protected}%`;
-  el<HTMLElement>("s-quiet").textContent = `${s.pct_quiet}%`;
-  el<HTMLElement>("s-detour").textContent =
-    s.shortest_meters === undefined || (s.detour_pct ?? 0) <= 0
-      ? "same"
-      : `+${s.detour_pct}% (${fmtDist(s.shortest_meters)})`;
-  const parts = (Object.entries(s.by_class_m) as [ProtectionClass, number][]).map(([cls, meters]) => ({
-    cls,
-    meters,
-  }));
-  const breakdown = { parts, colors: CLASS_COLORS, labels: CLASS_LABELS };
-  render(h(ClassBar, breakdown), el<HTMLDivElement>("classbar"));
-  render(
-    h(ClassKey, { ...breakdown, swatch: (cls: ProtectionClass) => classSwatch(cls, 22, 12) }),
-    el<HTMLDivElement>("class-key"),
-  );
-  renderRibbon(option);
-  render(
-    h(Cautions, {
-      cautions: s.cautions,
-      labels: CLASS_LABELS,
-      photos: store.mapillaryToken !== "",
-      onPhoto: (lon: number, lat: number) => void showMapillaryPreview(lon, lat),
-    }),
-    el<HTMLDivElement>("cautions"),
-  );
-  const explanation = s.explanation ?? [];
-  el<HTMLDetailsElement>("why").style.display = explanation.length > 0 ? "block" : "none";
-  render(h(WhyList, { reasons: explanation }), el<HTMLUListElement>("why-list"));
-
-  // daylight check: warn when the ride would end near or after sunset
-  const sunsetBox = el<HTMLDivElement>("sunset");
-  const arrival = new Date(Date.now() + s.minutes * 60_000);
-  const sunset = sunsetTime(new Date(), 42.383, -71.105);
-  const marginMin = (sunset.getTime() - arrival.getTime()) / 60_000;
-  if (marginMin < 30) {
-    const sunsetLocal = sunset.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-    sunsetBox.textContent =
-      marginMin < 0
-        ? `🌅 this ride ends after sunset (${sunsetLocal}) — lights on, and try dark mode`
-        : `🌅 sunset at ${sunsetLocal} — you'd arrive with ~${Math.round(marginMin)} min of light`;
-    sunsetBox.style.display = "block";
-  } else {
-    sunsetBox.style.display = "none";
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Mapillary street-level photo previews (free client token; CC BY-SA imagery)
-// ---------------------------------------------------------------------------
-
+// The street card's photo on a hover is fetched once the pointer rests on a segment.
 let segPhotoTimer: number | undefined;
 
-async function showMapillaryPreview(lon: number, lat: number): Promise<void> {
-  try {
-    // the same "nearest, and near enough to be here" rule the street card uses;
-    // this used to keep its own narrow-box, newest-wins copy
-    const newest = await nearestMapillary(
-      lon,
-      lat,
-      store.mapillaryToken,
-      "id,thumb_1024_url,captured_at,computed_geometry",
-    );
-    const box = document.createElement("div");
-    if (newest?.thumb_1024_url) {
-      const img = document.createElement("img");
-      img.src = newest.thumb_1024_url;
-      img.style.cssText = "max-width:260px;border-radius:6px;display:block";
-      box.appendChild(img);
-      const when = document.createElement("small");
-      when.textContent =
-        newest.captured_at !== undefined
-          ? `📷 ${new Date(newest.captured_at).toLocaleDateString()} · `
-          : "";
-      box.appendChild(when);
-    } else {
-      box.textContent = "no street-level photos here — ";
-    }
-    const link = document.createElement("a");
-    link.href = `https://www.mapillary.com/app/?lat=${lat}&lng=${lon}&z=17`;
-    link.target = "_blank";
-    link.rel = "noopener";
-    link.textContent = "open in Mapillary";
-    box.appendChild(link);
-    new maplibregl.Popup({ maxWidth: "290px" }).setLngLat([lon, lat]).setDOMContent(box).addTo(map);
-    map.flyTo({ center: [lon, lat], zoom: 16.5 });
-  } catch {
-    window.open(`https://www.mapillary.com/app/?lat=${lat}&lng=${lon}&z=17`, "_blank");
-  }
-}
 
 // GPX, cue sheet and the offline map download: app/route-export.ts
 
 initRouteExport();
 
 
-// ---------------------------------------------------------------------------
-// URL hash permalinks: #s=lon,lat&e=lon,lat&m=profile&f=1
-// ---------------------------------------------------------------------------
-
-/** The hash this page last wrote or read, so a hashchange can tell a link
- * pasted in from the page's own bookkeeping. */
-let lastHash = "";
-
-function lngLatOf(m: Marker): [number, number] {
-  const p = m.getLngLat();
-  return [p.lng, p.lat];
-}
-
-function updateHash(): void {
-  const hash = encodePlan({
-    // "from where you are" stays that, for whoever opens the link
-    start: store.start === null ? null : store.fromCurrent ? "here" : lngLatOf(store.start),
-    end: store.loopParams === null && store.end !== null ? lngLatOf(store.end) : null,
-    loop: store.loopParams,
-    profile: store.profileId,
-    flat: store.preferFlat,
-    walkM: store.walkMaxM,
-    avoid: [...store.avoidTypes],
-    option:
-      trip.selectedId === "safest" || trip.selectedId === "balanced" || trip.selectedId === "direct"
-        ? trip.selectedId
-        : null,
-  });
-  if (hash === null) return;
-  lastHash = hash;
-  // history.state kept: mid-ride this entry is the one the ride pushed
-  history.replaceState(history.state, "", `#${hash}`);
-}
-
-function parseHash(): void {
-  lastHash = window.location.hash.replace(/^#/, "");
-  const link = decodePlan(window.location.hash);
-  if (link.profile !== null) {
-    store.profileId = link.profile;
-    const radio = document.querySelector<HTMLInputElement>(
-      `input[name=profile][value=${link.profile}]`,
-    );
-    if (radio) radio.checked = true;
-  }
-  if (link.flat) {
-    store.preferFlat = true;
-    el<HTMLInputElement>("prefer-flat").checked = true;
-  }
-  if (link.walkM !== null) {
-    store.walkMaxM = link.walkM;
-    el<HTMLSelectElement>("walk-max").value = String(store.walkMaxM);
-  }
-  if (link.avoid !== null) {
-    const valid = new Set(AVOIDABLE.map(([c]) => c as string));
-    store.avoidTypes = new Set(link.avoid.filter((t) => valid.has(t)) as ProtectionClass[]);
-    for (const [cls] of AVOIDABLE) {
-      el<HTMLInputElement>(`avoid-${cls}`).checked = store.avoidTypes.has(cls);
-    }
-    syncAvoidSummary();
-  }
-  if (link.option !== null) pendingSelect = link.option;
-  const s = link.start;
-  if (s !== null && link.loop !== null) {
-    // shared loop: restore controls, place the start, and re-plan it
-    el<HTMLInputElement>("loop-dist").value = String(
-      Math.round(fromMeters(link.loop.km * 1000) * 10) / 10,
-    );
-    el<HTMLSelectElement>("loop-stop").value = link.loop.kind;
-    if (s !== "here") {
-      store.fromCurrent = false;
-      // one start pin, even if the load-time locate put one down already
-      if (store.start) store.start.setLngLat(s);
-      else store.start = makeMarker(s, "#2b83ba", "start");
-    }
-    syncOD();
-    void requestLoop();
-    return;
-  }
-  // "here" leaves the start as the rider's own location, found when routing
-  if (s !== null && s !== "here") setPoint("start", s);
-  if (link.end) setPoint("end", link.end);
-}
-
-// A link pasted into a tab that already has the app open changes only the
-// hash, which reloads nothing: the old trip stayed on screen and the link did
-// nothing at all. Follow it — unless it is this page's own write coming back
-// (see lastHash), or a ride is under way, which a link does not replace.
-window.addEventListener("hashchange", () => {
-  const now = window.location.hash.replace(/^#/, "");
-  if (now === lastHash || store.navActive) return;
-  resetPlan(false);
-  parseHash();
-});
-
-// share: Web Share API on mobile, clipboard elsewhere
-el<HTMLButtonElement>("share").addEventListener("click", () => {
-  const url = window.location.href;
-  const btn = el<HTMLButtonElement>("share");
-  const flash = (text: string): void => {
-    const prev = btn.textContent;
-    btn.textContent = text;
-    window.setTimeout(() => {
-      btn.textContent = prev;
-    }, 1500);
-  };
-  if (typeof navigator.share === "function") {
-    void navigator.share({ title: "Family bike route", url }).catch(() => undefined);
-    return;
-  }
-  void navigator.clipboard
-    .writeText(url)
-    .then(() => {
-      flash("✓ copied");
-    })
-    .catch(() => {
-      window.prompt("copy this link:", url);
-    });
-});
-
-// planning between two points picked from a list; saved places and recent
-// routes are in app/places.ts
-
-function planBetween(s: [number, number], e: [number, number]): void {
-  store.fromCurrent = false;
-  syncOD();
-  if (store.start) store.start.setLngLat(s);
-  else store.start = makeMarker(s, "#2b83ba", "start");
-  if (store.end) store.end.setLngLat(e);
-  else store.end = makeMarker(e, "#d7191c", "end");
-  nameEnd("start");
-  nameEnd("end");
-  void requestRoute();
-}
+// URL hash permalinks (#s=lon,lat&e=lon,lat&m=profile&f=1): app/permalink.ts
+initPermalink();
 
 
 // the reach map: app/shed.ts
@@ -1836,61 +1085,7 @@ initPhoneSearch();
 
 initPlaces();
 
-/** Clear the trip: pins, options, drawn route — and the link, unless the
- * link is what is being followed. */
-function resetPlan(clearLink = true): void {
-  // withdraw anything still planning: it would otherwise finish and draw the
-  // trip just cleared back onto an empty map
-  routeLane.cancel();
-  // and a plan that has finished but not yet painted its panel: the paint waits
-  // for the line to draw (up to 3 s), and a Reset in that gap got its summary
-  // put back over the empty map
-  cancelPanelPaint?.();
-  el<HTMLDivElement>("loading").style.display = "none";
-  store.start?.remove();
-  store.end?.remove();
-  store.poiMarker?.remove();
-  store.start = store.end = store.poiMarker = null;
-  store.loopParams = null;
-  endWhatIf();
-  clearOptionChips();
-  store.fromCurrent = true;
-  store.activeField = "end";
-  el<HTMLInputElement>("from-field").classList.remove("picking");
-  el<HTMLInputElement>("from-field").value = "";
-  clearSearchResults();
-  syncOD();
-  trip.clear();
-  renderOptions();
-  getSource("route").setData(emptyFC());
-  getSource("alts").setData(emptyFC());
-  el<HTMLDivElement>("summary").style.display = "none";
-  el<HTMLDivElement>("error").style.display = "none";
-  if (!clearLink) return;
-  lastHash = "";
-  history.replaceState(history.state, "", "#");
-}
-
-el<HTMLButtonElement>("reset").addEventListener("click", () => resetPlan());
-
-el<HTMLButtonElement>("swap").addEventListener("click", () => {
-  if (!store.start || !store.end) return;
-  const s = store.start.getLngLat();
-  store.start.setLngLat(store.end.getLngLat());
-  store.end.setLngLat(s);
-  // the names swap with the pins, or the fields describe the trip backwards
-  const from = el<HTMLInputElement>("from-field");
-  const to = el<HTMLInputElement>("search");
-  [from.value, to.value] = [to.value, from.value];
-  [autoNamed.start, autoNamed.end] = [autoNamed.end, autoNamed.start];
-  store.fromCurrent = false;
-  syncOD();
-  void requestRoute();
-});
-
-el<HTMLButtonElement>("loop-btn").addEventListener("click", () => {
-  void requestLoop();
-});
+initPlanControls();
 
 /** Show/hide the coloured safety network. Driven by the panel checkbox and —
  * because the panel is hidden while navigating — by the nav-mode button too,

@@ -1,5 +1,11 @@
 // What a place is called: the name the rider typed, or the street the map is over,
 // looked up once and kept.
+//
+// A permalink (or a tap on the map) sets a destination that has no name, and
+// the field sat empty: the trip was drawn but the panel couldn't say where to,
+// and the voice announced "you have arrived" at nowhere in particular. Ask
+// Nominatim once per spot, remember the answer, and never make routing wait
+// for it — a name is a nicety, the route is the product.
 
 import { readJson, trimRecord, writeItem } from "../storage.js";
 import { store } from "./store.js";

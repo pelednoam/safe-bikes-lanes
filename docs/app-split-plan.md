@@ -2,8 +2,8 @@
 
 **Budget:** about 200 lines of code per file, not counting comments or blank
 lines. `app.ts` had 4,964 code lines (6,486 with comments, 6,717 at the start of
-the split); it has 2,779 (3,539) after steps 0, 1, 2 and 4, so the rest is about
-14 files of 200 lines at the very least. Grouping by topic instead of filling files to the brim gives
+the split); it has 2,150 (2,734) after steps 0, 1, 2, 4 and 5, so the rest is about
+11 files of 200 lines at the very least. Grouping by topic instead of filling files to the brim gives
 about 38, averaging about 130. A file under budget is fine; one over it is not.
 
 The numbers below were counted on 2026-10-02 from the file as it stands
@@ -75,24 +75,21 @@ module is cut, and each commit should correct them here.
 | `app/search-input.ts` | 115 | the two boxes: typing, keys |
 | `app/phone-search.ts` | 56 | the sheet giving way to the keyboard; the From-field buttons |
 | `app/sheet.ts` | 114 | the bottom sheet: heights, dragging, revealing options |
+| `app/plan-route.ts` | 173 | asking for a route: start, planning, errors, planning between two picked points |
+| `app/plan-loop.ts` | 97 | a round trip: its limits, planning it |
+| `app/plan-options.ts` | 152 | the options: cards, chips, choosing one, painting the panel |
+| `app/plan-controls.ts` | 59 | reset, swap and the round-trip button |
+| `app/summary.ts` | 111 | the route's summary, ribbon, cautions, street-photo preview |
+| `app/permalink.ts` | 115 | the link to this trip: write, read, share |
 | `hooks.ts` (in `src/`) | 17 | the registry the hooks are made with |
 | `tests/appsize.test.ts` | | the size and cycle guard |
 
-Steps 0, 1, 2 ("where to build") and 4 (search) are done, and the core pieces the leaves needed (the old step 3's
+Steps 0, 1, 2 ("where to build"), 4 (search) and 5 (planning) are done, and the core pieces the leaves needed (the old step 3's
 `sources`, `data-load`, `markers`, `names`, `avoid`). Counts are from the same counter
-the guard uses. `app.ts` is down to 2,769 code lines (3,520 with comments).
+the guard uses. `app.ts` is down to 2,150 code lines (2,734 with comments).
 
 ## The rest (estimated code lines)
 
-
-### Planning (about 800)
-
-| File | ~Lines | Holds |
-|---|---|---|
-| `app/plan-route.ts` | 180 | `requestRoute`, `requestLoop`, `beginPlan` |
-| `app/plan-options.ts` | 170 | option cards, `selectOption`, `paintPanelWithRoute` |
-| `app/summary.ts` | 100 | summary, ribbon, cautions, street photos |
-| `app/permalink.ts` | 100 | `parseHash`, `updateHash`, restoring a plan |
 
 ### Search (what is left)
 
@@ -139,7 +136,7 @@ The closure has only 9 locals of its own, so each feature becomes an
 
 From the survey, by function name:
 
-- planning to navigation: `frameRoute`, `rebuildNavFromSelected`, `replanRide`
+- planning to navigation: `frameRoute`, `rebuildNavFromSelected`, `replanRide` (hooks)
 - navigation to planning: `renderOptionChips`, `renderOptions`, `selectOption`
 - hazards to navigation: `hereLabel`, `showRideAlert`, `speak`, `vibrate`
 - navigation to hazards: `hideClassify`
@@ -157,7 +154,7 @@ From the survey, by function name:
 2. "Where to build": done (six `build-*` files and `taps`).
 3. Core: `sources`, `data-load`, `markers`, `names`, `avoid` done with step 1; the rest of the state section (taps and hover, the lets used by the planner) goes with its users.
 4. Search: done (five `search-*` files, `phone-search`, and `sheet`, which phone search needed).
-5. Planning: `plan-route`, `plan-options`, `summary`, `permalink`.
+5. Planning: done (`plan-route`, `plan-loop`, `plan-options`, `plan-controls`, `summary`, `permalink`).
 6. Navigation and hazards: the eight files, with the hooks.
 7. The load closure: one commit per layer file, then `hover-cards`, `map-taps`.
 8. `app.ts` reduced to the entry.

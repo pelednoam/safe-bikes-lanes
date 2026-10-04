@@ -5,7 +5,7 @@ import type { Marker } from "maplibre-gl";
 
 import type { HazardReport } from "../hazards.js";
 import { readJson } from "../storage.js";
-import type { PoiFeature, ProfileId, ProtectionClass } from "../types.js";
+import type { PoiFeature, ProfileId, ProtectionClass, RouteOption } from "../types.js";
 
 export const SKETCHY_KEY = "sketchyMarks";
 
@@ -54,6 +54,8 @@ export interface Store {
   walkMaxM: number;
   avoidTypes: Set<ProtectionClass>;
   shedMode: boolean;
+  /** The option a permalink asked for, waiting for the plan it names to arrive. */
+  pendingSelect: RouteOption["id"] | null;
   /** Bumped (by applyAvoidPoints) whenever what the router must avoid changes, so a
    * grade computed before it is not taken for one that still holds. */
   avoidRevision: number;
@@ -85,6 +87,7 @@ export const store: Store = {
   walkMaxM: 0,
   avoidTypes: new Set<ProtectionClass>(Array.isArray(storedAvoid) ? (storedAvoid as ProtectionClass[]) : []),
   shedMode: false,
+  pendingSelect: null,
   avoidRevision: 0,
   poiMarker: null,
   shedCenter: null,

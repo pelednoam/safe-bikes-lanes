@@ -4,10 +4,11 @@
 
 import { type WirePrefs } from "../routing.js";
 import { type ConstructionFC, store } from "./store.js";
+import { reportCaught } from "../report.js";
 import { el } from "./dom.js";
 import { links } from "./links.js";
 import { routing } from "./services.js";
-import { constructionReady } from "./data-load.js";
+import { constructionReady, manifestReady } from "./data-load.js";
 
 /** Every routing choice the rider has made, as the router takes them — the one
  * place a trip, a reroute, a detour or a search grade reads them from. The
@@ -70,7 +71,25 @@ export function applyAvoidPoints(): void {
 
 let lastAvoidPoints = "";
 
+/** Resolves once the saved hazards and marks have been sent to the router (set in
+ * initAvoid). */
+let avoidReady: Promise<void> = Promise.resolve();
+
+/** Wait for the saved hazards and marks to reach the router, for a moment at most: a
+ * device store that hangs must not stop every route. A plan waits for it, or the first
+ * route of a session could be drawn through a hazard the rider reported, and never
+ * planned again. */
+export async function avoidPointsSent(): Promise<void> {
+  await Promise.race([avoidReady, new Promise<void>((resolve) => window.setTimeout(resolve, 3000))]);
+}
+
 export function initAvoid(): void {
+  // Read once the routing data is in. Not part of the chain that says routing is
+  // ready, so a failure here can't take routing down with it.
+  avoidReady = manifestReady
+    .then(() => links.refreshHazards.call())
+    .catch((err: unknown) => reportCaught("error", err));
+
   // construction avoidance for the router as soon as the zones load (the worker
   // keeps it, and applies it to every graph it builds)
   void constructionReady.then(() => {
