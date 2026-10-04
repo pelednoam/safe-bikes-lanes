@@ -1,8 +1,6 @@
 // Frontend for the family bike router. Routing runs fully in the browser
 // (see router.ts); class colors mirror pipeline/config.py.
 import "./app/started.js";
-import { reportCaught } from "./report.js";
-import { newestWins } from "./newest.js";
 import { links } from "./app/links.js";
 import { AVOIDABLE, store } from "./app/store.js";
 import { CLASS_MARKS, CONSTRUCTION_SWATCH, MARK_INK, NETWORK_MARK_LAYERS, POI_META, classSwatch, classWidth, constructionIcon } from "./app/classes.js";
@@ -13,22 +11,11 @@ import type { GeoJSONSource, Map as MLMap, MapLayerMouseEvent, MapMouseEvent, Po
 
 import { maplibregl } from "./maplibre.js";
 import { CLASS_LABELS, clearPhotoCache, FACILITY_CLASSES } from "./segment.js";
-import { distM } from "./nav.js";
-import type { HazardCategory, HazardReport } from "./hazards.js";
-import {
-  addHazard,
-  buildReportText,
-  downscalePhoto,
-  getHazardPhoto,
-  HAZARD_LABELS,
-  listHazards,
-  removeHazard,
-  setHazardCategory,
-} from "./hazards.js";
+import type { HazardCategory } from "./hazards.js";
+import { getHazardPhoto, HAZARD_LABELS, removeHazard } from "./hazards.js";
 import { saveRide, takeInProgress } from "./rides.js";
 import { type ComponentChild, h, render } from "preact";
 import { SegmentCardView } from "./ui/SegmentCard.js";
-import { PhotoUrls } from "./photourls.js";
 import {
   BlockCard,
   cardElement,
@@ -49,7 +36,7 @@ import { initRidesDialog, renderRides } from "./app/rides-dialog.js";
 import { initAppInfo } from "./app/app-info.js";
 import { initRouteExport } from "./app/route-export.js";
 import { computeShed, exitShedMode, initShed } from "./app/shed.js";
-import { applyAvoidPoints, initAvoid, syncAvoidSummary } from "./app/avoid.js";
+import { initAvoid, syncAvoidSummary } from "./app/avoid.js";
 import { initMarkers, setPoint, syncOD } from "./app/markers.js";
 import { initSketchy, openSketchyPopup } from "./app/sketchy.js";
 import { initPlaces } from "./app/places.js";
@@ -66,31 +53,30 @@ import { initPermalink, parseHash, updateHash } from "./app/permalink.js";
 import { initPlanOptions } from "./app/plan-options.js";
 import { initPlanRoute, requestRoute } from "./app/plan-route.js";
 import { initPlanControls } from "./app/plan-controls.js";
-import { nav } from "./app/nav-state.js";
-import { initNavVoice, speak, vibrate } from "./app/nav-voice.js";
-import { askDuringRide, hideRideAlert, initNavBanner, showRideAlert, stopsOpen } from "./app/nav-banner.js";
-import { hereLabel, initNavCamera } from "./app/nav-camera.js";
+import { initNavVoice } from "./app/nav-voice.js";
+import { askDuringRide, initNavBanner, stopsOpen } from "./app/nav-banner.js";
+import { initNavCamera } from "./app/nav-camera.js";
 import { initNavLocation } from "./app/nav-location.js";
 import { exitNav, initNavSession } from "./app/nav-session.js";
 import { initNavControls } from "./app/nav-controls.js";
 import { initNavRide } from "./app/nav-ride.js";
 import { initUnitsPref } from "./app/units-pref.js";
 import { initPlanLoop } from "./app/plan-loop.js";
+import { hazardPhotos, initHazardDialog, refreshHazards } from "./app/hazard-dialog.js";
 
 // The functions other modules call through src/app/links.ts, set before anything at
-// start-up runs. Four are function declarations still in this module (dropHoverCard,
-// hideClassify, openHazardDialog, refreshHazards), so they exist from the moment it
-// runs. The inits set the hooks of modules that moved: regradeVisible, the search
-// list's chooseSearchRow and saveSearchRow, the planner's requestRoute, planBetween,
-// beginPlan and selectOption, and the ride's rebuildNavFromSelected and replanRide.
-// More are set by their modules' own inits further down and reached only by an event
-// or after a plan has arrived: renderSketchy (a backup restore), leaveSearchMode
-// (choosing a search row), updateHash (choosing an option), resetPlan (the address
-// changing), frameRoute (a route drawn) and showArrival (the rider arriving).
+// start-up runs. One is a function declaration still in this module (dropHoverCard), so
+// it exists from the moment it runs. The inits set the hooks of modules that moved:
+// regradeVisible, the search list's chooseSearchRow and saveSearchRow, the planner's
+// requestRoute, planBetween, beginPlan, selectOption and requestLoop, the ride's
+// rebuildNavFromSelected and replanRide, and the hazard dialog's refreshHazards,
+// openHazardDialog and hideClassify. More are set by their modules' own inits further
+// down and reached only by an event or after a plan has arrived: renderSketchy (a backup
+// restore), leaveSearchMode (choosing a search row), updateHash (choosing an option),
+// resetPlan (the address changing), frameRoute (a route drawn) and showArrival (the rider
+// arriving).
 links.dropHoverCard.set(dropHoverCard);
-links.hideClassify.set(hideClassify);
-links.openHazardDialog.set(openHazardDialog);
-links.refreshHazards.set(refreshHazards);
+initHazardDialog();
 initSearchGrade();
 initSearchResults();
 initPlanRoute();
@@ -113,9 +99,6 @@ function dropHoverCard(): void {
   hoverPopup?.remove();
   hoverPopup = null;
 }
-
-let hazardPendingLoc: [number, number] | null = null;
-let hazardPhoto: Blob | null = null;
 
 initDataLoad();
 
@@ -1259,216 +1242,17 @@ for (const [cls, label] of Object.entries(CLASS_LABELS) as [ProtectionClass, str
 }
 
 
-// ---------------------------------------------------------------------------
-// hazard reports (category + note + photo), stored on-device
-// ---------------------------------------------------------------------------
-
-/** The hazard reports' photos as the hover card shows them (src/photourls.ts):
- * read from the device once per report, tried again if a read failed, and let
- * go with the report. */
-const hazardPhotos = new PhotoUrls(getHazardPhoto);
-
-/** Read the hazards on the device and tell the router and the map. Only the newest read
- * is applied (a slow older read must not put an older list back over a backup restore's),
- * and a caller is released when the newest has been (see src/newest.ts). */
-const refreshHazardsNewest = newestWins(applyHazards);
-
-function refreshHazards(): Promise<void> {
-  return refreshHazardsNewest();
-}
-
-async function applyHazards(isCurrent: () => boolean): Promise<void> {
-  let list: HazardReport[];
-  try {
-    list = await listHazards();
-  } catch (err) {
-    // The database and the mirror both failed. What the router and the map already have
-    // stays: replacing a list that is known with an empty one would take every hazard
-    // out of the next route, mid-ride included.
-    reportCaught("error", err);
-    return;
-  }
-  if (!isCurrent()) return;
-  store.hazards = list;
-  applyAvoidPoints();
-  hazardPhotos.prune(new Set(store.hazards.filter((h) => h.hasPhoto).map((h) => h.id)));
-  const features = store.hazards.map((h) => ({
-    type: "Feature",
-    geometry: { type: "Point", coordinates: [h.lon, h.lat] },
-    properties: { id: h.id, category: h.category, note: h.note, t: h.t, hasPhoto: h.hasPhoto },
-  }));
-  const src = map.getSource("hazardpts");
-  if (src) {
-    (src as GeoJSONSource).setData({
-      type: "FeatureCollection",
-      features,
-    } as GeoJSON.GeoJSON);
-  }
-}
-
-function openHazardDialog(lon: number, lat: number): void {
-  hazardPendingLoc = [lon, lat];
-  hazardPhoto = null;
-  el<HTMLSelectElement>("hazard-category").value = "surface";
-  el<HTMLInputElement>("hazard-note").value = "";
-  el<HTMLInputElement>("hazard-photo").value = "";
-  const preview = el<HTMLImageElement>("hazard-preview");
-  preview.style.display = "none";
-  preview.src = "";
-  const where = el<HTMLDivElement>("hazard-loc");
-  const note = " — saved reports appear on the map and routes avoid them";
-  where.textContent = `here${note}`;
-  // named as soon as the router says what kind of way this is, if the dialog
-  // is still about this spot by then
-  void hereLabel(lon, lat).then((label) => {
-    if (hazardPendingLoc?.[0] === lon && hazardPendingLoc[1] === lat) {
-      where.textContent = `${label}${note}`;
-    }
-  });
-  el<HTMLDialogElement>("hazard").showModal();
-}
-
-function pendingHazardReport(): HazardReport | null {
-  if (!hazardPendingLoc) return null;
-  return {
-    id: `${Date.now()}`,
-    t: Date.now(),
-    lon: hazardPendingLoc[0],
-    lat: hazardPendingLoc[1],
-    category: el<HTMLSelectElement>("hazard-category").value as HazardCategory,
-    note: el<HTMLInputElement>("hazard-note").value,
-    hasPhoto: hazardPhoto !== null,
-  };
-}
-
-el<HTMLInputElement>("hazard-photo").addEventListener("change", () => {
-  const file = el<HTMLInputElement>("hazard-photo").files?.[0] ?? null;
-  hazardPhoto = file;
-  const preview = el<HTMLImageElement>("hazard-preview");
-  if (file) {
-    preview.src = URL.createObjectURL(file);
-    preview.style.display = "block";
-  } else {
-    preview.style.display = "none";
-  }
-});
-
-el<HTMLButtonElement>("hazard-save").addEventListener("click", () => {
-  const report = pendingHazardReport();
-  if (!report) return;
-  void (async () => {
-    const photo = hazardPhoto ? await downscalePhoto(hazardPhoto) : null;
-    await addHazard(report, photo);
-    await refreshHazards();
-    el<HTMLDialogElement>("hazard").close();
-    speak("hazard saved. routes will avoid it.");
-    void requestRoute();
-  })().catch(() => {
-    el<HTMLDivElement>("hazard-loc").textContent = "could not save (storage unavailable)";
-  });
-});
-
-// Share used to build a message and never save the report, leaving the dialog
-// open with no feedback — so a rider who tapped it kept nothing.
-el<HTMLButtonElement>("hazard-share").addEventListener("click", () => {
-  el<HTMLButtonElement>("hazard-save").click();
-  const report = pendingHazardReport();
-  if (!report) return;
-  const text = buildReportText(report);
-  const files =
-    hazardPhoto !== null
-      ? [new File([hazardPhoto], "hazard.jpg", { type: hazardPhoto.type || "image/jpeg" })]
-      : [];
-  const payload = files.length > 0 ? { text, files } : { text };
-  if (typeof navigator.canShare === "function" && navigator.canShare(payload)) {
-    void navigator.share(payload).catch(() => undefined);
-  } else {
-    window.location.href = `mailto:?subject=${encodeURIComponent("Bike hazard report")}&body=${encodeURIComponent(text)}`;
-  }
-});
-
-el<HTMLButtonElement>("hazard-close").addEventListener("click", () => {
-  el<HTMLDialogElement>("hazard").close();
-});
+// hazard reports: app/hazard-dialog.ts
 
 // ── reporting a hazard mid-ride: file first, ask after ────────────────────
 // The dialog (category, note, photo) is still how you report from the planning
 // map, where you can read and type. Riding, it was three taps and a form at
 // 12 km/h, so nobody used it.
 
-let classifyId: string | null = null;
-let classifyTimer: number | undefined;
-
-function hideClassify(): void {
-  window.clearTimeout(classifyTimer);
-  classifyId = null;
-  el<HTMLDivElement>("nav-classify").style.display = "none";
-}
-
-async function quickReport(): Promise<void> {
-  if (!store.navActive) {
-    if (nav.lastPos) openHazardDialog(nav.lastPos[0], nav.lastPos[1]);
-    return;
-  }
-  const at = nav.lastPos;
-  if (!at) {
-    showRideAlert("⚠️ no position yet — can't report from here", "gps");
-    window.setTimeout(hideRideAlert, 4000);
-    return;
-  }
-  // tapping again because nothing visible happened used to file a second report
-  const near = store.hazards.find((hz) => distM([hz.lon, hz.lat], at) < 20);
-  const id = near?.id ?? `${Date.now()}`;
-  if (!near) {
-    try {
-      await addHazard(
-        { id, t: Date.now(), lon: at[0], lat: at[1], category: "other", note: "", hasPhoto: false },
-        null,
-      );
-      await refreshHazards();
-    } catch {
-      showRideAlert("⚠️ could not save the report", "gps");
-      window.setTimeout(hideRideAlert, 4000);
-      return;
-    }
-  }
-  classifyId = id;
-  vibrate([80]);
-  speak("reported. routes will avoid this spot.", "chat");
-  showRideAlert(near ? "📷 already reported here" : "📷 reported — routes will avoid it");
-  window.setTimeout(hideRideAlert, 4000);
-  el<HTMLDivElement>("nav-classify").style.display = "flex";
-  window.clearTimeout(classifyTimer);
-  // long enough to answer at the next light, short enough to stop nagging
-  classifyTimer = window.setTimeout(hideClassify, 20_000);
-}
-
-el<HTMLButtonElement>("nav-report").addEventListener("click", () => {
-  void quickReport();
-});
-
-for (const btn of document.querySelectorAll<HTMLButtonElement>("#nav-classify button")) {
-  btn.addEventListener("click", () => {
-    const cat = btn.dataset["cat"] as HazardCategory | undefined;
-    const id = classifyId;
-    hideClassify();
-    if (cat === undefined || id === null) return;
-    void setHazardCategory(id, cat)
-      .then(refreshHazards)
-      .catch(() => undefined);
-    showRideAlert(`✓ logged as ${HAZARD_LABELS[cat]}`);
-    window.setTimeout(hideRideAlert, 3000);
-  });
-}
 
 // ride history dialog: app/rides-dialog.ts
 
 initRidesDialog();
-
-// tap-outside is the reflex on a phone; #hazard was the one dialog ignoring it
-el<HTMLDialogElement>("hazard").addEventListener("click", (e: MouseEvent) => {
-  if (e.target === el<HTMLDialogElement>("hazard")) el<HTMLDialogElement>("hazard").close();
-});
 
 el<HTMLButtonElement>("mapillary-save").addEventListener("click", () => {
   const token = el<HTMLInputElement>("mapillary-token").value.trim();

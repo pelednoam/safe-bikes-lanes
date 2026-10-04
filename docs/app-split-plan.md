@@ -2,8 +2,8 @@
 
 **Budget:** about 200 lines of code per file, not counting comments or blank
 lines. `app.ts` had 4,964 code lines (6,486 with comments, 6,717 at the start of
-the split); it has 1,279 (1,594) after steps 0 to 2, 4, 5 and the navigation part of 6, so the rest is about
-7 files of 200 lines at the very least. Grouping by topic instead of filling files to the brim gives
+the split); it has 1,096 (1,378) after steps 0 to 2 and 4 to 6, so the rest is about
+6 files of 200 lines at the very least. Grouping by topic instead of filling files to the brim gives
 about 38, averaging about 130. A file under budget is fine; one over it is not.
 
 The numbers below were counted on 2026-10-02 from the file as it stands
@@ -91,12 +91,13 @@ module is cut, and each commit should correct them here.
 | `app/nav-controls.ts` | 131 | the ride's buttons, hazard report from the bike, the back button |
 | `app/units-pref.ts` | 45 | the units preference: labels, limits, re-rendering what shows a distance |
 | `newest.ts` (in `src/`) | 22 | run a job so only the newest result is applied (the hazard read) |
+| `app/hazard-dialog.ts` | 189 | hazard reports: the dialog, reading them, the one-tap report from the bike |
 | `hooks.ts` (in `src/`) | 17 | the registry the hooks are made with |
 | `tests/appsize.test.ts` | | the size and cycle guard |
 
-Steps 0, 1, 2 ("where to build"), 4 (search), 5 (planning) and the navigation part of 6 are done, and the core pieces the leaves needed (the old step 3's
+Steps 0, 1, 2 ("where to build"), 4 (search), 5 (planning) and 6 (navigation and hazards) are done, and the core pieces the leaves needed (the old step 3's
 `sources`, `data-load`, `markers`, `names`, `avoid`). Counts are from the same counter
-the guard uses. `app.ts` is down to 1,279 code lines (1,594 with comments).
+the guard uses. `app.ts` is down to 1,096 code lines (1,378 with comments).
 
 ## The rest (estimated code lines)
 
@@ -122,12 +123,6 @@ The closure has only 9 locals of its own, so each feature becomes an
 | `app/hazard-layers.ts` | 70 | hazard points and taps |
 | `app/hover-cards.ts` | 150 | hover and tap cards, hover state |
 | `app/map-taps.ts` | 130 | `onTap`, `onMapTap`, the tap targets |
-
-### Hazards (what is left of step 6)
-
-| File | ~Lines | Holds |
-|---|---|---|
-| `app/hazard-dialog.ts` | 155 | hazard reports: category, note, photo |
 
 ### The entry point
 
