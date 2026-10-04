@@ -25,6 +25,9 @@ import { routePrefs } from "./avoid.js";
 import { selectOption } from "./plan-options.js";
 import { POI_META } from "./classes.js";
 
+/** Where we're going, for the arrival line. */
+let navDestLabel: string | null = null;
+
 /** The screen stays on for the whole ride, taken back after every app switch
  * (see lifecycle.ts). */
 const screenLock = new ScreenLock(
@@ -63,19 +66,19 @@ export async function startNav(): Promise<void> {
   if (!rebuildNavFromSelected()) return;
   const destLngLat = store.end?.getLngLat() ?? store.start?.getLngLat();
   if (!destLngLat) return;
+  nav.dest = [destLngLat.lng, destLngLat.lat];
+  // A round trip has no destination field of its own; the one on screen still
+  // names wherever the rider last searched for. Read before the list is cleared.
+  navDestLabel =
+    nav.loop !== null
+      ? "back where you started"
+      : el<HTMLInputElement>("search").value.trim().split(",")[0] || null;
   // The ride has started, and the main thread is the guidance's: a search list left
   // open would go on grading, up to five routing runs, while the rider is on the bike.
   // Cleared only here, after the checks that can still send the rider back to the
   // plan, so a start that didn't happen leaves the list as it was. (A grade already
   // sent to the router still finishes there, one run; none is started after.)
   clearSearchResults();
-  nav.dest = [destLngLat.lng, destLngLat.lat];
-  // A round trip has no destination field of its own; the one on screen still
-  // names wherever the rider last searched for.
-  navDestLabel =
-    nav.loop !== null
-      ? "back where you started"
-      : el<HTMLInputElement>("search").value.trim().split(",")[0] || null;
   nav.originalDest = null;
   el<HTMLButtonElement>("nav-resume").style.display = "none";
   store.navActive = true;
@@ -231,8 +234,6 @@ export async function resumeRide(): Promise<void> {
   }
 }
 
-/** Where we're going, for the arrival line. */
-let navDestLabel: string | null = null;
 
 export function initNavSession(): void {
   links.showArrival.set(showArrival);

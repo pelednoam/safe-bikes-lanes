@@ -115,6 +115,9 @@ export async function requestRoute(): Promise<void> {
   const ticket = beginPlan();
   if (!store.end) return;
   await routingInputsReady();
+  // what the router avoids when this plan starts: if it changes before the plan is
+  // published (the saved hazards arrived late), the plan is made again
+  const avoidRevision = store.avoidRevision;
   if (ticket.stale()) return;
   const errBox = el<HTMLDivElement>("error");
   errBox.style.display = "none";
@@ -171,6 +174,10 @@ export async function requestRoute(): Promise<void> {
     }
     const fallback = found[0];
     if (!fallback) throw new Error("no route found");
+    if (store.avoidRevision !== avoidRevision) {
+      void requestRoute();
+      return;
+    }
     if (!trip.publish(ticket, found)) return;
     // an A-to-B trip replaces a round trip, and its stop
     store.poiMarker?.remove();

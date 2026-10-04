@@ -58,8 +58,10 @@ describe("hazard reports in the backup", () => {
   });
 
   it("are still listed from the mirror when the database won't open, so routes still avoid them", async () => {
-    await addHazard(report("a", 1000, "pothole by the bridge"), null);
+    await addHazard(report("a", 1000, "pothole by the bridge"), new Blob(["jpeg"]));
     await addHazard(report("b", 2000), null);
+    // with the database working, a report's photo is known
+    expect((await listHazards()).find((h) => h.id === "a")?.hasPhoto).toBe(true);
     const open = indexedDB.open.bind(indexedDB);
     // blocked site data, a private window: opening the database fails
     indexedDB.open = (() => {
@@ -68,10 +70,11 @@ describe("hazard reports in the backup", () => {
     try {
       const listed = await listHazards();
       expect(listed.map((h) => h.id)).toEqual(["b", "a"]);
-      expect(listed.every((h) => !h.hasPhoto)).toBe(true);
-      // and with no mirror to fall back on, the failure is the caller's to know
+      // the mirror has no photos, and a report doesn't claim one
+      expect(listed.find((h) => h.id === "a")?.hasPhoto).toBe(false);
+      // and with nothing mirrored there is nothing known: an empty list, not an error
       localStorage.clear();
-      await expect(listHazards()).rejects.toThrow("indexeddb unavailable");
+      expect(await listHazards()).toEqual([]);
     } finally {
       indexedDB.open = open;
     }

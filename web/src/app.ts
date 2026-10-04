@@ -2,6 +2,7 @@
 // (see router.ts); class colors mirror pipeline/config.py.
 import "./app/started.js";
 import { reportCaught } from "./report.js";
+import { newestWins } from "./newest.js";
 import { links } from "./app/links.js";
 import { AVOIDABLE, store } from "./app/store.js";
 import { CLASS_MARKS, CONSTRUCTION_SWATCH, MARK_INK, NETWORK_MARK_LAYERS, POI_META, classSwatch, classWidth, constructionIcon } from "./app/classes.js";
@@ -73,6 +74,8 @@ import { initNavLocation } from "./app/nav-location.js";
 import { exitNav, initNavSession } from "./app/nav-session.js";
 import { initNavControls } from "./app/nav-controls.js";
 import { initNavRide } from "./app/nav-ride.js";
+import { initUnitsPref } from "./app/units-pref.js";
+import { initPlanLoop } from "./app/plan-loop.js";
 
 // The functions other modules call through src/app/links.ts, set before anything at
 // start-up runs. Four are function declarations still in this module (dropHoverCard,
@@ -92,6 +95,7 @@ initSearchGrade();
 initSearchResults();
 initPlanRoute();
 initPlanOptions();
+initPlanLoop();
 initNavRide();
 
 
@@ -1264,22 +1268,27 @@ for (const [cls, label] of Object.entries(CLASS_LABELS) as [ProtectionClass, str
  * go with the report. */
 const hazardPhotos = new PhotoUrls(getHazardPhoto);
 
-/** The newest refresh wins: a slow older read must not put an older list back over a
- * newer one (a backup restore while the start-up read is still waiting). */
-let hazardsGen = 0;
+/** Read the hazards on the device and tell the router and the map. Only the newest read
+ * is applied (a slow older read must not put an older list back over a backup restore's),
+ * and a caller is released when the newest has been (see src/newest.ts). */
+const refreshHazardsNewest = newestWins(applyHazards);
 
-async function refreshHazards(): Promise<void> {
-  const gen = ++hazardsGen;
+function refreshHazards(): Promise<void> {
+  return refreshHazardsNewest();
+}
+
+async function applyHazards(isCurrent: () => boolean): Promise<void> {
   let list: HazardReport[];
   try {
     list = await listHazards();
   } catch (err) {
-    // neither the database nor its mirror could be read: nothing to avoid is known, and
-    // that is worth knowing about
+    // The database and the mirror both failed. What the router and the map already have
+    // stays: replacing a list that is known with an empty one would take every hazard
+    // out of the next route, mid-ride included.
     reportCaught("error", err);
-    list = [];
+    return;
   }
-  if (gen !== hazardsGen) return;
+  if (!isCurrent()) return;
   store.hazards = list;
   applyAvoidPoints();
   hazardPhotos.prune(new Set(store.hazards.filter((h) => h.hasPhoto).map((h) => h.id)));
@@ -1478,13 +1487,12 @@ initAppInfo();
 initNavSession();
 initNavVoice();
 
-
 initNavBanner();
 
 initNavLocation();
 
-
 initNavControls();
+initUnitsPref();
 
 
 // Layers: twelve of them, so a way back to the state someone can reason about.

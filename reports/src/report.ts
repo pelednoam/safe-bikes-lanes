@@ -166,7 +166,7 @@ const axis = (letters: string): string => String.raw`[${letters}][_\s-]*\d+(?:\.
 const TILE_AXES = new RegExp(
   // not in the middle of a word ("index 3: y 4", "max 2; y 5"), unless it is
   // camelCase ("tileX4953Y6060") or the word is tile ("tilex4953y6060")
-  String.raw`(?<![0-9])(?:(?<![A-Za-z])|(?<=[a-z])(?=[XYZ])|(?<=tile)(?=[xyz]))` +
+  String.raw`(?<![0-9])(?:(?<![A-Za-z])|(?<=[a-z])(?=[XYZ])|(?<=[Tt][Ii][Ll][Ee])(?=[xyzXYZ]))` +
     String.raw`(?:[zZ][_\s-]*\d+${AXIS_SEP})?` +
     String.raw`(?:${axis("xX")}${AXIS_SEP}${axis("yY")}|${axis("yY")}${AXIS_SEP}${axis("xX")})`,
   "g",
@@ -175,6 +175,16 @@ const TILE_AXES = new RegExp(
  * wrote out ("42.23.48"), all of it and not just the first pair, or the seconds stay
  * behind ("‹n›.48"). A version number or an address goes with it. */
 const DOTTED_CHAIN = /-?\d+(?:\s*\.\s*\d+){2,}/g;
+/** Axes with their digits attached and no space, right after any letter: "posx4953y6060",
+ * "TILEX4953Y6060", "gridX4953_Y6060". The pattern above won't start an axis in the middle
+ * of a word because spaced forms ("index 3: y 4") are ordinary text; a compact one has no
+ * such reading, and leaving a tile in a public issue is the worse mistake. "Matrix4x4" is
+ * not one: the same letter twice. */
+const AXIS_SEP_TIGHT = String.raw`[_,/.;:|&+-]*`;
+const TILE_COMPACT = new RegExp(
+  String.raw`(?<=[A-Za-z])(?:[xX]\d+(?:\.\d+)?${AXIS_SEP_TIGHT}[yY]\d+(?:\.\d+)?|[yY]\d+(?:\.\d+)?${AXIS_SEP_TIGHT}[xX]\d+(?:\.\d+)?)`,
+  "g",
+);
 /** A lone axis letter and its number ("x 4953"). An x after a number is not one:
  * "1920 x 1080" is a screen size, which is decided to stay. A y or z is, wherever
  * it is ("zoom 14 y 6060"). */
@@ -302,6 +312,7 @@ export function scrub(text: string): string {
     // tiles before decimals: "z14_x4953_y6060.5" must go whole, not lose its
     // fraction first and leave "z14_x4953_y‹n›" behind
     .replace(TILE_AXES, "‹n›")
+    .replace(TILE_COMPACT, "‹n›")
     .replace(TILE_RUN, "‹n›")
     // decimals before the labelled whole numbers: "lat 42 .3967" must lose its
     // fraction with it, not have "lat 42" taken and ".3967" left behind

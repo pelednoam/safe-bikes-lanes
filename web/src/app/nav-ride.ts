@@ -82,8 +82,13 @@ const rerouteLane = new Lane();
  * something changed what the router must avoid. */
 export async function replanRide(): Promise<void> {
   if (!store.routerReady || !nav.lastPos) return;
+  // The ticket first, so a ride that ends, restarts or reroutes while this waits
+  // supersedes it and it is not mistaken for the newest question when it resumes.
+  const ticket = rideLane.begin();
   // a ride resumed after the page reloaded must not reroute before its hazards are in
   await avoidPointsSent();
+  const from = nav.lastPos;
+  if (rideStale(ticket) || !store.navActive || from === null) return;
   // The destination pin may be why: dragged mid-ride, it used to re-plan to
   // where the ride had been going, with the pin and the guidance apart. On a
   // detour the pin is still the ride's destination, the one Resume returns to;
@@ -93,9 +98,8 @@ export async function replanRide(): Promise<void> {
     if (nav.originalDest !== null) nav.originalDest = [pin.lng, pin.lat];
     else nav.dest = [pin.lng, pin.lat];
   }
-  const ticket = rideLane.begin();
   try {
-    const found = await rideOptionsFrom(nav.lastPos);
+    const found = await rideOptionsFrom(from);
     if (rideStale(ticket)) return;
     const first = found?.[0];
     if (!found || !first) return;

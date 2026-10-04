@@ -2,7 +2,7 @@
 
 **Budget:** about 200 lines of code per file, not counting comments or blank
 lines. `app.ts` had 4,964 code lines (6,486 with comments, 6,717 at the start of
-the split); it has 1,272 (1,586) after steps 0 to 2, 4, 5 and the navigation part of 6, so the rest is about
+the split); it has 1,279 (1,594) after steps 0 to 2, 4, 5 and the navigation part of 6, so the rest is about
 7 files of 200 lines at the very least. Grouping by topic instead of filling files to the brim gives
 about 38, averaging about 130. A file under budget is fine; one over it is not.
 
@@ -46,12 +46,12 @@ module is cut, and each commit should correct them here.
 | `app/dom.ts` | 8 | `el`, `emptyFC` |
 | `app/map.ts` | 29 | the map and its controls |
 | `app/store.ts` | 75 | the shared variables, `AVOIDABLE`, `loadSketchy` |
-| `app/links.ts` | 25 | the hooks other modules call; set by app.ts until a function moves out |
+| `app/links.ts` | 26 | the hooks other modules call; each set by the init of the module that owns the function (app.ts for the four still in it) |
 | `app/services.ts` | 14 | the routing worker, basemap, trip, lanes, `dataReady` (runs at import) |
 | `app/sources.ts` | 32 | `getSource`, `ensureLayer`, the lazily loaded layer files |
 | `app/data-load.ts` | 175 | manifest, network tiles, construction, points of interest, progress |
 | `app/dark-mode.ts` | 84 | night rides: the dark basemap and UI |
-| `app/avoid.ts` | 84 | what the router avoids; bumps the grade revision |
+| `app/avoid.ts` | 86 | what the router avoids; bumps the grade revision |
 | `app/names.ts` | 79 | reverse geocoding and the name cache |
 | `app/markers.ts` | 80 | the trip's markers, setting a point, the rider's position |
 | `app/sketchy.ts` | 75 | marked spots, their list and popup |
@@ -75,26 +75,28 @@ module is cut, and each commit should correct them here.
 | `app/search-input.ts` | 115 | the two boxes: typing, keys |
 | `app/phone-search.ts` | 56 | the sheet giving way to the keyboard; the From-field buttons |
 | `app/sheet.ts` | 112 | the bottom sheet: heights, dragging, revealing options |
-| `app/plan-route.ts` | 172 | asking for a route: start, planning, errors, planning between two picked points |
-| `app/plan-loop.ts` | 96 | a round trip: its limits, planning it |
+| `app/plan-route.ts` | 177 | asking for a route: start, planning, errors, planning between two picked points |
+| `app/plan-loop.ts` | 105 | a round trip: its limits, planning it |
 | `app/plan-options.ts` | 155 | the options: cards, chips, choosing one, painting the panel |
 | `app/plan-controls.ts` | 59 | reset, swap and the round-trip button |
 | `app/summary.ts` | 111 | the route's summary, ribbon, cautions, street-photo preview |
 | `app/permalink.ts` | 115 | the link to this trip: write, read, share |
 | `app/nav-state.ts` | 57 | navigation's shared state, the ride engine and loop legs |
 | `app/nav-voice.ts` | 118 | spoken guidance: the queue, the three voices, the test, the buzz |
-| `app/nav-banner.ts` | 60 | the headline, trip line, banner, alert strip, the ride's question |
+| `app/nav-banner.ts` | 60 | the headline, trip line, banner, alert strip, the ride's question, the stops menu |
 | `app/nav-location.ts` | 94 | the GPS fix, permission, signal lost, starting the watch |
 | `app/nav-camera.ts` | 166 | the dot and view eased toward each fix, framing a route |
-| `app/nav-ride.ts` | 178 | the engine's effects: re-plan, rejoin, speak; saving the ride |
+| `app/nav-ride.ts` | 180 | the engine's effects: re-plan, rejoin, speak; saving the ride |
 | `app/nav-session.ts` | 180 | starting, exiting, arriving, detours, resuming |
-| `app/nav-controls.ts` | 175 | the ride's buttons, hazard report from the bike, the back button |
+| `app/nav-controls.ts` | 131 | the ride's buttons, hazard report from the bike, the back button |
+| `app/units-pref.ts` | 45 | the units preference: labels, limits, re-rendering what shows a distance |
+| `newest.ts` (in `src/`) | 22 | run a job so only the newest result is applied (the hazard read) |
 | `hooks.ts` (in `src/`) | 17 | the registry the hooks are made with |
 | `tests/appsize.test.ts` | | the size and cycle guard |
 
 Steps 0, 1, 2 ("where to build"), 4 (search), 5 (planning) and the navigation part of 6 are done, and the core pieces the leaves needed (the old step 3's
 `sources`, `data-load`, `markers`, `names`, `avoid`). Counts are from the same counter
-the guard uses. `app.ts` is down to 1,272 code lines (1,586 with comments).
+the guard uses. `app.ts` is down to 1,279 code lines (1,594 with comments).
 
 ## The rest (estimated code lines)
 

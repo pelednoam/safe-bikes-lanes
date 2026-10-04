@@ -45,14 +45,15 @@ export function constructionAvoidPoints(fc: ConstructionFC): [number, number][] 
   return pts;
 }
 
+/** The last points sent, so the same set is not sent (and graded) twice. */
+let lastAvoidPoints = "";
+
 /** Routes avoid both quick sketchy marks and full hazard reports.
  *
  * This is the one place either changes what the router is told, so it is also
  * where a grade computed before is made stale: a filed hazard, a restored backup
  * and a marked spot all land here. The search rows are graded again after the
  * router has the new points, not before, or they would be graded against the old. */
-let lastAvoidPoints = "";
-
 export function applyAvoidPoints(): void {
   const points = [
     ...store.sketchyMarks,
@@ -85,7 +86,8 @@ let plannedWithoutAvoid = false;
  * a device store that hangs must not stop every route. A plan waits for it so that the
  * first route of a session is not drawn through a hazard the rider reported. If the
  * wait runs out the plan goes ahead, and is made again when the points do arrive (see
- * initAvoid), so the route on screen is never left ignoring them. */
+ * initAvoid), by the planner that made it: a ride, a round trip or a trip between two
+ * points. */
 export async function avoidPointsSent(): Promise<void> {
   if (gaveUp) {
     plannedWithoutAvoid = true;
@@ -120,10 +122,14 @@ export function initAvoid(): void {
     gaveUp = false;
     if (!plannedWithoutAvoid) return;
     plannedWithoutAvoid = false;
-    // the route drawn without them is made again (mid-ride, requestRoute is a way on
-    // from here). A round trip is not: it was asked for in the first moments of a
-    // session on a device store too slow to answer, and is planned afresh by its button.
-    if (trip.options.length > 0) void links.requestRoute.call();
+    // what is on screen was planned without them: plan it again, by the planner that
+    // made it. A ride re-plans from where the rider is, a round trip as a round trip
+    // (requestRoute would make it an A-to-B and drop it), a trip between two points as
+    // that. (A plan still under way when they arrive notices for itself: see
+    // requestRoute and requestLoop.)
+    if (store.navActive) void links.replanRide.call();
+    else if (store.loopParams !== null) void links.requestLoop.call();
+    else if (store.end !== null && trip.options.length > 0) void links.requestRoute.call();
   });
 
   // construction avoidance for the router as soon as the zones load (the worker

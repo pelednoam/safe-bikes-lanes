@@ -142,14 +142,16 @@ export async function listHazards(): Promise<HazardReport[]> {
     all = (await tx<StoredHazard[]>("readonly", (s) => s.getAll() as IDBRequest<StoredHazard[]>)).map(
       withoutPhoto,
     );
-  } catch (err) {
+  } catch {
     // IndexedDB won't open (site data blocked, a private window, a full disk). What is
     // left of the rider's reports is the mirror, text and place without the photos:
-    // routes should still avoid them, and the map still show them. Only when there is
-    // no mirror either is there nothing to go on, and the caller is told.
-    const mirrored = readMirror();
-    if (mirrored.length === 0) throw err;
-    return mirrored.map((r) => ({ ...r, hasPhoto: false })).sort((x, y) => y.t - x.t);
+    // routes should still avoid them, and the map still show them. The mirror is
+    // written whenever a report is filed or read, so an empty one means none are known:
+    // for a rider who has never filed one, in a browser that blocks storage, that is the
+    // ordinary case and not an error.
+    return readMirror()
+      .map((r) => ({ ...r, hasPhoto: false }))
+      .sort((x, y) => y.t - x.t);
   }
   const mirror = readMirror();
   const known = new Set(all.map((r) => r.id));

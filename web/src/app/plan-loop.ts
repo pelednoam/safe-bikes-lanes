@@ -1,5 +1,6 @@
 // A round trip: how long it may be, and planning it from where the rider is.
 
+import { links } from "./links.js";
 import { store } from "./store.js";
 import { ensureRouter, poisReady, showStage } from "./data-load.js";
 import { el } from "./dom.js";
@@ -28,6 +29,8 @@ export async function requestLoop(): Promise<void> {
   if (store.navActive) return; // a new round trip is not something to swap in mid-ride
   const ticket = beginPlan();
   await routingInputsReady();
+  // see requestRoute: a change in what the router avoids while this plans makes it again
+  const avoidRevision = store.avoidRevision;
   if (ticket.stale()) return;
   const errBox = el<HTMLDivElement>("error");
   errBox.style.display = "none";
@@ -91,6 +94,10 @@ export async function requestLoop(): Promise<void> {
       store.preferFlat,
     );
     if (ticket.stale()) return;
+    if (store.avoidRevision !== avoidRevision) {
+      void requestLoop();
+      return;
+    }
     store.end?.remove();
     store.end = null;
     // a choice of loops, not a verdict: the runner-ups go in the same option
@@ -117,4 +124,8 @@ export async function requestLoop(): Promise<void> {
   } finally {
     if (!ticket.stale()) loading.style.display = "none";
   }
+}
+
+export function initPlanLoop(): void {
+  links.requestLoop.set(requestLoop);
 }

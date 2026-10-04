@@ -12,6 +12,8 @@ export const links = {
   /** Read the hazards stored on the device (and a restored backup's), tell the router,
    * and redraw them. */
   refreshHazards: hook<[], Promise<void>>("refreshHazards"),
+  /** Plan a round trip from what is in the loop fields. Set by initPlanLoop. */
+  requestLoop: hook<[], Promise<void>>("requestLoop"),
   /** Plan the route for the two ends as they stand. */
   requestRoute: hook<[], Promise<void>>("requestRoute"),
   /** Grade the search rows on screen again, after something that changes the grade.

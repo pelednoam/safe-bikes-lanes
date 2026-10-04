@@ -204,6 +204,12 @@ describe("the scrubbing", () => {
     }
     // while a word that is tile, or camelCase, is
     for (const text of ["tilex4953y6060", "tileX4953Y6060"]) expect(scrub(text), text).toBe("tile‹n›");
+    // in any case, and after any word, when the digits are attached (no space to read it as text)
+    for (const text of ["Tilex4953y6060", "TILEX4953Y6060", "TileX4953Y6060", "posx4953y6060", "POSX4953Y6060", "gridX4953_Y6060"]) {
+      expect(scrub(text), text).not.toMatch(/4953|6060/);
+    }
+    // and still not ordinary words, one letter twice, or a gap in the middle
+    for (const text of ["Matrix4x4", "INDEX 3: Y 4", "hex4a", "index3 y4"]) expect(scrub(text), text).toBe(text);
   });
 
   it("takes tiles with a zoom first and the axes either way round, or joined by any separator", () => {
