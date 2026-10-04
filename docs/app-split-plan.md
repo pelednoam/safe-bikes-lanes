@@ -2,8 +2,8 @@
 
 **Budget:** about 200 lines of code per file, not counting comments or blank
 lines. `app.ts` had 4,964 code lines (6,486 with comments, 6,717 at the start of
-the split); it has 2,158 (2,751) after steps 0, 1, 2, 4 and 5, so the rest is about
-11 files of 200 lines at the very least. Grouping by topic instead of filling files to the brim gives
+the split); it has 1,272 (1,586) after steps 0 to 2, 4, 5 and the navigation part of 6, so the rest is about
+7 files of 200 lines at the very least. Grouping by topic instead of filling files to the brim gives
 about 38, averaging about 130. A file under budget is fine; one over it is not.
 
 The numbers below were counted on 2026-10-02 from the file as it stands
@@ -46,7 +46,7 @@ module is cut, and each commit should correct them here.
 | `app/dom.ts` | 8 | `el`, `emptyFC` |
 | `app/map.ts` | 29 | the map and its controls |
 | `app/store.ts` | 75 | the shared variables, `AVOIDABLE`, `loadSketchy` |
-| `app/links.ts` | 23 | the hooks other modules call; set by app.ts until a function moves out |
+| `app/links.ts` | 25 | the hooks other modules call; set by app.ts until a function moves out |
 | `app/services.ts` | 14 | the routing worker, basemap, trip, lanes, `dataReady` (runs at import) |
 | `app/sources.ts` | 32 | `getSource`, `ensureLayer`, the lazily loaded layer files |
 | `app/data-load.ts` | 175 | manifest, network tiles, construction, points of interest, progress |
@@ -81,12 +81,20 @@ module is cut, and each commit should correct them here.
 | `app/plan-controls.ts` | 59 | reset, swap and the round-trip button |
 | `app/summary.ts` | 111 | the route's summary, ribbon, cautions, street-photo preview |
 | `app/permalink.ts` | 115 | the link to this trip: write, read, share |
+| `app/nav-state.ts` | 57 | navigation's shared state, the ride engine and loop legs |
+| `app/nav-voice.ts` | 118 | spoken guidance: the queue, the three voices, the test, the buzz |
+| `app/nav-banner.ts` | 60 | the headline, trip line, banner, alert strip, the ride's question |
+| `app/nav-location.ts` | 94 | the GPS fix, permission, signal lost, starting the watch |
+| `app/nav-camera.ts` | 166 | the dot and view eased toward each fix, framing a route |
+| `app/nav-ride.ts` | 178 | the engine's effects: re-plan, rejoin, speak; saving the ride |
+| `app/nav-session.ts` | 180 | starting, exiting, arriving, detours, resuming |
+| `app/nav-controls.ts` | 175 | the ride's buttons, hazard report from the bike, the back button |
 | `hooks.ts` (in `src/`) | 17 | the registry the hooks are made with |
 | `tests/appsize.test.ts` | | the size and cycle guard |
 
-Steps 0, 1, 2 ("where to build"), 4 (search) and 5 (planning) are done, and the core pieces the leaves needed (the old step 3's
+Steps 0, 1, 2 ("where to build"), 4 (search), 5 (planning) and the navigation part of 6 are done, and the core pieces the leaves needed (the old step 3's
 `sources`, `data-load`, `markers`, `names`, `avoid`). Counts are from the same counter
-the guard uses. `app.ts` is down to 2,158 code lines (2,751 with comments).
+the guard uses. `app.ts` is down to 1,272 code lines (1,586 with comments).
 
 ## The rest (estimated code lines)
 
@@ -113,17 +121,10 @@ The closure has only 9 locals of its own, so each feature becomes an
 | `app/hover-cards.ts` | 150 | hover and tap cards, hover state |
 | `app/map-taps.ts` | 130 | `onTap`, `onMapTap`, the tap targets |
 
-### Navigation (about 900)
+### Hazards (what is left of step 6)
 
 | File | ~Lines | Holds |
 |---|---|---|
-| `app/nav-voice.ts` | 150 | `speak`, `vibrate`, the voice tests |
-| `app/nav-banner.ts` | 150 | headline, trip line, banner, ride alerts |
-| `app/nav-location.ts` | 150 | `toFix`, location errors and advice, `navStartLocation` |
-| `app/nav-camera.ts` | 170 | framing, compass, animation, follow and re-centre |
-| `app/nav-ride.ts` | 200 | `navOnFix`, `applyRideEffect`, reroute, replan, detour |
-| `app/nav-session.ts` | 180 | `startNav`, `exitNav`, resume, arrival, saving the ride |
-| `app/nav-controls.ts` | 120 | the 21 button listeners and `popstate` |
 | `app/hazard-dialog.ts` | 155 | hazard reports: category, note, photo |
 
 ### The entry point

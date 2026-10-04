@@ -51,6 +51,11 @@ export const links = {
   /** Clear the trip (and, unless told not to, the link). Set by initPlanControls; the
    * permalink calls it when the address changes under a trip, which is an event. */
   resetPlan: hook<[clearLink?: boolean], void>("resetPlan"),
+  /** Take down the hazard-classification prompt. Set in app.ts's early block. */
+  hideClassify: hook<[], void>("hideClassify"),
+  /** Show the ride's arrival. Set by initNavSession; the ride calls it when the rider
+   * arrives, which is after start-up. */
+  showArrival: hook<[atStop: boolean, totalM: number], void>("showArrival"),
   /** Close the card that follows the pointer over the map. */
   dropHoverCard: hook<[], void>("dropHoverCard"),
   /** Open the hazard report dialog at a place. */
