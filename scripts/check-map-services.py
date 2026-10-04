@@ -105,7 +105,11 @@ def _one(pattern: str, text: str, what: str) -> str:
 
 def read_app_urls(src: Path = WEB_SRC) -> AppUrls:
     basemap = (src / "basemap.ts").read_text()
-    app = (src / "app.ts").read_text()
+    # the app is app.ts and the modules split out of it (src/app/): a service's URL
+    # may be in any of them
+    app = "\n".join(
+        path.read_text() for path in [src / "app.ts", *sorted((src / "app").glob("*.ts"))]
+    )
     segment = (src / "segment.ts").read_text()
     return AppUrls(
         basemap=_one(
