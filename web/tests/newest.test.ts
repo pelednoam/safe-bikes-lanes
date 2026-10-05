@@ -67,6 +67,38 @@ describe("newestWins", () => {
     expect(applied).toEqual(["read 2"]);
   });
 
+  it("is not held for ever by an older read that never finishes, once a newer one has landed", async () => {
+    const applied: string[] = [];
+    let n = 0;
+    const refresh = newestWins(async (isCurrent) => {
+      const i = n++;
+      if (i === 0) await new Promise(() => undefined); // a device store that hangs
+      if (isCurrent()) applied.push(`read ${i + 1}`);
+    });
+    const hung = refresh();
+    const newer = refresh();
+    await newer;
+    expect(applied).toEqual(["read 2"]);
+    // the call that started the hung read is released too, by the newer one finishing
+    await expect(Promise.race([hung, new Promise((r) => setTimeout(() => r("held"), 50))])).resolves.toBeUndefined();
+  });
+
+  it("does not crash on an overtaken read that fails, and tells the caller of the newest one's failure", async () => {
+    let n = 0;
+    const refresh = newestWins(async () => {
+      const i = n++;
+      if (i === 0) throw new Error("old read failed");
+    });
+    const first = refresh();
+    const second = refresh(); // the first, overtaken, has failed; nobody asked about it
+    await expect(second).resolves.toBeUndefined();
+    await expect(first).resolves.toBeUndefined();
+    const failing = newestWins(async () => {
+      throw new Error("newest read failed");
+    });
+    await expect(failing()).rejects.toThrow("newest read failed");
+  });
+
   it("follows a chain of overtakes to the last", async () => {
     const applied: number[] = [];
     const gates = [gate(), gate(), gate()];

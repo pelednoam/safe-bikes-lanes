@@ -10,7 +10,10 @@ import {
   downscalePhoto,
   buildReportText,
   getHazardPhoto,
+  CLOSURE_LIFETIME_MS,
+  CLOSURES_SINCE,
   HAZARD_LABELS,
+  isClosure,
   listHazards,
   removeHazard,
   setHazardCategory,
@@ -156,5 +159,27 @@ describe("shrinking a photo before it's stored", () => {
 
     stubCanvas({ blob: false });
     expect(await downscalePhoto(bigFile, 1280)).toBe(bigFile);
+  });
+});
+
+describe("which reports are closures", () => {
+  const after = CLOSURES_SINCE + 1000;
+  const blocked = (t: number): HazardReport => report("b", t, "blocked");
+
+  it("is a blocked report filed since closures began, until it lapses", () => {
+    expect(isClosure(blocked(after), after + 1000)).toBe(true);
+    // 72 hours later it is a price again: a mark nothing on the ride screen takes off
+    expect(isClosure(blocked(after), after + CLOSURE_LIFETIME_MS - 1)).toBe(true);
+    expect(isClosure(blocked(after), after + CLOSURE_LIFETIME_MS)).toBe(false);
+  });
+
+  it("is not a blocked report from before, which meant a blocked lane and was a price", () => {
+    expect(isClosure(blocked(CLOSURES_SINCE - 1), CLOSURES_SINCE + 1000)).toBe(false);
+  });
+
+  it("is not any other kind of report", () => {
+    for (const category of ["surface", "construction", "traffic", "other"] as const) {
+      expect(isClosure(report("x", after, category), after + 1000), category).toBe(false);
+    }
   });
 });

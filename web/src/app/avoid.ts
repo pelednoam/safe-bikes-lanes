@@ -2,6 +2,7 @@
 // spots, and the construction zones, kept in step with the map and the summary
 // line.
 
+import { isClosure } from "../hazards.js";
 import { type WirePrefs } from "../routing.js";
 import { type ConstructionFC, store } from "./store.js";
 import { reportCaught } from "../report.js";
@@ -48,31 +49,32 @@ export function constructionAvoidPoints(fc: ConstructionFC): [number, number][] 
 /** The last points sent, so the same set is not sent (and graded) twice. */
 let lastAvoidPoints = "";
 
-/** Routes avoid both quick sketchy marks and full hazard reports.
+/** Routes avoid the rider's marks and hazard reports, and go round a closure.
  *
  * This is the one place either changes what the router is told, so it is also
  * where a grade computed before is made stale: a filed hazard, a restored backup
  * and a marked spot all land here. The search rows are graded again after the
  * router has the new points, not before, or they would be graded against the old. */
 export function applyAvoidPoints(): void {
-  // A hazard reported blocked is a closure and goes to the router as one (routes go
-  // round it, however far); every other report, and the rider's own marks, are a price.
-  const where = (h: { lon: number; lat: number }): [number, number] => [h.lon, h.lat];
-  const points = [
-    ...store.sketchyMarks,
-    ...store.hazards.filter((h) => h.category !== "blocked").map(where),
-  ];
-  const closed = store.hazards.filter((h) => h.category === "blocked").map(where);
-  void routing.setSketchyMarks(points);
-  void routing.setBlockedPoints(closed);
-  // Only a change in where the points are makes a grade stale. This also runs at
-  // start-up (twice), and for a hazard whose category alone changed, and bumping the
-  // revision then would throw away every grade worked out and start the work again.
-  // (The worker answers in the order it was asked, so the points are in before the
-  // grading's first plan; a second call while one is grading takes over its lane.)
-  const key = JSON.stringify([points, closed]);
+  // A report filed as blocked, and not yet lapsed, is a closure and goes to the router as
+  // one; every other report (a blocked one from before closures, or one that has lapsed,
+  // included) and the rider's own marks are a price.
+  const priced: [number, number][] = [...store.sketchyMarks];
+  const closed: [number, number][] = [];
+  const now = Date.now();
+  for (const h of store.hazards) (isClosure(h, now) ? closed : priced).push([h.lon, h.lat]);
+  // Only a change in what is priced or closed makes a grade stale, and only a change is
+  // sent. This also runs at start-up (twice), and for a hazard whose category changed
+  // between two prices, and bumping the revision then would throw away every grade worked
+  // out and start the work again; a change to or from being a closure is a change in what
+  // is closed, and does count. (The worker answers in the order it was asked, so the points
+  // are in before the grading's first plan; a second call while one is grading takes over
+  // its lane.)
+  const key = JSON.stringify([priced, closed]);
   if (key === lastAvoidPoints) return;
   lastAvoidPoints = key;
+  void routing.setSketchyMarks(priced);
+  void routing.setBlockedPoints(closed);
   store.avoidRevision++;
   links.regradeVisible.call();
 }

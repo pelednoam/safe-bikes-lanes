@@ -129,6 +129,7 @@ export function navOnFix(fix: NativeFix): void {
   const step = rideEngine.onFix(fix, Date.now());
   if (step === null) return;
   nav.lastPos = [fix.lon, fix.lat];
+  nav.lastFixAt = Date.now();
   // keep the ride recoverable: Back, a reload or a crash used to lose it all
   if (nav.recorder && ++navFixesSinceStash >= STASH_EVERY_FIXES) {
     navFixesSinceStash = 0;

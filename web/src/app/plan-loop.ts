@@ -119,6 +119,11 @@ export async function requestLoop(): Promise<void> {
     }
   } catch (err) {
     if (ticket.stale()) return;
+    // see requestRoute: a failure under points that have since changed is not an answer
+    if (store.avoidRevision !== avoidRevision) {
+      void requestLoop();
+      return;
+    }
     errBox.textContent = plainError(err);
     errBox.style.display = "block";
   } finally {

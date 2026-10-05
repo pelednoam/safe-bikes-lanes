@@ -360,6 +360,11 @@ export function sunsetTime(date: Date, lat: number, lon: number): Date {
   return new Date(day + sunsetMinUtc * 60_000);
 }
 
+/** Whether the track passes within `withinM` metres of a point. */
+export function trackPassesNear(track: Track, point: [number, number], withinM: number): boolean {
+  return snapToTrack(track, point[0], point[1]).offM <= withinM;
+}
+
 /** The point `alongM` metres along the track, clamped to its ends. */
 export function pointAlong(track: Track, alongM: number): [number, number] {
   const { coords, cumM, totalM } = track;

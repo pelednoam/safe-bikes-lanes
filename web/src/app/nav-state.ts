@@ -17,6 +17,9 @@ interface Nav {
   dest: [number, number] | null;
   dot: Marker | null;
   lastPos: [number, number] | null;
+  /** When that position was reported (ms): a position kept after the signal was lost is
+   * where the rider was, and not where they are. */
+  lastFixAt: number;
   /** Set while detouring to a kid stop: where the ride was originally headed. */
   originalDest: [number, number] | null;
   /** "go with my street choice": reroutes respect the rider's direction. */
@@ -51,6 +54,7 @@ export const nav: Nav = {
   dest: null,
   dot: null,
   lastPos: null,
+  lastFixAt: 0,
   originalDest: null,
   myWay: readItem("navMyWay") === "1",
   posShown: null,

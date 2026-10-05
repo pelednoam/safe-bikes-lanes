@@ -55,6 +55,16 @@ export function showRideAlert(text: string, kind: "hazard" | "gps" = "hazard"): 
   box.style.display = "block";
 }
 
+let flashTimer = 0;
+
+/** Show an alert for a while, then take it down: the one timer is this function's, so a
+ * newer message is never taken down early by the timer of an older one. */
+export function flashRideAlert(text: string, kind: "hazard" | "gps" = "hazard", ms = 5000): void {
+  window.clearTimeout(flashTimer);
+  showRideAlert(text, kind);
+  flashTimer = window.setTimeout(hideRideAlert, ms);
+}
+
 export function hideRideAlert(): void {
   el<HTMLDivElement>("nav-alert").style.display = "none";
   rideEngine.alertHidden();

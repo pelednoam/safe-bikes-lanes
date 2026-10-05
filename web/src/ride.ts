@@ -20,6 +20,7 @@ import {
   buildTrack,
   distM,
   type Maneuver,
+  pointAlong,
   type RideAlert,
   snapToTrack,
   type Track,
@@ -191,6 +192,8 @@ export class RideEngine {
   /** 0 = nothing announced for `next`, 1 = far call, 2 = near call, 3 = "now" */
   private announceStage = 0;
   private hint = -1;
+  /** How far along the track the last fix put the rider; null off it, or before any. */
+  private lastAlongM: number | null = null;
   private arrived = false;
   private alertNext = 0;
   private alertUntilM = 0;
@@ -261,6 +264,15 @@ export class RideEngine {
     this.zoomTarget = NAV_ZOOM_CRUISE;
   }
 
+  /** The place `aheadM` metres further along the track from where the last fix put the
+   * rider, on the leg they are riding (the search is windowed on their previous position, so
+   * a loop or an out-and-back is read on the right pass). Null with no track, no fix yet, or
+   * a rider off the route: there is no "ahead" to point at. */
+  pointAhead(aheadM: number): [number, number] | null {
+    if (this.track === null || this.lastAlongM === null) return null;
+    return pointAlong(this.track, this.lastAlongM + aheadM);
+  }
+
   /** Follow this route from its beginning: a new ride, a reroute, a detour. */
   setRoute(payload: RoutePayload, loopLeg: LoopLeg | null = null): void {
     this.loopLeg = loopLeg;
@@ -284,6 +296,8 @@ export class RideEngine {
     // first fix to the finish: "you have arrived" at the start of every loop, the
     // ride recorder closed, and the loop counted as already ridden.
     this.hint = 0;
+    // progress on the track just replaced is no progress on this one
+    this.lastAlongM = null;
     this.arrived = false;
     this.nextMilestone = 1;
     this.halfway = false;
@@ -410,6 +424,7 @@ export class RideEngine {
     if (!this.prevPos || distM(this.prevPos, here) > 3) this.prevPos = here;
 
     const snap = snapToTrack(track, fix.lon, fix.lat, this.hint);
+    this.lastAlongM = snap.offM <= OFF_ROUTE_M ? snap.alongM : null;
     // Where the last good fix was, for a gap that begins after it: on the line, or
     // not. Read by the NEXT fix's gap, so it is set here, after this fix's own has
     // been decided; it is this alone, not the strikes below, that says whether a gap

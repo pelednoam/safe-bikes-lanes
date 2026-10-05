@@ -191,6 +191,12 @@ export async function requestRoute(): Promise<void> {
     links.frameRoute.call(fallback);
   } catch (err) {
     if (ticket.stale()) return;
+    // this failed under the points it started with: if they changed while it ran (the
+    // saved hazards arrived late), it is not an answer, so plan again and show nothing
+    if (store.avoidRevision !== avoidRevision) {
+      void requestRoute();
+      return;
+    }
     store.poiMarker?.remove();
     store.poiMarker = null;
     store.loopParams = null;

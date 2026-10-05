@@ -257,6 +257,43 @@ afterEach(() => {
   setUnits("imperial");
 });
 
+describe("pointAhead", () => {
+  it("is nowhere before a fix, and the place that far on once the rider is on the route", () => {
+    const r = new Ride(route(TOWN));
+    expect(r.engine.pointAhead(20)).toBeNull();
+    r.ride({ untilM: 150, speedKmh: 12 });
+    const path = pathOf(r.payload);
+    const ahead = r.engine.pointAhead(20);
+    expect(ahead).not.toBeNull();
+    // the rider is about 150 m along, so this is about 170 m along the route
+    const expected = pointAlong(path, 170).at;
+    expect(distM(ahead as LngLat, expected)).toBeLessThan(8);
+  });
+
+  it("is nowhere for a rider off the route, where there is no ahead to point at", () => {
+    const r = new Ride(route(TOWN));
+    r.ride({ untilM: 100, speedKmh: 12 });
+    expect(r.engine.pointAhead(20)).not.toBeNull();
+    const here = r.engine.pointAhead(0) as LngLat;
+    // well clear of every leg of the route (the town is a grid, and a point a few hundred
+    // metres to one side can be on another leg), reached over a plausible time: a jump that
+    // size in a second is the engine's to reject as a GPS glitch, and then the rider is still
+    // where they were
+    const away = offset(here, 200, 1500);
+    expect(Math.min(...pathOf(r.payload).map((q) => distM(q, away)))).toBeGreaterThan(500);
+    for (let i = 0; i < 4; i++) r.fix({ lon: away[0], lat: away[1], accuracy: 8, speed: 3, heading: 90 }, 60_000);
+    expect(r.engine.pointAhead(20)).toBeNull();
+  });
+
+  it("starts again with a new route, so a stale progress is never pointed along", () => {
+    const r = new Ride(route(TOWN));
+    r.ride({ untilM: 150, speedKmh: 12 });
+    expect(r.engine.pointAhead(20)).not.toBeNull();
+    r.engine.setRoute(route(TOWN));
+    expect(r.engine.pointAhead(20)).toBeNull();
+  });
+});
+
 describe("a whole ride", () => {
   it("guides every turn, keeps count, and arrives once", () => {
     const r = new Ride(route(TOWN));

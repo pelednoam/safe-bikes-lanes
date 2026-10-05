@@ -5,7 +5,7 @@
 import { links } from "./links.js";
 import { newestWins } from "../newest.js";
 import { PhotoUrls } from "../photourls.js";
-import { HAZARD_LABELS, type HazardCategory, type HazardReport, addHazard, buildReportText, downscalePhoto, getHazardPhoto, listHazards, setHazardCategory } from "../hazards.js";
+import { addHazard, buildReportText, downscalePhoto, getHazardPhoto, HAZARD_LABELS, type HazardCategory, type HazardReport, listHazards, removeHazard, setHazardCategory, StoreUnavailable } from "../hazards.js";
 import { reportCaught } from "../report.js";
 import { store } from "./store.js";
 import { applyAvoidPoints } from "./avoid.js";
@@ -18,7 +18,7 @@ import { hideRideAlert, showRideAlert } from "./nav-banner.js";
 import { distM } from "../nav.js";
 import { speak, vibrate } from "./nav-voice.js";
 import { requestRoute } from "./plan-route.js";
-import { findAnotherWay } from "./hazard-blocked.js";
+import { freshFix, reportBlocked } from "./hazard-blocked.js";
 
 let hazardPendingLoc: [number, number] | null = null;
 
@@ -32,21 +32,19 @@ export const hazardPhotos = new PhotoUrls(getHazardPhoto);
 /** Read the hazards on the device and tell the router and the map. Only the newest read
  * is applied (a slow older read must not put an older list back over a backup restore's),
  * and a caller is released when the newest has been (see src/newest.ts). */
-const refreshHazardsNewest = newestWins(applyHazards);
-
-export function refreshHazards(): Promise<void> {
-  return refreshHazardsNewest();
-}
+export const refreshHazards = newestWins(applyHazards);
 
 async function applyHazards(isCurrent: () => boolean): Promise<void> {
   let list: HazardReport[];
   try {
     list = await listHazards();
   } catch (err) {
-    // The database and the mirror both failed. What the router and the map already have
-    // stays: replacing a list that is known with an empty one would take every hazard
-    // out of the next route, mid-ride included.
-    reportCaught("error", err);
+    // Nothing could be read: not the same as nothing reported. What the router and the map
+    // already have stays, since replacing a list that is known with an empty one would take
+    // every hazard and closure out of the next route, mid-ride included. A store that is
+    // simply unavailable (blocked site data, nothing mirrored) is not worth a report; any
+    // other failure is.
+    if (!(err instanceof StoreUnavailable)) reportCaught("error", err);
     return;
   }
   if (!isCurrent()) return;
@@ -117,12 +115,8 @@ async function quickReport(): Promise<void> {
     if (nav.lastPos) openHazardDialog(nav.lastPos[0], nav.lastPos[1]);
     return;
   }
-  const at = nav.lastPos;
-  if (!at) {
-    showRideAlert("⚠️ no position yet — can't report from here", "gps");
-    window.setTimeout(hideRideAlert, 4000);
-    return;
-  }
+  const at = freshFix("report");
+  if (at === null) return;
   // tapping again because nothing visible happened used to file a second report
   const near = store.hazards.find((hz) => distM([hz.lon, hz.lat], at) < 20);
   const id = near?.id ?? `${Date.now()}`;
@@ -216,11 +210,14 @@ export function initHazardDialog(): void {
       if (cat === undefined || id === null) return;
       if (cat === "blocked" && store.navActive) {
         // "blocked" is a closure to the router, and the rider is on the way that is
-        // blocked: find another, as the blocked-ahead button does
-        void setHazardCategory(id, cat)
-          .then(refreshHazards)
-          .then(findAnotherWay)
-          .catch(() => undefined);
+        // blocked: do what the blocked-ahead button does. The closure goes ahead of them,
+        // where the barrier is, and not where they were some seconds ago, so the "other"
+        // report filed at the tap is replaced by it rather than left beside it.
+        void removeHazard(id)
+          .catch((err: unknown) => {
+            reportCaught("error", err);
+          })
+          .then(reportBlocked);
         return;
       }
       void setHazardCategory(id, cat)

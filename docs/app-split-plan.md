@@ -90,9 +90,9 @@ module is cut, and each commit should correct them here.
 | `app/nav-session.ts` | 180 | starting, exiting, arriving, detours, resuming |
 | `app/nav-controls.ts` | 131 | the ride's buttons, hazard report from the bike, the back button |
 | `app/units-pref.ts` | 45 | the units preference: labels, limits, re-rendering what shows a distance |
-| `newest.ts` (in `src/`) | 22 | run a job so only the newest result is applied (the hazard read) |
-| `app/hazard-dialog.ts` | 197 | hazard reports: the dialog, reading them, the one-tap report from the bike |
-| `app/hazard-blocked.ts` | 65 | "blocked ahead": mark it closed, re-plan, say what came of it |
+| `newest.ts` (in `src/`) | 29 | run a job so only the newest result is applied (the hazard read) |
+| `app/hazard-dialog.ts` | 191 | hazard reports: the dialog, reading them, the one-tap report from the bike |
+| `app/hazard-blocked.ts` | 100 | "blocked ahead": mark it closed ahead of the rider, re-plan, say honestly what came of it |
 | `hooks.ts` (in `src/`) | 17 | the registry the hooks are made with |
 | `tests/appsize.test.ts` | | the size and cycle guard |
 

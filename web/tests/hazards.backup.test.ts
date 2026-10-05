@@ -13,6 +13,7 @@ import {
   addHazard,
   HAZARD_MIRROR_KEY,
   listHazards,
+  StoreUnavailable,
   removeHazard,
   setHazardCategory,
   type HazardReport,
@@ -72,9 +73,10 @@ describe("hazard reports in the backup", () => {
       expect(listed.map((h) => h.id)).toEqual(["b", "a"]);
       // the mirror has no photos, and a report doesn't claim one
       expect(listed.find((h) => h.id === "a")?.hasPhoto).toBe(false);
-      // and with nothing mirrored there is nothing known: an empty list, not an error
+      // and with nothing mirrored nothing is known, which is not the same as nothing reported:
+      // the caller is told, so it can keep what it already has
       localStorage.clear();
-      expect(await listHazards()).toEqual([]);
+      await expect(listHazards()).rejects.toBeInstanceOf(StoreUnavailable);
     } finally {
       indexedDB.open = open;
     }

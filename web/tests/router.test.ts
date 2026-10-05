@@ -215,14 +215,96 @@ describe("blocked spots", () => {
     expect(r.routeOptions(A, B, "young_kids")[0]?.payload.summary.meters).toBe(5);
   });
 
-  it("still finds the way out for a rider standing inside the blocked zone", () => {
-    // every street within 30 m of the rider is priced as blocked; the cheapest way out
-    // is still found, and the route still reaches B
-    const r = direct();
-    r.setBlockedPoints([A]);
-    const options = r.routeOptions(A, B, "young_kids");
-    expect(options.length).toBeGreaterThan(0);
-    expect(options[0]?.payload.summary.meters).toBeGreaterThan(0);
+  // metres east and north of a corner of Cambridge, as lon/lat
+  const at = (x: number, y: number): [number, number] => [
+    -71.1 + x / (111_320 * Math.cos((42.38 * Math.PI) / 180)),
+    42.38 + y / 110_540,
+  ];
+  const grid = (nodes: [number, number][], streets: [number, number, number][]): Router =>
+    new Router({
+      nodes: nodes.map(([x, y]) => [...at(x, y), 10] as [number, number, number]),
+      names: ["", "Busy Ave", "Quiet St"],
+      classes: [...CLASSES],
+      edges: streets.flatMap(([u, v, len]) => [edge(u, v, len, "quiet_street", 2), edge(v, u, len, "quiet_street", 2)]),
+      geoms: [],
+    });
+  const meters = (r: Router, from: [number, number], to: [number, number]): number | undefined =>
+    r.routeOptions(from, to, "young_kids")[0]?.payload.summary.meters;
+
+  it("closes a long block by its line, not its midpoint: a barrier at one end still closes it", () => {
+    // direct 300 m east; the way round over a 200 m rise is 500 m. The barrier is 20 m from
+    // the west end, 130 m from the block's midpoint: matched by midpoint (30 m), it closes
+    // nothing at all, and the rider is told another way was found when it was not.
+    const r = grid(
+      [
+        [0, 0],
+        [300, 0],
+        [150, 200],
+      ],
+      [
+        [0, 1, 300],
+        [0, 2, 250],
+        [2, 1, 250],
+      ],
+    );
+    expect(meters(r, at(0, 0), at(300, 0))).toBe(300);
+    r.setBlockedPoints([at(20, 0)]);
+    expect(meters(r, at(0, 0), at(300, 0))).toBe(500);
+  });
+
+  it("closes only the street the point is on, not the one beside it", () => {
+    // two parallel streets 20 m apart, the barrier on the lower one
+    const r = grid(
+      [
+        [0, 0],
+        [200, 0],
+        [0, 20],
+        [200, 20],
+      ],
+      [
+        [0, 1, 200],
+        [2, 3, 200],
+        [0, 2, 20],
+        [1, 3, 20],
+      ],
+    );
+    r.setBlockedPoints([at(100, 0)]);
+    // the route takes the upper street: 20 up, 200 along, 20 down
+    expect(meters(r, at(0, 0), at(200, 0))).toBe(240);
+  });
+
+  it("starts a rider on a closed street from their own side of the barrier", () => {
+    // A---B---E along the bottom (A-B is 40 m, closed at 35 m); the way round is A-C-D-B.
+    // The rider is at 25 m: the nearest intersection is B (15 m), beyond the barrier, but
+    // the rider is not: the route must start at A and go round, not begin on the far side.
+    const r = grid(
+      [
+        [0, 0],
+        [40, 0],
+        [80, 0],
+        [0, 60],
+        [40, 60],
+      ],
+      [
+        [0, 1, 40],
+        [1, 2, 40],
+        [0, 3, 60],
+        [3, 4, 40],
+        [4, 1, 60],
+      ],
+    );
+    const rider = at(25, 0);
+    expect(meters(r, rider, at(80, 0))).toBe(40); // unclosed, from B
+    r.setBlockedPoints([at(35, 0)]);
+    const route = r.routeOptions(rider, at(80, 0), "young_kids")[0];
+    expect(route?.payload.summary.meters).toBe(200); // A, C, D, B, E
+    const first = route?.payload.geojson.features[0]?.geometry;
+    const start = first?.type === "LineString" ? (first.coordinates[0] as [number, number]) : null;
+    expect(start, "the route began beyond the barrier").not.toBeNull();
+    const [ax, ay] = at(0, 0);
+    expect(Math.hypot(((start?.[0] ?? 0) - ax) * 111_320 * Math.cos((42.38 * Math.PI) / 180), ((start?.[1] ?? 0) - ay) * 110_540)).toBeLessThan(5);
+    // and a rider on the far side of the barrier starts from B
+    expect(meters(r, at(38, 0), at(80, 0))).toBe(40);
   });
 
   it("changes nothing for a point nowhere near a street", () => {

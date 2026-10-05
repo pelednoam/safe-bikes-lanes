@@ -9,6 +9,7 @@ import {
   pointAlong,
   snapToTrack,
   sunsetTime,
+  trackPassesNear,
   trackBearing,
   trackBearingAhead,
   trackSlice,
@@ -68,6 +69,19 @@ describe("buildTrack", () => {
     expect(track.coords).toHaveLength(3);
     expect(track.totalM).toBeGreaterThan(195);
     expect(track.totalM).toBeLessThan(205);
+  });
+});
+
+describe("trackPassesNear", () => {
+  const track = buildTrack(lRoute());
+
+  it("is whether the route runs within that distance of a point", () => {
+    const on = pointAlong(track, 60);
+    expect(trackPassesNear(track, on, 5)).toBe(true);
+    // 25 m to the side of the first leg
+    const beside: [number, number] = [on[0], on[1] + 25 * DLAT];
+    expect(trackPassesNear(track, beside, 15)).toBe(false);
+    expect(trackPassesNear(track, beside, 40)).toBe(true);
   });
 });
 

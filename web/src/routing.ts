@@ -83,7 +83,8 @@ export interface RoutingApi {
   /** What routes avoid: the rider's sketchy marks and hazard reports, and
    * construction zones. Kept here and re-applied whenever the graph is rebuilt. */
   setSketchyMarks(points: [number, number][]): void;
-  /** Spots reported blocked: routes go round them, however far (see Router). */
+  /** Streets reported blocked: routes go round them unless the way round costs more than
+   * 200 times the closed street (see Router). */
   setBlockedPoints(points: [number, number][]): void;
   setConstructionPoints(points: [number, number][]): void;
 }

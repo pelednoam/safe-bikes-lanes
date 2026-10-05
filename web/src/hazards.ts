@@ -136,22 +136,43 @@ export async function addHazard(report: HazardReport, photo: Blob | null): Promi
   mirrorUpsert(withoutPhoto(stored));
 }
 
+/** The device's store could not be read and nothing is mirrored, so what the rider has
+ * reported is not known: not the same as having reported nothing. */
+export class StoreUnavailable extends Error {
+  constructor(readonly reason: unknown) {
+    super("the hazard reports could not be read");
+    this.name = "StoreUnavailable";
+  }
+}
+
+/** Reports filed as "blocked" before this moment meant "a blocked lane or path": a price,
+ * not a closure, and stay one. From then on blocked means the way is shut. */
+export const CLOSURES_SINCE = Date.parse("2026-10-05T00:00:00Z");
+/** A closure lapses after this long, back to a price: a delivery truck or a fallen branch
+ * is gone in a day or two, and nothing on the ride screen takes a mark off. A rider who is
+ * still held up marks it again. */
+export const CLOSURE_LIFETIME_MS = 72 * 3_600_000;
+
+/** Whether a report is a closure the router should go round, as of `now`. */
+export function isClosure(report: HazardReport, now = Date.now()): boolean {
+  return report.category === "blocked" && report.t >= CLOSURES_SINCE && now - report.t < CLOSURE_LIFETIME_MS;
+}
+
 export async function listHazards(): Promise<HazardReport[]> {
   let all: HazardReport[];
   try {
     all = (await tx<StoredHazard[]>("readonly", (s) => s.getAll() as IDBRequest<StoredHazard[]>)).map(
       withoutPhoto,
     );
-  } catch {
+  } catch (err) {
     // IndexedDB won't open (site data blocked, a private window, a full disk). What is
     // left of the rider's reports is the mirror, text and place without the photos:
-    // routes should still avoid them, and the map still show them. The mirror is
-    // written whenever a report is filed or read, so an empty one means none are known:
-    // for a rider who has never filed one, in a browser that blocks storage, that is the
-    // ordinary case and not an error.
-    return readMirror()
-      .map((r) => ({ ...r, hasPhoto: false }))
-      .sort((x, y) => y.t - x.t);
+    // routes should still avoid them, and the map still show them. With no mirror either
+    // nothing is known, which is not the same as nothing reported, and the caller is told
+    // so it can keep what it already has.
+    const mirrored = readMirror();
+    if (mirrored.length === 0) throw new StoreUnavailable(err);
+    return mirrored.map((r) => ({ ...r, hasPhoto: false })).sort((x, y) => y.t - x.t);
   }
   const mirror = readMirror();
   const known = new Set(all.map((r) => r.id));

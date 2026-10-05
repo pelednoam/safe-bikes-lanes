@@ -536,22 +536,7 @@ test("a blocked way is one tap: marked closed, said aloud, and the ride goes rou
   await expect(page.locator("#nav-alert")).toContainText(/blocked/i);
 
   // filed in the device store, as blocked
-  const categories = (): Promise<string[]> =>
-    page.evaluate(
-      () =>
-        new Promise<string[]>((resolve) => {
-          const req = indexedDB.open("bike-hazards", 1);
-          req.onsuccess = () => {
-            const all = req.result.transaction("hazards", "readonly").objectStore("hazards").getAll();
-            all.onsuccess = () => {
-              resolve((all.result as { category: string }[]).map((h) => h.category));
-            };
-          };
-          req.onerror = () => {
-            resolve([]);
-          };
-        }),
-    );
+  const categories = (): Promise<string[]> => storedCategories(page);
   await expect.poll(categories, { timeout: 10_000 }).toEqual(["blocked"]);
 
   // another way is found, and said
@@ -574,6 +559,52 @@ test("a blocked way is one tap: marked closed, said aloud, and the ride goes rou
       `the new route still runs through the blocked stretch (${m} m along the old one)`,
     ).toBeGreaterThan(8);
   }
+});
+
+/** The categories of every report in the device store. */
+const storedCategories = (page: Page): Promise<string[]> =>
+  page.evaluate(
+    () =>
+      new Promise<string[]>((resolve) => {
+        const req = indexedDB.open("bike-hazards", 1);
+        req.onsuccess = () => {
+          const all = req.result.transaction("hazards", "readonly").objectStore("hazards").getAll();
+          all.onsuccess = () => {
+            resolve((all.result as { category: string }[]).map((h) => h.category));
+          };
+        };
+        req.onerror = () => {
+          resolve([]);
+        };
+      }),
+  );
+
+test("tapping blocked twice in a row files one report, not two", async ({ page }) => {
+  const path = await startNav(page);
+  await ride(page, path, { speedKmh: 12, timeScale: 30, untilM: 200 });
+  await page.locator("#nav-banner").click({ position: { x: 40, y: 60 } });
+  const button = page.locator("#nav-blocked");
+  await button.dispatchEvent("click");
+  await button.dispatchEvent("click");
+  await expect(page.locator("#nav-alert")).toContainText(/found another way|no way round|re-planning/i, {
+    timeout: 40_000,
+  });
+  expect(await storedCategories(page)).toEqual(["blocked"]);
+});
+
+test("choosing blocked in the what-was-it row closes it ahead and replaces the quick report", async ({
+  page,
+}) => {
+  const path = await startNav(page);
+  await ride(page, path, { speedKmh: 12, timeScale: 30, untilM: 200 });
+  await page.locator("#nav-banner").click({ position: { x: 40, y: 60 } });
+  await page.locator("#nav-report").click();
+  await page.locator('#nav-classify button[data-cat="blocked"]').click();
+  await expect(page.locator("#nav-alert")).toContainText(/found another way|no way round|re-planning/i, {
+    timeout: 40_000,
+  });
+  // one report, a closure; the "other" it started as is gone
+  await expect.poll(() => storedCategories(page), { timeout: 10_000 }).toEqual(["blocked"]);
 });
 
 test("reporting a hazard mid-ride is one tap, and the question comes after", async ({ page }) => {

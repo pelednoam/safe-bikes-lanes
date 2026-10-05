@@ -62,12 +62,18 @@ const HILL_EQUIV_M = 12;
 const STEEP_GRADE = 0.04;
 /** Weight multiplier for edges the user marked as sketchy. */
 const SKETCHY_MULT = 5.0;
-/** Weight multiplier for edges near a spot reported blocked. Not a preference but a
- * closure: large enough that no sensible detour costs more than going through, and
- * still finite, so a rider standing inside the zone, where every street around them is
- * priced this way, can find the cheapest way out of it. */
+/** Weight multiplier for a street reported blocked. Not a preference but a closure: a
+ * route goes round unless the way round costs more than 200 times the closed street,
+ * which is longer than any detour a rider would take. Finite on purpose, so that a trip
+ * whose only way is through still gets a route (and says so) rather than none. */
 const BLOCKED_MULT = 200.0;
-const BLOCKED_SNAP_M = 30;
+/** How near (m) a reported blockage has to be to a street's own line, not its midpoint,
+ * to close that street: GPS wander, not a neighbourhood. A point closes the one street
+ * (and its reverse) that passes nearest it, so a parallel street or a junction's other
+ * exits stay open. */
+const BLOCKED_SNAP_M = 15;
+/** How near (m) a rider has to be to a street to be on it, for a closed one. */
+const ON_STREET_M = 25;
 /** How close a what-if point has to be to count that edge as rebuilt. Wider
  * than a sketchy mark: a project is a whole corridor, not one spot. */
 const UPGRADE_SNAP_M = 30;
@@ -390,6 +396,8 @@ export class Router {
   private readonly midY: Float64Array;
   private sketchy = new Set<number>();
   private blocked = new Set<number>();
+  /** For each closed street, the points that closed it. */
+  private blockedAt = new Map<number, [number, number][]>();
   private construction = new Set<number>();
   /** Edges to cost as if already built, for "what if this were protected?".
    * Empty in every ordinary route: this is a question, not a setting. */
@@ -546,10 +554,114 @@ export class Router {
     this.sketchy = this.pointsToEdgeSet(points, SKETCHY_SNAP_M);
   }
 
-  /** Spots reported blocked: edges near them cost so much that a route goes round,
-   * however far, rather than through (both directions). */
+  /** Metres from a point to a street's own line (every bend of it), not to its midpoint:
+   * a long block's midpoint can be far from a barrier at one end of it. */
+  private metresToEdge(ei: number, lon: number, lat: number, kx: number, ky: number): number {
+    const coords = this.edgeCoords(ei);
+    let best = Infinity;
+    for (let i = 1; i < coords.length; i++) {
+      const a = coords[i - 1] as [number, number];
+      const b = coords[i] as [number, number];
+      const ax = (lon - a[0]) * kx;
+      const ay = (lat - a[1]) * ky;
+      const bx = (b[0] - a[0]) * kx;
+      const by = (b[1] - a[1]) * ky;
+      const len2 = bx * bx + by * by;
+      const t = len2 > 0 ? Math.max(0, Math.min(1, (ax * bx + ay * by) / len2)) : 0;
+      best = Math.min(best, Math.hypot(ax - t * bx, ay - t * by));
+    }
+    return best;
+  }
+
+  /** How far along a street, from its start node, the point's nearest place on it is. */
+  private alongEdgeM(ei: number, lon: number, lat: number): number {
+    const coords = this.edgeCoords(ei);
+    const kx = 111_320 * Math.cos((lat * Math.PI) / 180);
+    const ky = 110_540;
+    let best = { d: Infinity, along: 0 };
+    let walked = 0;
+    for (let i = 1; i < coords.length; i++) {
+      const a = coords[i - 1] as [number, number];
+      const b = coords[i] as [number, number];
+      const ax = (lon - a[0]) * kx;
+      const ay = (lat - a[1]) * ky;
+      const bx = (b[0] - a[0]) * kx;
+      const by = (b[1] - a[1]) * ky;
+      const len2 = bx * bx + by * by;
+      const t = len2 > 0 ? Math.max(0, Math.min(1, (ax * bx + ay * by) / len2)) : 0;
+      const d = Math.hypot(ax - t * bx, ay - t * by);
+      const segLen = Math.sqrt(len2);
+      if (d < best.d) best = { d, along: walked + t * segLen };
+      walked += segLen;
+    }
+    return best.along;
+  }
+
+  /** The street whose own line passes nearest the point, within maxM; null if none does.
+   * A scan, not the midpoint index: the points asked about are a handful and rarely change,
+   * and the answer must not depend on how long a block happens to be. */
+  private nearestEdgeByLine(lon: number, lat: number, maxM: number): number | null {
+    const kx = 111_320 * Math.cos((lat * Math.PI) / 180);
+    const ky = 110_540;
+    let best: number | null = null;
+    let bestD = maxM;
+    for (let i = 0; i < this.g.edges.length; i++) {
+      const e = this.g.edges[i];
+      if (!e) continue;
+      // A street's line stays within about one and a half lengths of its midpoint, so
+      // one farther than that plus the best so far cannot be the nearest.
+      const dx = ((this.midX[i] as number) - lon) * kx;
+      const dy = ((this.midY[i] as number) - lat) * ky;
+      if (Math.hypot(dx, dy) > bestD + 1.5 * e[2]) continue;
+      const d = this.metresToEdge(i, lon, lat, kx, ky);
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    }
+    return best;
+  }
+
+  /** Streets reported blocked: each costs 200 times as much, both directions, so a route
+   * goes round it (see BLOCKED_MULT for what that does and does not promise). */
   setBlockedPoints(points: [number, number][]): void {
-    this.blocked = this.pointsToEdgeSet(points, BLOCKED_SNAP_M);
+    const closed = new Set<number>();
+    const at = new Map<number, [number, number][]>();
+    for (const point of points) {
+      const ei = this.nearestEdgeByLine(point[0], point[1], BLOCKED_SNAP_M);
+      const e = ei === null ? undefined : this.g.edges[ei];
+      if (ei === null || e === undefined) continue;
+      for (const k of [ei, ...this.reverseOf(e)]) {
+        closed.add(k);
+        const list = at.get(k) ?? [];
+        list.push(point);
+        at.set(k, list);
+      }
+    }
+    this.blocked = closed;
+    this.blockedAt = at;
+  }
+
+  /** Where a route from this position starts. The nearest intersection, except for a rider
+   * standing on a street that is closed ahead of them: there it is the end of that street
+   * on the rider's side of the closure. The nearest intersection is often the one beyond
+   * the barrier on a short block, and a route that starts there leaves the rider where
+   * they are, on the wrong side of it. */
+  private startNodeFor(from: [number, number]): number {
+    const node = this.nearestNode(from[0], from[1]);
+    if (this.blocked.size === 0) return node;
+    const ei = this.nearestEdgeByLine(from[0], from[1], ON_STREET_M);
+    const e = ei === null ? undefined : this.g.edges[ei];
+    const closures = ei === null ? undefined : this.blockedAt.get(ei);
+    if (ei === null || e === undefined || closures === undefined || closures.length === 0) return node;
+    const rider = this.alongEdgeM(ei, from[0], from[1]);
+    // the closure nearest the rider along this street
+    let barrier = this.alongEdgeM(ei, (closures[0] as [number, number])[0], (closures[0] as [number, number])[1]);
+    for (const c of closures) {
+      const along = this.alongEdgeM(ei, c[0], c[1]);
+      if (Math.abs(along - rider) < Math.abs(barrier - rider)) barrier = along;
+    }
+    return rider <= barrier ? e[0] : e[1];
   }
 
   /** Active construction: penalize edges near work zones / street permits. */
@@ -1121,7 +1233,7 @@ export class Router {
     avoid?: ReadonlySet<ProtectionClass>,
     walkMaxM = 0,
   ): RouteOption[] {
-    const a = this.nearestNode(start[0], start[1]);
+    const a = this.startNodeFor(start);
     const b = this.nearestNode(end[0], end[1]);
     if (a === b) throw new Error("start and end snap to the same intersection");
     const profile = PROFILES[profileId];
@@ -1264,7 +1376,7 @@ export class Router {
    * rider's travel direction — used by "go with my street choice" rerouting
    * so guidance continues forward instead of demanding a U-turn. */
   headingBias(from: [number, number], headingDeg: number, penalty = 8): Map<number, number> {
-    const node = this.nearestNode(from[0], from[1]);
+    const node = this.startNodeFor(from);
     const bias = new Map<number, number>();
     for (const ei of this.adj[node] ?? []) {
       const coords = this.edgeCoords(ei);
@@ -1289,7 +1401,7 @@ export class Router {
     preferFlat: boolean,
   ): number | null {
     if (targets.length === 0) return null;
-    const fromNode = this.nearestNode(from[0], from[1]);
+    const fromNode = this.startNodeFor(from);
     const w = this.weights(PROFILES[profileId], preferFlat);
     const { dist } = this.dijkstra(fromNode, null, w);
     let best: number | null = null;
@@ -1331,7 +1443,7 @@ export class Router {
     profileId: ProfileId,
     preferFlat: boolean,
   ): { option: RouteOption; poi: PoiFeature | null; more: { option: RouteOption; poi: PoiFeature | null }[] } {
-    const from = this.nearestNode(start[0], start[1]);
+    const from = this.startNodeFor(start);
     const profile = PROFILES[profileId];
     const w = this.weights(profile, preferFlat);
     const scaleX = Math.cos((start[1] * Math.PI) / 180) * 111_320;
