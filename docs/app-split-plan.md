@@ -2,9 +2,9 @@
 
 **Budget:** about 200 lines of code per file, not counting comments or blank
 lines. `app.ts` had 4,964 code lines (6,486 with comments, 6,717 at the start of
-the split); it has 1,096 (1,378) after steps 0 to 2 and 4 to 6, so the rest is about
-6 files of 200 lines at the very least. Grouping by topic instead of filling files to the brim gives
-about 38, averaging about 130. A file under budget is fine; one over it is not.
+the split); it has 411 (579) after steps 0 to 2 and 4 to 7, so what is left is two
+files of 200 lines at the very least. Grouping by topic instead of filling files to the brim has
+given 63 modules in `src/app/` so far. A file under budget is fine; one over it is not.
 
 The numbers below were counted on 2026-10-02 from the file as it stands
 (sections are `app.ts`'s own `// ----` headers). They are estimates until a
@@ -93,43 +93,31 @@ module is cut, and each commit should correct them here.
 | `newest.ts` (in `src/`) | 29 | run a job so only the newest result is applied (the hazard read) |
 | `app/hazard-dialog.ts` | 191 | hazard reports: the dialog, reading them, the one-tap report from the bike |
 | `app/hazard-blocked.ts` | 100 | "blocked ahead": mark it closed ahead of the rider, re-plan, say honestly what came of it |
+| `app/basemap-layers.ts` | 33 | the basemap at first idle, the aerial photos, the terrain; `whenIdle` |
+| `app/overlay-layers.ts` | 88 | the area overlays (heat, lanes, elevation), flat and as towers; the crossings gateways |
+| `app/network-layers.ts` | 128 | the safety network: lines, marks, hit layer, hover highlight; the street names |
+| `app/route-layers.ts` | 78 | the reach map, alternatives, the route and its marks, the part ridden, the history |
+| `app/construction-layers.ts` | 56 | construction lines and points, and their card |
+| `app/hazard-layers.ts` | 67 | the hazard points and their card |
+| `app/build-layers.ts` | 74 | where-to-build on the map |
+| `app/poi-layers.ts` | 27 | points of interest |
+| `app/hover-state.ts` | 8 | the hover popup, the street card, `dropHoverCard` |
+| `app/hover-cards.ts` | 127 | hover and tap cards for dots and areas |
+| `app/hover-segment.ts` | 73 | hovering a street or the route; marking it sketchy |
+| `app/layer-data.ts` | 26 | what the layers are filled with at load; the link the page opened with |
 | `hooks.ts` (in `src/`) | 17 | the registry the hooks are made with |
 | `tests/appsize.test.ts` | | the size and cycle guard |
 
-Steps 0, 1, 2 ("where to build"), 4 (search), 5 (planning) and 6 (navigation and hazards) are done, and the core pieces the leaves needed (the old step 3's
+Steps 0, 1, 2 ("where to build"), 4 (search), 5 (planning), 6 (navigation and hazards) and 7 (the load closure) are done, and the core pieces the leaves needed (the old step 3's
 `sources`, `data-load`, `markers`, `names`, `avoid`). Counts are from the same counter
-the guard uses. `app.ts` is down to 1,098 code lines (1,380 with comments).
+the guard uses. `app.ts` is down to 411 code lines (579 with comments).
 
-## The rest (estimated code lines)
+## The rest
 
-
-### Search (what is left)
-
-| File | ~Lines | Holds |
-|---|---|---|
-| `app/first-run.ts` | 60 | the first-run notice |
-
-### The map-load closure, 685 lines in one function, cut by feature (about 950)
-
-The closure has only 9 locals of its own, so each feature becomes an
-`init…Layers()` that receives nothing but the map.
-
-| File | ~Lines | Holds |
-|---|---|---|
-| `app/basemap-layers.ts` | 100 | the basemap injected at first idle (`applyBasemap` is in `dark-mode.ts`) |
-| `app/network-layers.ts` | 170 | the safety network, its marks, hit layers, lane map |
-| `app/construction-layers.ts` | 100 | construction lines and points, the barricade icon |
-| `app/route-layers.ts` | 120 | the route, ride history, the ride's own line |
-| `app/poi-layers.ts` | 90 | points of interest and their stops |
-| `app/hazard-layers.ts` | 70 | hazard points and taps |
-| `app/hover-cards.ts` | 150 | hover and tap cards, hover state |
-| `app/map-taps.ts` | 130 | `onTap`, `onMapTap`, the tap targets |
-
-### The entry point
-
-| File | ~Lines | Holds |
-|---|---|---|
-| `app.ts` | 150 | the entry: imports, `init…()` calls in order |
+The entry point: `app.ts` is the imports, the `init…()` calls, the map's click and the first-run
+notice, the overlay toggles, the layer legend and the start-up wiring. Step 8 splits what is
+left by feature, as the load closure was split (step 7: the closure became twelve files,
+called from `map.on("load")` in the order the layers are stacked).
 
 ## The back-edges (import cycles to cut with `hooks`)
 
@@ -155,7 +143,7 @@ From the survey, by function name:
 4. Search: done (five `search-*` files, `phone-search`, and `sheet`, which phone search needed).
 5. Planning: done (`plan-route`, `plan-loop`, `plan-options`, `plan-controls`, `summary`, `permalink`).
 6. Navigation and hazards: the eight files, with the hooks.
-7. The load closure: one commit per layer file, then `hover-cards`, `map-taps`.
+7. The load closure: done (eleven `*-layers`, `hover-*` and `layer-data` files; `map-taps` stays with step 8).
 8. `app.ts` reduced to the entry.
 
 Steps 6 and 7 are the riskiest. Re-decide there, with the real line counts.
