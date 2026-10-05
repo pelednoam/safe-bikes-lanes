@@ -294,7 +294,11 @@ describe("snapping on the real map", () => {
       const e = graph.edges[ei];
       if (e) for (const rev of reverse.get(`${e[1]},${e[0]}`) ?? []) want.add(rev);
     }
-    expect(want.size).toBeGreaterThan(50);
+    // Enough edges that agreeing with the scan means something. The zones are the permit feed
+    // in the data snapshot CI fetches, and it shrinks as permits expire between snapshots (928
+    // features in one, 734 in the next): a floor of 50 suited the first (68 edges) and failed
+    // the build on the second (44).
+    expect(want.size).toBeGreaterThan(20);
 
     // construction and what-if builds share one point-to-edge-set path, and
     // only the what-if reports its size
