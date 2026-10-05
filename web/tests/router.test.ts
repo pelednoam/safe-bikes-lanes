@@ -177,6 +177,61 @@ describe("sketchy marks", () => {
   });
 });
 
+describe("blocked spots", () => {
+  // the direct way is 5 m and busy; the way round is 600 m and quiet
+  const direct = (): Router =>
+    new Router({
+      nodes: NODES,
+      names: ["", "Busy Ave", "Quiet St"],
+      classes: [...CLASSES],
+      edges: [
+        edge(0, 1, 5, "busy_street", 1),
+        edge(1, 0, 5, "busy_street", 1),
+        edge(0, 2, 300, "quiet_street", 2),
+        edge(2, 0, 300, "quiet_street", 2),
+        edge(2, 1, 300, "quiet_street", 2),
+        edge(1, 2, 300, "quiet_street", 2),
+      ],
+      geoms: [],
+    });
+  const MID_OF_DIRECT: [number, number] = [-71.0995, 42.38];
+
+  it("goes round however far, where a sketchy mark would still go through", () => {
+    const sketchy = direct();
+    sketchy.setSketchyMarks([MID_OF_DIRECT]);
+    // a dislike is a price (x5): 5 m of it is still cheaper than 600 m of the other way
+    expect(sketchy.routeOptions(A, B, "young_kids")[0]?.payload.summary.meters).toBe(5);
+
+    const blocked = direct();
+    blocked.setBlockedPoints([MID_OF_DIRECT]);
+    expect(blocked.routeOptions(A, B, "young_kids")[0]?.payload.summary.meters).toBe(600);
+  });
+
+  it("is lifted by clearing the points", () => {
+    const r = direct();
+    r.setBlockedPoints([MID_OF_DIRECT]);
+    expect(r.routeOptions(A, B, "young_kids")[0]?.payload.summary.meters).toBe(600);
+    r.setBlockedPoints([]);
+    expect(r.routeOptions(A, B, "young_kids")[0]?.payload.summary.meters).toBe(5);
+  });
+
+  it("still finds the way out for a rider standing inside the blocked zone", () => {
+    // every street within 30 m of the rider is priced as blocked; the cheapest way out
+    // is still found, and the route still reaches B
+    const r = direct();
+    r.setBlockedPoints([A]);
+    const options = r.routeOptions(A, B, "young_kids");
+    expect(options.length).toBeGreaterThan(0);
+    expect(options[0]?.payload.summary.meters).toBeGreaterThan(0);
+  });
+
+  it("changes nothing for a point nowhere near a street", () => {
+    const r = direct();
+    r.setBlockedPoints([[-71.2, 42.5]]);
+    expect(r.routeOptions(A, B, "young_kids")[0]?.payload.summary.meters).toBe(5);
+  });
+});
+
 describe("heading bias (go with my street choice)", () => {
   /* Two quiet ways from 0 to 1 (east):
    *   0 -> 2 (20 m WEST) -> 1 (120 m)  = 140 m, normally cheapest

@@ -83,6 +83,8 @@ export interface RoutingApi {
   /** What routes avoid: the rider's sketchy marks and hazard reports, and
    * construction zones. Kept here and re-applied whenever the graph is rebuilt. */
   setSketchyMarks(points: [number, number][]): void;
+  /** Spots reported blocked: routes go round them, however far (see Router). */
+  setBlockedPoints(points: [number, number][]): void;
   setConstructionPoints(points: [number, number][]): void;
 }
 
@@ -98,6 +100,7 @@ export function createRoutingApi(
   let router: Router | null = null;
   let builtTileCount = -1;
   let sketchy: [number, number][] = [];
+  let blocked: [number, number][] = [];
   let construction: [number, number][] = [];
 
   const need = (): Router => {
@@ -159,6 +162,7 @@ export function createRoutingApi(
       router = new Router(tiles.assemble());
       builtTileCount = tiles.loadedCount;
       router.setSketchyMarks(sketchy);
+      router.setBlockedPoints(blocked);
       router.setConstructionPoints(construction);
       return { ready: true, rebuilt: true };
     },
@@ -185,6 +189,10 @@ export function createRoutingApi(
     setSketchyMarks(points) {
       sketchy = points;
       router?.setSketchyMarks(points);
+    },
+    setBlockedPoints(points) {
+      blocked = points;
+      router?.setBlockedPoints(points);
     },
     setConstructionPoints(points) {
       construction = points;

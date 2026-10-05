@@ -18,6 +18,7 @@ import { hideRideAlert, showRideAlert } from "./nav-banner.js";
 import { distM } from "../nav.js";
 import { speak, vibrate } from "./nav-voice.js";
 import { requestRoute } from "./plan-route.js";
+import { findAnotherWay } from "./hazard-blocked.js";
 
 let hazardPendingLoc: [number, number] | null = null;
 
@@ -213,6 +214,15 @@ export function initHazardDialog(): void {
       const id = classifyId;
       hideClassify();
       if (cat === undefined || id === null) return;
+      if (cat === "blocked" && store.navActive) {
+        // "blocked" is a closure to the router, and the rider is on the way that is
+        // blocked: find another, as the blocked-ahead button does
+        void setHazardCategory(id, cat)
+          .then(refreshHazards)
+          .then(findAnotherWay)
+          .catch(() => undefined);
+        return;
+      }
       void setHazardCategory(id, cat)
         .then(refreshHazards)
         .catch(() => undefined);

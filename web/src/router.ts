@@ -62,6 +62,12 @@ const HILL_EQUIV_M = 12;
 const STEEP_GRADE = 0.04;
 /** Weight multiplier for edges the user marked as sketchy. */
 const SKETCHY_MULT = 5.0;
+/** Weight multiplier for edges near a spot reported blocked. Not a preference but a
+ * closure: large enough that no sensible detour costs more than going through, and
+ * still finite, so a rider standing inside the zone, where every street around them is
+ * priced this way, can find the cheapest way out of it. */
+const BLOCKED_MULT = 200.0;
+const BLOCKED_SNAP_M = 30;
 /** How close a what-if point has to be to count that edge as rebuilt. Wider
  * than a sketchy mark: a project is a whole corridor, not one spot. */
 const UPGRADE_SNAP_M = 30;
@@ -383,6 +389,7 @@ export class Router {
   private readonly midX: Float64Array;
   private readonly midY: Float64Array;
   private sketchy = new Set<number>();
+  private blocked = new Set<number>();
   private construction = new Set<number>();
   /** Edges to cost as if already built, for "what if this were protected?".
    * Empty in every ordinary route: this is a question, not a setting. */
@@ -449,6 +456,7 @@ export class Router {
       let wi = e[2] * mult * e[6] + e[7] * profile.penScale;
       if (preferFlat) wi += this.hillPen[i] as number;
       if (this.sketchy.has(i)) wi *= SKETCHY_MULT;
+      if (this.blocked.has(i)) wi *= BLOCKED_MULT;
       if (this.construction.has(i)) wi *= CONSTRUCTION_MULT;
       w[i] = wi;
     });
@@ -536,6 +544,12 @@ export class Router {
   /** Personal feedback: penalize edges near the given points (both directions). */
   setSketchyMarks(points: [number, number][]): void {
     this.sketchy = this.pointsToEdgeSet(points, SKETCHY_SNAP_M);
+  }
+
+  /** Spots reported blocked: edges near them cost so much that a route goes round,
+   * however far, rather than through (both directions). */
+  setBlockedPoints(points: [number, number][]): void {
+    this.blocked = this.pointsToEdgeSet(points, BLOCKED_SNAP_M);
   }
 
   /** Active construction: penalize edges near work zones / street permits. */

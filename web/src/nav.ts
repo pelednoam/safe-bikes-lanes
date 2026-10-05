@@ -360,6 +360,23 @@ export function sunsetTime(date: Date, lat: number, lon: number): Date {
   return new Date(day + sunsetMinUtc * 60_000);
 }
 
+/** The point `alongM` metres along the track, clamped to its ends. */
+export function pointAlong(track: Track, alongM: number): [number, number] {
+  const { coords, cumM, totalM } = track;
+  const first = coords[0] as [number, number];
+  const last = coords[coords.length - 1] as [number, number];
+  if (alongM <= 0) return first;
+  if (alongM >= totalM) return last;
+  let i = 1;
+  while (i < coords.length - 1 && (cumM[i] as number) < alongM) i++;
+  const a = coords[i - 1] as [number, number];
+  const b = coords[i] as [number, number];
+  const from = cumM[i - 1] as number;
+  const span = (cumM[i] as number) - from;
+  const t = span > 0 ? (alongM - from) / span : 0;
+  return [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])];
+}
+
 /** Bearing of the track at a segment index (for the follow camera). */
 export function trackBearing(track: Track, idx: number): number {
   const a = track.coords[Math.max(0, Math.min(idx, track.coords.length - 2))];

@@ -63,6 +63,7 @@ import { initNavRide } from "./app/nav-ride.js";
 import { initUnitsPref } from "./app/units-pref.js";
 import { initPlanLoop } from "./app/plan-loop.js";
 import { hazardPhotos, initHazardDialog, refreshHazards } from "./app/hazard-dialog.js";
+import { initHazardBlocked } from "./app/hazard-blocked.js";
 
 // The functions other modules call through src/app/links.ts, set before anything at
 // start-up runs. One is a function declaration still in this module (dropHoverCard), so
@@ -77,6 +78,7 @@ import { hazardPhotos, initHazardDialog, refreshHazards } from "./app/hazard-dia
 // arriving).
 links.dropHoverCard.set(dropHoverCard);
 initHazardDialog();
+initHazardBlocked();
 initSearchGrade();
 initSearchResults();
 initPlanRoute();

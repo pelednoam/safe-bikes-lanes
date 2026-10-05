@@ -2,7 +2,7 @@
 // for (re-plan, rejoin, speak), the tickets that keep an old answer from landing
 // late, and saving the ride when it ends.
 
-import { links } from "./links.js";
+import { links, type ReplanOutcome } from "./links.js";
 import { loopLegs, nav, rideEngine } from "./nav-state.js";
 import { store } from "./store.js";
 import { saveRide, stashInProgress } from "../rides.js";
@@ -80,15 +80,15 @@ const rerouteLane = new Lane();
 
 /** Re-plan the ride from where the rider is, keeping where it is going: after
  * something changed what the router must avoid. */
-export async function replanRide(): Promise<void> {
-  if (!store.routerReady || !nav.lastPos) return;
+export async function replanRide(): Promise<ReplanOutcome> {
+  if (!store.routerReady || !nav.lastPos) return "failed";
   // The ticket first, so a ride that ends, restarts or reroutes while this waits
   // supersedes it and it is not mistaken for the newest question when it resumes.
   const ticket = rideLane.begin();
   // a ride resumed after the page reloaded must not reroute before its hazards are in
   await avoidPointsSent();
   const from = nav.lastPos;
-  if (rideStale(ticket) || !store.navActive || from === null) return;
+  if (rideStale(ticket) || !store.navActive || from === null) return "superseded";
   // The destination pin may be why: dragged mid-ride, it used to re-plan to
   // where the ride had been going, with the pin and the guidance apart. On a
   // detour the pin is still the ride's destination, the one Resume returns to;
@@ -100,16 +100,18 @@ export async function replanRide(): Promise<void> {
   }
   try {
     const found = await rideOptionsFrom(from);
-    if (rideStale(ticket)) return;
+    if (rideStale(ticket)) return "superseded";
     const first = found?.[0];
-    if (!found || !first) return;
-    if (!trip.publish(rideTicket(ticket), found)) return;
+    if (!found || !first) return "failed";
+    if (!trip.publish(rideTicket(ticket), found)) return "superseded";
     selectOption(first.id);
     rebuildNavFromSelected();
+    return "replanned";
   } catch {
-    if (rideStale(ticket)) return;
+    if (rideStale(ticket)) return "superseded";
     showRideAlert("⚠ couldn't re-plan from here — keep to the route", "gps");
     window.setTimeout(hideRideAlert, 4000);
+    return "failed";
   }
 }
 

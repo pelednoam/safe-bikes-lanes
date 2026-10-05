@@ -575,13 +575,14 @@
   .layer-group.planners { border-top:1px solid var(--line); padding-top:11px; }
   .group-note { margin:0 0 7px; font-size:12.5px; color:var(--muted); line-height:1.35; }
   .group-note a { color:var(--accent); }
-  #nav-flags { display:flex; gap:6px; justify-content:center; margin-top:7px; }
+  #nav-flags { display:flex; flex-wrap:wrap; gap:6px; justify-content:center; margin-top:7px; }
   #nav-flags button {
     margin:0; padding:3px 9px; font-size:13px; font-weight:600; min-height:0;
     border-radius:999px; color:var(--muted);
   }
   #nav-flags button.active { color:var(--accent); border-color:var(--accent); }
   #nav-hazard { color:var(--s-busy); border-color:rgba(215,48,39,.4); }
+  #nav-blocked { color:#fff; background:var(--s-busy); border-color:var(--s-busy); }
   #nav-resume { margin-top:9px; width:100%; min-height:44px; font-size:15px; }
   /* MapLibre's own controls are dead or harmful mid-ride: the zoom buttons lose
      to the follow camera (and hand zoom control away, killing zoom-to-turn),
@@ -849,7 +850,7 @@
   <div id="nav-classify" style="display:none">
     <span id="nav-classify-q">what was it?</span>
     <button data-cat="surface" aria-label="Broken surface or glass"><span>🕳️</span>surface</button>
-    <button data-cat="blocked" aria-label="Blocked lane or path"><span>🚧</span>blocked</button>
+    <button data-cat="blocked" aria-label="Blocked: can't get through"><span>🚧</span>blocked</button>
     <button data-cat="traffic" aria-label="Dangerous traffic spot"><span>🚗</span>traffic</button>
   </div>
   <!-- always reachable: the voice says "tap resume", so it can't be behind a fold -->
@@ -869,6 +870,11 @@
          so it is available whenever the rider is on a street they dislike. -->
     <button id="nav-hazard" aria-label="Avoid this street in future routes"
             title="Avoid this street in future routes">🚫 avoid</button>
+    <!-- The way ahead is shut: one tap marks it closed where you are and finds another
+         way from here. "avoid" above is a preference for future routes and re-plans
+         nothing, which is why a blocked street could be marked and still be ridden at. -->
+    <button id="nav-blocked" aria-label="Blocked ahead: mark it and find another way"
+            title="Blocked ahead: mark it and find another way">🚧 blocked ahead</button>
   </div>
   <!-- in-page ask: window.confirm blocks the JS thread, which froze guidance,
        the follow camera and the ride recorder until it was answered -->
@@ -1166,7 +1172,7 @@
   <label>What's wrong?<br>
     <select id="hazard-category">
       <option value="surface">broken surface / glass</option>
-      <option value="blocked">blocked lane or path</option>
+      <option value="blocked">blocked — can't get through</option>
       <option value="construction">construction</option>
       <option value="traffic">dangerous traffic spot</option>
       <option value="other">other hazard</option>

@@ -55,17 +55,22 @@ let lastAvoidPoints = "";
  * and a marked spot all land here. The search rows are graded again after the
  * router has the new points, not before, or they would be graded against the old. */
 export function applyAvoidPoints(): void {
+  // A hazard reported blocked is a closure and goes to the router as one (routes go
+  // round it, however far); every other report, and the rider's own marks, are a price.
+  const where = (h: { lon: number; lat: number }): [number, number] => [h.lon, h.lat];
   const points = [
     ...store.sketchyMarks,
-    ...store.hazards.map((h): [number, number] => [h.lon, h.lat]),
+    ...store.hazards.filter((h) => h.category !== "blocked").map(where),
   ];
+  const closed = store.hazards.filter((h) => h.category === "blocked").map(where);
   void routing.setSketchyMarks(points);
+  void routing.setBlockedPoints(closed);
   // Only a change in where the points are makes a grade stale. This also runs at
   // start-up (twice), and for a hazard whose category alone changed, and bumping the
   // revision then would throw away every grade worked out and start the work again.
   // (The worker answers in the order it was asked, so the points are in before the
   // grading's first plan; a second call while one is grading takes over its lane.)
-  const key = JSON.stringify(points);
+  const key = JSON.stringify([points, closed]);
   if (key === lastAvoidPoints) return;
   lastAvoidPoints = key;
   store.avoidRevision++;

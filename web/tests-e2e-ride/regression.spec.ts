@@ -489,6 +489,93 @@ test("the street name reads as part of the instruction, not a caption", async ({
   expect(size.dist).toBeGreaterThan(size.street);
 });
 
+/** The point `m` metres along a path, and the shortest distance from a point to a path (metres). */
+function pointAtM(path: [number, number][], m: number): [number, number] {
+  const kx = 111_320 * Math.cos((path[0]![1] * Math.PI) / 180);
+  const ky = 110_540;
+  let left = m;
+  for (let i = 1; i < path.length; i++) {
+    const a = path[i - 1]!;
+    const b = path[i]!;
+    const len = Math.hypot((b[0] - a[0]) * kx, (b[1] - a[1]) * ky);
+    if (left <= len || i === path.length - 1) {
+      const t = len > 0 ? Math.min(1, left / len) : 0;
+      return [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])];
+    }
+    left -= len;
+  }
+  return path[path.length - 1]!;
+}
+
+function metresFromPath(p: [number, number], path: [number, number][]): number {
+  const kx = 111_320 * Math.cos((p[1] * Math.PI) / 180);
+  const ky = 110_540;
+  let best = Infinity;
+  for (let i = 1; i < path.length; i++) {
+    const a = path[i - 1]!;
+    const b = path[i]!;
+    const ax = (p[0] - a[0]) * kx;
+    const ay = (p[1] - a[1]) * ky;
+    const bx = (b[0] - a[0]) * kx;
+    const by = (b[1] - a[1]) * ky;
+    const len2 = bx * bx + by * by;
+    const t = len2 > 0 ? Math.max(0, Math.min(1, (ax * bx + ay * by) / len2)) : 0;
+    best = Math.min(best, Math.hypot(ax - t * bx, ay - t * by));
+  }
+  return best;
+}
+
+test("a blocked way is one tap: marked closed, said aloud, and the ride goes round it", async ({ page }) => {
+  // A rider met a blocked route and had no easy way to say so and ask for another: "avoid"
+  // only changed future routes, "report" only filed a spot, and a marked spot cost the
+  // router a fifth more, not a closure. One tap now does all three.
+  const path = await startNav(page);
+  await ride(page, path, { speedKmh: 12, timeScale: 30, untilM: 200 });
+  await page.locator("#nav-banner").click({ position: { x: 40, y: 60 } });
+  await page.locator("#nav-blocked").click();
+  await expect(page.locator("#nav-alert")).toContainText(/blocked/i);
+
+  // filed in the device store, as blocked
+  const categories = (): Promise<string[]> =>
+    page.evaluate(
+      () =>
+        new Promise<string[]>((resolve) => {
+          const req = indexedDB.open("bike-hazards", 1);
+          req.onsuccess = () => {
+            const all = req.result.transaction("hazards", "readonly").objectStore("hazards").getAll();
+            all.onsuccess = () => {
+              resolve((all.result as { category: string }[]).map((h) => h.category));
+            };
+          };
+          req.onerror = () => {
+            resolve([]);
+          };
+        }),
+    );
+  await expect.poll(categories, { timeout: 10_000 }).toEqual(["blocked"]);
+
+  // another way is found, and said
+  await expect(page.locator("#nav-alert")).toContainText(/found another way/i, { timeout: 40_000 });
+  const spoken = await page.evaluate(() => window.__rider.spoken);
+  expect(spoken.some((t) => /blocked/i.test(t)), "it did not say it aloud").toBe(true);
+
+  // and the route now drawn does not run along the stretch just ahead that was marked
+  const after = await page.evaluate(async () => {
+    const src = window._map?.getSource("route") as { getData(): Promise<GeoJSON.FeatureCollection> } | undefined;
+    return ((await src?.getData())?.features ?? []).flatMap((f) =>
+      f.geometry.type === "LineString" ? (f.geometry.coordinates as [number, number][]) : [],
+    );
+  });
+  expect(after.length, "no route is drawn").toBeGreaterThan(1);
+  for (const m of [224, 230, 236]) {
+    const old = pointAtM(path, m);
+    expect(
+      metresFromPath(old, after),
+      `the new route still runs through the blocked stretch (${m} m along the old one)`,
+    ).toBeGreaterThan(8);
+  }
+});
+
 test("reporting a hazard mid-ride is one tap, and the question comes after", async ({ page }) => {
   const path = await startNav(page);
   await ride(page, path, { speedKmh: 12, timeScale: 30, untilM: 200 });

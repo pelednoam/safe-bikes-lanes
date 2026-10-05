@@ -8,6 +8,10 @@ import type { Ticket } from "../planner.js";
 import type { RouteOption } from "../types.js";
 import type { SearchRowView } from "../ui/SearchResults.js";
 
+/** How a re-plan ended: a new route is drawn, it could not be made, or a newer question
+ * took over and this one's answer was dropped (which is not worth saying aloud). */
+export type ReplanOutcome = "replanned" | "failed" | "superseded";
+
 export const links = {
   /** Read the hazards stored on the device (and a restored backup's), tell the router,
    * and redraw them. */
@@ -46,7 +50,7 @@ export const links = {
   /** Rebuild the ride's track from the selected option (false if there is none). */
   rebuildNavFromSelected: hook<[], boolean>("rebuildNavFromSelected"),
   /** Plan again from where the rider is, mid-ride. */
-  replanRide: hook<[], Promise<void>>("replanRide"),
+  replanRide: hook<[], Promise<ReplanOutcome>>("replanRide"),
   /** Write the trip into the address bar. Set by initPermalink; the planners call it
    * when an option is chosen, which is after a plan has arrived. */
   updateHash: hook<[], void>("updateHash"),

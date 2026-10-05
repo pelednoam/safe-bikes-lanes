@@ -5,6 +5,8 @@ import {
   buildAlerts,
   buildManeuvers,
   buildTrack,
+  distM,
+  pointAlong,
   snapToTrack,
   sunsetTime,
   trackBearing,
@@ -66,6 +68,32 @@ describe("buildTrack", () => {
     expect(track.coords).toHaveLength(3);
     expect(track.totalM).toBeGreaterThan(195);
     expect(track.totalM).toBeLessThan(205);
+  });
+});
+
+describe("pointAlong", () => {
+  const track = buildTrack(lRoute());
+  const start = track.coords[0] as [number, number];
+  const corner = track.coords[1] as [number, number];
+
+  it("is the place that far along the route, on a leg and round a corner", () => {
+    expect(distM(start, pointAlong(track, 40))).toBeCloseTo(40, 0);
+    // 100 m is the corner, and 130 m is 30 m past it, on the second leg
+    expect(distM(corner, pointAlong(track, 100))).toBeLessThan(1);
+    expect(distM(corner, pointAlong(track, 130))).toBeCloseTo(30, 0);
+  });
+
+  it("snaps back to the distance it was asked for", () => {
+    for (const m of [10, 60, 99, 101, 160]) {
+      const [lon, lat] = pointAlong(track, m);
+      expect(snapToTrack(track, lon, lat).alongM).toBeCloseTo(m, 0);
+    }
+  });
+
+  it("stops at the ends of the route", () => {
+    expect(pointAlong(track, -20)).toEqual(start);
+    expect(pointAlong(track, 0)).toEqual(start);
+    expect(pointAlong(track, track.totalM + 500)).toEqual(track.coords[track.coords.length - 1]);
   });
 });
 

@@ -46,12 +46,12 @@ module is cut, and each commit should correct them here.
 | `app/dom.ts` | 8 | `el`, `emptyFC` |
 | `app/map.ts` | 29 | the map and its controls |
 | `app/store.ts` | 75 | the shared variables, `AVOIDABLE`, `loadSketchy` |
-| `app/links.ts` | 26 | the hooks other modules call; each set by the init of the module that owns the function (app.ts for the four still in it) |
+| `app/links.ts` | 27 | the hooks other modules call; each set by the init of the module that owns the function (app.ts for the four still in it) |
 | `app/services.ts` | 14 | the routing worker, basemap, trip, lanes, `dataReady` (runs at import) |
 | `app/sources.ts` | 32 | `getSource`, `ensureLayer`, the lazily loaded layer files |
 | `app/data-load.ts` | 175 | manifest, network tiles, construction, points of interest, progress |
 | `app/dark-mode.ts` | 84 | night rides: the dark basemap and UI |
-| `app/avoid.ts` | 86 | what the router avoids; bumps the grade revision |
+| `app/avoid.ts` | 89 | what the router avoids; bumps the grade revision |
 | `app/names.ts` | 79 | reverse geocoding and the name cache |
 | `app/markers.ts` | 80 | the trip's markers, setting a point, the rider's position |
 | `app/sketchy.ts` | 75 | marked spots, their list and popup |
@@ -86,18 +86,19 @@ module is cut, and each commit should correct them here.
 | `app/nav-banner.ts` | 60 | the headline, trip line, banner, alert strip, the ride's question, the stops menu |
 | `app/nav-location.ts` | 94 | the GPS fix, permission, signal lost, starting the watch |
 | `app/nav-camera.ts` | 166 | the dot and view eased toward each fix, framing a route |
-| `app/nav-ride.ts` | 180 | the engine's effects: re-plan, rejoin, speak; saving the ride |
+| `app/nav-ride.ts` | 182 | the engine's effects: re-plan, rejoin, speak; saving the ride |
 | `app/nav-session.ts` | 180 | starting, exiting, arriving, detours, resuming |
 | `app/nav-controls.ts` | 131 | the ride's buttons, hazard report from the bike, the back button |
 | `app/units-pref.ts` | 45 | the units preference: labels, limits, re-rendering what shows a distance |
 | `newest.ts` (in `src/`) | 22 | run a job so only the newest result is applied (the hazard read) |
-| `app/hazard-dialog.ts` | 189 | hazard reports: the dialog, reading them, the one-tap report from the bike |
+| `app/hazard-dialog.ts` | 197 | hazard reports: the dialog, reading them, the one-tap report from the bike |
+| `app/hazard-blocked.ts` | 65 | "blocked ahead": mark it closed, re-plan, say what came of it |
 | `hooks.ts` (in `src/`) | 17 | the registry the hooks are made with |
 | `tests/appsize.test.ts` | | the size and cycle guard |
 
 Steps 0, 1, 2 ("where to build"), 4 (search), 5 (planning) and 6 (navigation and hazards) are done, and the core pieces the leaves needed (the old step 3's
 `sources`, `data-load`, `markers`, `names`, `avoid`). Counts are from the same counter
-the guard uses. `app.ts` is down to 1,096 code lines (1,378 with comments).
+the guard uses. `app.ts` is down to 1,098 code lines (1,380 with comments).
 
 ## The rest (estimated code lines)
 

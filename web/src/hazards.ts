@@ -6,7 +6,7 @@ export type HazardCategory = "surface" | "blocked" | "construction" | "traffic" 
 
 export const HAZARD_LABELS: Record<HazardCategory, string> = {
   surface: "broken surface / glass",
-  blocked: "blocked lane or path",
+  blocked: "blocked — can't get through",
   construction: "construction",
   traffic: "dangerous traffic spot",
   other: "other hazard",
