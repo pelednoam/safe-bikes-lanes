@@ -5,6 +5,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  dataSource,
   dataUrl,
   initDataSource,
   isNewerBuild,
@@ -284,5 +285,18 @@ describe("the module's own defaults", () => {
     expect(dataUrl("a.json")).toBe("data/a.json");
     expect(typeof loadJson).toBe("function");
     expect(typeof initDataSource).toBe("function");
+  });
+});
+
+describe("the data source a page hands to its worker", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("is the bundle's data directory as an absolute address, since a worker's own are relative to its script", () => {
+    vi.stubGlobal("document", { baseURI: "https://example.test/safe-bikes-lanes/somerville/" });
+    const source = dataSource();
+    expect(source.bundled).toBe("https://example.test/safe-bikes-lanes/somerville/data/");
+    expect(source).toHaveProperty("remoteId");
   });
 });

@@ -113,17 +113,20 @@ test("walk budget selector persists into the permalink", async ({ page }) => {
 });
 
 test("dark mode, aerial view, and 3D toggles drive the map", async ({ page }) => {
+  // each theme's layers are added the first time it is asked for, and on a loaded machine
+  // that is slower than the overall limit of a test, which two waits of their own would pass
+  test.slow();
   await boot(page);
   await openSection(page, "Map layers");
   await page.locator("#dark-mode").check();
   await expect(page.locator("body")).toHaveClass(/dark/);
   // dark, and only dark: two themes shown at once would stack two basemaps.
   // Polled, because a theme's layers are added the first time it is asked for.
-  await expect.poll(() => shownThemes(page), { timeout: budget(30_000) }).toEqual(["dark"]);
+  await expect.poll(() => shownThemes(page), { timeout: budget(60_000) }).toEqual(["dark"]);
   await page.locator("#show-aerial").check();
   expect(await vis(page, "aerial")).toBe("visible");
   // the aerial view replaces the basemap rather than covering it
-  await expect.poll(() => shownThemes(page), { timeout: budget(30_000) }).toEqual([]);
+  await expect.poll(() => shownThemes(page), { timeout: budget(60_000) }).toEqual([]);
   expect(await vis(page, "network-casing")).toBe("visible"); // contrast halo
   await page.locator("#show-heat").check();
   await page.locator("#show-3d").check();

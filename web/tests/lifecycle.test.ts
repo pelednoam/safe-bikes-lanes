@@ -178,3 +178,30 @@ describe("DeferredReload", () => {
     expect(reloads).toBe(1);
   });
 });
+
+describe("ScreenLock, when the system will not let go", () => {
+  const stubborn = (): WakeLockApi => ({
+    request: async (): Promise<LockSentinel> => ({
+      released: false,
+      release: () => Promise.reject(new Error("InvalidStateError")),
+    }),
+  });
+
+  it("lets the ride end though the lock will not release", async () => {
+    const lock = new ScreenLock(stubborn, () => true);
+    await lock.acquire();
+    expect(lock.held).toBe(true);
+    lock.release(); // a refusal here is not worth a crash: nothing awaits it
+    expect(lock.held).toBe(false);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  it("gives back a lock that arrives after the ride is over, though it will not release", async () => {
+    const lock = new ScreenLock(stubborn, () => true);
+    const pending = lock.acquire();
+    lock.release(); // the ride ended while the request was in flight
+    await pending;
+    expect(lock.held).toBe(false);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+});

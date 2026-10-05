@@ -6,14 +6,17 @@
 // ride mode puts upside-down street names under the rider's own, a font stack
 // this app doesn't vendor requests glyph ranges that 404 and draws nothing, and
 // an icon layer asks for a sprite there isn't one of.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   BASEMAP_MAXZOOM,
   BASEMAP_SOURCE,
   basemapLayers,
   basemapSource,
+  basemapUrl,
   createBasemap,
+  glyphsUrl,
+  tileDeps,
   VENDORED_FONT_STACK,
 } from "../src/basemap.js";
 import { TILE_TEMPLATE } from "../src/tilecache.js";
@@ -185,5 +188,31 @@ describe("the basemap on a map", () => {
     expect(m.sources).toEqual([]); // not while the style may still be loading
     await bm.ensure("light");
     expect(m.sources).toEqual([BASEMAP_SOURCE]);
+  });
+});
+
+describe("where the basemap and its glyphs are", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("is the file beside the bundle, and the glyph ranges beside it", () => {
+    vi.stubGlobal("window", {}); // a browser: no Capacitor on it
+    expect(basemapUrl()).toMatch(/\/basemap\.pmtiles$/);
+    expect(glyphsUrl()).toMatch(/\/fonts\/glyphs\/\{fontstack\}\/\{range\}\.pbf$/);
+  });
+
+  it("is the site's file in the app, whose bundle is not served beside it", () => {
+    vi.stubGlobal("window", { Capacitor: { isNativePlatform: () => true } });
+    expect(basemapUrl()).toBe("https://pelednoam.github.io/safe-bikes-lanes/basemap.pmtiles");
+  });
+
+  it("reads tiles through one reader, with no cache where the browser has none", () => {
+    vi.stubGlobal("window", {});
+    const deps = tileDeps();
+    // CacheStorage is only there in secure contexts: the map still draws without it
+    expect(deps.caches).toBeNull();
+    expect(typeof deps.readTile).toBe("function");
+    expect(tileDeps()).toBe(deps);
   });
 });

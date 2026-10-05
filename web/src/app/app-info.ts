@@ -5,10 +5,11 @@ import { el } from "./dom.js";
 import { PROFILES } from "../router.js";
 import { type ProtectionClass } from "../types.js";
 import { classSwatch } from "./classes.js";
-import { CLASS_LABELS } from "../segment.js";
+import { CLASS_LABELS, clearPhotoCache } from "../segment.js";
 import { dataReady } from "./services.js";
 import { loadJson, usingRemoteData } from "../data.js";
 import { store } from "./store.js";
+import { removeItem, writeItem } from "../storage.js";
 
 interface DataMeta {
   built: string;
@@ -155,5 +156,15 @@ export function initAppInfo(): void {
 
   el<HTMLDialogElement>("about").addEventListener("click", (e: MouseEvent) => {
     if (e.target === el<HTMLDialogElement>("about")) el<HTMLDialogElement>("about").close();
+  });
+
+  el<HTMLButtonElement>("mapillary-save").addEventListener("click", () => {
+    const token = el<HTMLInputElement>("mapillary-token").value.trim();
+    store.mapillaryToken = token;
+    if (token === "") removeItem("mapillaryToken");
+    else writeItem("mapillaryToken", token);
+    clearPhotoCache(); // the shared lookup holds misses fetched with the old token
+    el<HTMLSpanElement>("mapillary-status").textContent =
+      token === "" ? "cleared" : "✓ saved — hover any street";
   });
 }

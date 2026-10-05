@@ -1,7 +1,7 @@
 // The ride history dialog: each recorded ride's row, its share card, drawing it on
 // the map, and the totals.
 
-import { type RideSummary, clearRides, deleteRide, loadRides, rideTotals } from "../rides.js";
+import { type RideSummary, clearRides, deleteRide, loadRides, rideTotals, saveRide, takeInProgress } from "../rides.js";
 import { getSource } from "./sources.js";
 import { map } from "./map.js";
 import { PreparedImage, saveBlob, shareImage } from "../share.js";
@@ -121,4 +121,14 @@ export function initRidesDialog(): void {
   el<HTMLDialogElement>("rides").addEventListener("click", (e: MouseEvent) => {
     if (e.target === el<HTMLDialogElement>("rides")) el<HTMLDialogElement>("rides").close();
   });
+}
+
+/** A ride interrupted by Back, a reload or a crash is saved on the next launch rather than
+ * silently lost. */
+export function recoverInterruptedRide(): void {
+  const interrupted = takeInProgress();
+  if (interrupted !== null) {
+    saveRide(interrupted);
+    renderRides();
+  }
 }

@@ -314,3 +314,28 @@ describe("data build compare", () => {
     expect(isNewerBuild("2026-07-21", "")).toBe(false);
   });
 });
+
+describe("a way with no name", () => {
+  /** East on "Alpha", then north on a way with no name, of this kind. */
+  const toUnnamed = (cls: ProtectionClass): RoutePayload => {
+    const base = lRoute();
+    const [first, second] = base.geojson.features as [LineFeature, LineFeature];
+    return {
+      ...base,
+      geojson: { type: "FeatureCollection", features: [first, { ...second, properties: { ...second.properties, name: "", cls } }] },
+    };
+  };
+  const said = (cls: ProtectionClass): string =>
+    buildManeuvers(toUnnamed(cls))
+      .map((m) => `${m.text} ${m.voice}`)
+      .join(" | ");
+
+  it("is called by what kind of way it is", () => {
+    expect(said("path")).toContain("the bike path");
+    expect(said("separated")).toContain("the separated lane");
+    expect(said("buffered")).toContain("the bike lane");
+    expect(said("lane")).toContain("the bike lane");
+    expect(said("service")).toContain("the service road");
+    expect(said("quiet_street")).toContain("the side street");
+  });
+});

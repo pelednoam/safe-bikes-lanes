@@ -246,6 +246,23 @@ describe("wiring it into MapLibre", () => {
   });
 });
 
+describe("wiring it into MapLibre, with a cache that cannot be cleaned", () => {
+  it("still installs, and ignores the failure to forget the old cache", async () => {
+    // installing is once per page, and an earlier test has: a copy of the module of its own
+    vi.resetModules();
+    const fresh = await import("../src/tilecache.js");
+    const addProtocol = vi.fn();
+    const caches = { keys: () => Promise.reject(new Error("SecurityError")) } as unknown as CacheStorage;
+    fresh.installTileCache(addProtocol as unknown as Parameters<typeof installTileCache>[0], {
+      caches,
+      readTile: async () => undefined,
+    });
+    expect(addProtocol).toHaveBeenCalledOnce();
+    // an unhandled rejection here fails the run
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+});
+
 describe("which tiles a route needs offline", () => {
   const tileX = (lon: number, z: number): number => Math.floor(((lon + 180) / 360) * 2 ** z);
 

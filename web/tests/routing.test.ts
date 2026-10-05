@@ -239,6 +239,62 @@ describe.skipIf(skipRouting)("routing in the worker, on the pinned data", () => 
     await routing.setSketchyMarks([]);
   });
 
+  /** The middle of the safest route, thinned to a handful of points: the places to mark. */
+  const middleOfSafest = async (): Promise<{ before: string; marks: [number, number][] }> => {
+    const before = await routing.plan(DAVIS, KENDALL, prefs);
+    const safest = before.find((o) => o.id === "safest");
+    const coords = (safest?.payload.geojson.features ?? []).flatMap((f) => f.geometry.coordinates as [number, number][]);
+    const middle = coords.slice(Math.floor(coords.length / 4), Math.floor((coords.length * 3) / 4));
+    return { before: JSON.stringify(before), marks: middle.filter((_c, i) => i % 3 === 0) };
+  };
+
+  it("keeps the streets reported blocked across a rebuild of the graph", async () => {
+    const { before, marks } = await middleOfSafest();
+    await routing.setBlockedPoints(marks);
+    expect(JSON.stringify(await routing.plan(DAVIS, KENDALL, prefs))).not.toBe(before);
+    // more tiles: the graph is rebuilt, and must still go round them
+    expect((await routing.ensure([DAVIS, [-71.21, 42.43]], 1)).rebuilt).toBe(true);
+    expect(JSON.stringify(await routing.plan(DAVIS, KENDALL, prefs))).not.toBe(before);
+    await routing.setBlockedPoints([]);
+    expect(JSON.stringify(await routing.plan(DAVIS, KENDALL, prefs))).toBe(before);
+  });
+
+  it("keeps the construction zones routes avoid across a rebuild of the graph", async () => {
+    const { before, marks } = await middleOfSafest();
+    await routing.setConstructionPoints(marks);
+    expect(JSON.stringify(await routing.plan(DAVIS, KENDALL, prefs))).not.toBe(before);
+    expect((await routing.ensure([DAVIS, [-71.22, 42.44]], 1)).rebuilt).toBe(true);
+    expect(JSON.stringify(await routing.plan(DAVIS, KENDALL, prefs))).not.toBe(before);
+    await routing.setConstructionPoints([]);
+    expect(JSON.stringify(await routing.plan(DAVIS, KENDALL, prefs))).toBe(before);
+  });
+
+  it("answers the reach map, with a proposed lane for the one call that asked", async () => {
+    const plain = await routing.safeShed(DAVIS, 2000, "young_kids", false);
+    const lane: [number, number][] = [
+      [-71.1195, 42.3965],
+      [-71.105, 42.38],
+    ];
+    const what = await routing.safeShedWith(lane, DAVIS, 2000, "young_kids", false);
+    expect(what.covered).toBeGreaterThanOrEqual(0);
+    expect(what.result).toBeDefined();
+    // the next call is on the streets as they are
+    expect(JSON.stringify(await routing.safeShed(DAVIS, 2000, "young_kids", false))).toBe(JSON.stringify(plain));
+  });
+
+  it("picks the nearest stop it can reach, or none", async () => {
+    // Kendall is across the city and the second is the Community Path's own start
+    const hit = await routing.nearestReachable(DAVIS, [KENDALL, [-71.1226, 42.3969]], "young_kids", false);
+    expect(hit).toBe(1);
+    expect(await routing.nearestReachable(DAVIS, [], "young_kids", false)).toBeNull();
+  });
+
+  it("plans a round trip with no stop in mind", async () => {
+    const answer = await routing.loopRoute(DAVIS, 3000, null, "young_kids", false);
+    expect(answer.option.payload.summary.meters).toBeGreaterThan(1500);
+    expect(answer.option.payload.summary.meters).toBeLessThan(4500);
+  });
+
   it("routes on the bundle's whole set when the site's newer tiles can't be had", async () => {
     // offline, with the site's newer build chosen at launch and a tile of it
     // not yet cached: its tiles can't be mixed with the bundle's, but the

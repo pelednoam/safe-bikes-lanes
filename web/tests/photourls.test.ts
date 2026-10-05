@@ -1,6 +1,6 @@
 // The photos on hazard cards: read once, tried again after a failure, and
 // released with their report.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { PhotoUrls } from "../src/photourls.js";
 
@@ -147,5 +147,19 @@ describe("a hazard's photo", () => {
     // and read again if its report comes back
     expect(await s.photos.ensure("a")).toBe(true);
     expect(s.reads).toEqual(["a", "b", "a"]);
+  });
+});
+
+describe("a hazard's photo, with the browser's own URLs", () => {
+  it("is made into an object URL, and given back when its report is gone", async () => {
+    const revoked = vi.spyOn(URL, "revokeObjectURL");
+    const photos = new PhotoUrls(async () => new Blob(["jpeg"]));
+    expect(await photos.ensure("a")).toBe(true);
+    const url = photos.get("a");
+    expect(url).toMatch(/^blob:/);
+    photos.prune(new Set());
+    expect(revoked).toHaveBeenCalledWith(url);
+    expect(photos.get("a")).toBeNull();
+    revoked.mockRestore();
   });
 });

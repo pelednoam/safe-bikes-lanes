@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import {
   clearRecent,
+  deletePlace,
   emojiFor,
   exportBackup,
   importBackup,
@@ -168,5 +169,20 @@ describe("recent routes", () => {
       removeItem: refuse,
     };
     expect(() => pushRecent(route("one", 1))).not.toThrow();
+  });
+});
+
+describe("deletePlace", () => {
+  beforeEach(() => {
+    globalThis.localStorage = new MemoryStorage() as Storage;
+  });
+
+  it("takes one place off the list and keeps the rest, as saved", () => {
+    savePlace({ name: "Home", lon: -71.1, lat: 42.38 });
+    savePlace({ name: "School", lon: -71.09, lat: 42.37 });
+    expect(deletePlace("Home").map((p) => p.name)).toEqual(["School"]);
+    expect(listPlaces().map((p) => p.name)).toEqual(["School"]);
+    // a name that isn't there changes nothing
+    expect(deletePlace("Nowhere").map((p) => p.name)).toEqual(["School"]);
   });
 });

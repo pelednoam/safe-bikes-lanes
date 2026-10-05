@@ -193,6 +193,21 @@ function zoneVertices(fc: ConstructionFC): [number, number][] {
   return pts;
 }
 
+/** How long a fixed amount of plain arithmetic takes on this machine right now (ms, the fastest
+ * of five runs): the unit the timing bounds below are written in. A slow or busy machine moves
+ * the bound with it, where a bound in milliseconds fails a build that has not regressed. */
+function machineUnit(): number {
+  let best = Infinity;
+  for (let run = 0; run < 5; run++) {
+    const t0 = performance.now();
+    let sum = 0;
+    for (let i = 1; i < 3_000_000; i++) sum += Math.sqrt(i);
+    best = Math.min(best, performance.now() - t0);
+    if (sum < 0) throw new Error("unreachable: keeps the loop from being optimised away");
+  }
+  return best;
+}
+
 describe("snapping on the real map", () => {
   let graph: GraphData;
   let zones: [number, number][];
@@ -307,12 +322,14 @@ describe("snapping on the real map", () => {
 
   it("snaps every construction vertex in well under a second, not eighteen", () => {
     const router = new Router(graph);
+    const unit = machineUnit();
     const t0 = performance.now();
     router.setConstructionPoints(zones);
     const ms = performance.now() - t0;
-    // 18,850 ms before the index on the machine this was written on, ~55 ms
-    // after; the bound leaves a loaded CI runner forty times the room
-    expect(ms).toBeLessThan(2_000);
+    // About 2 units with the index (10-13 ms where one unit is 7 ms), and 340 times that
+    // before it (18,850 ms against 55 on the machine this was written on). 100 units leaves
+    // a loaded runner fifty times the room, and still fails a scan.
+    expect(ms / unit).toBeLessThan(100);
   }, 60_000);
 });
 
@@ -322,6 +339,7 @@ describe("rebuilding the router over a long session's tiles", () => {
     // construction, marks and the route ends to it. After an afternoon of
     // searching and riding that is hundreds of tiles; 800,000 edges here, a
     // street grid about 30 km on a side.
+    const unit = machineUnit();
     const n = 450;
     const nodes: [number, number, number][] = [];
     for (let i = 0; i < n; i++) {
@@ -349,7 +367,8 @@ describe("rebuilding the router over a long session's tiles", () => {
     }
     // 1,100-1,500 ms when reverse edges were looked up by "u,v" strings and
     // the grid was a hash map, 120-290 ms after, on the machine this was
-    // written on
-    expect(fastest).toBeLessThan(600);
+    // written on: 17-27 units (one is 7 ms here) against ten times that. 100 units is
+    // between them, and moves with the machine.
+    expect(fastest / unit).toBeLessThan(100);
   });
 });

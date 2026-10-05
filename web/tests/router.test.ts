@@ -337,6 +337,27 @@ describe("blocked spots", () => {
     expect(meters(r, at(38, 0), at(80, 0))).toBe(40);
   });
 
+  it("starts a rider from their side of the nearest of several barriers on their street", () => {
+    // one 300 m street, A to B, closed at 20 m and at 250 m. The way on to the destination
+    // is 400 m from A and 100 m from B. The rider is at 100 m: past the first barrier and
+    // before the second. The nearest barrier is the one at 20 m, behind them, so their side
+    // is B's; going by the one listed first (250 m) would start them at A, 400 m away.
+    const r = grid(
+      [
+        [0, 0],
+        [300, 0],
+        [150, 200],
+      ],
+      [
+        [0, 1, 300],
+        [0, 2, 400],
+        [2, 1, 100],
+      ],
+    );
+    r.setBlockedPoints([at(250, 0), at(20, 0)]);
+    expect(meters(r, at(100, 0), at(150, 200))).toBe(100);
+  });
+
   it("changes nothing for a point nowhere near a street", () => {
     const r = direct();
     r.setBlockedPoints([[-71.2, 42.5]]);

@@ -146,6 +146,9 @@ describe("SpeechQueue on the browser engine", () => {
     q.unlock();
     expect(synth.said).toEqual([""]);
     expect(synth.live[0]?.volume).toBe(0);
+    // the silent line ends and nothing follows from it
+    synth.live[0]?.onEnd();
+    expect(synth.said).toEqual([""]);
 
     const nativeSynth = new FakeSynth();
     const nq = new SpeechQueue(

@@ -378,3 +378,11 @@ describe("saving a ride when storage is full", () => {
     expect(() => clearRides()).not.toThrow();
   });
 });
+
+describe("the ride so far", () => {
+  it("has taken no time before its first point, and as long as the points span after", () => {
+    expect(new RideRecorder().durationSoFar).toBe(0);
+    // 500 m at one fix per 25 m, one every 5 s: 20 steps of 5 s
+    expect(ride(500).durationSoFar).toBe(100);
+  });
+});

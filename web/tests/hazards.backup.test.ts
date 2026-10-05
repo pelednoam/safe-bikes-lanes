@@ -82,6 +82,32 @@ describe("hazard reports in the backup", () => {
     }
   });
 
+  it("are listed from the mirror too when the database's open request fails, or a read of it does", async () => {
+    await addHazard(report("a", 1000), null);
+    const open = indexedDB.open.bind(indexedDB);
+    try {
+      // the open request itself reports an error
+      indexedDB.open = (() => {
+        const req: { error: unknown; onerror: (() => void) | null } = { error: null, onerror: null };
+        queueMicrotask(() => req.onerror?.());
+        return req;
+      }) as unknown as typeof indexedDB.open;
+      expect((await listHazards()).map((h) => h.id)).toEqual(["a"]);
+
+      // the database opens, and the read of it reports an error
+      indexedDB.open = (() => {
+        const read: { error: unknown; onerror: (() => void) | null } = { error: null, onerror: null };
+        const db = { transaction: () => ({ objectStore: () => ({ getAll: () => (queueMicrotask(() => read.onerror?.()), read) }) }) };
+        const req: { result: unknown; onsuccess: (() => void) | null } = { result: db, onsuccess: null };
+        queueMicrotask(() => req.onsuccess?.());
+        return req;
+      }) as unknown as typeof indexedDB.open;
+      expect((await listHazards()).map((h) => h.id)).toEqual(["a"]);
+    } finally {
+      indexedDB.open = open;
+    }
+  });
+
   it("survive a wipe and a restore, without their photos", async () => {
     await addHazard(report("a", 1000, "pothole by the bridge"), new Blob(["jpeg"]));
     await addHazard(report("b", 2000), null);

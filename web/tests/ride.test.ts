@@ -941,3 +941,30 @@ describe("a round trip", () => {
     expect(r.engine.loopDoneM).toBeLessThan(done + 400);
   });
 });
+
+describe("an engine with and without a route", () => {
+  const ctx: RideContext = {
+    dest: () => null,
+    atStop: () => false,
+    myWay: () => false,
+    paceKmh: () => 10,
+    solo: () => false,
+  };
+
+  it("has no length and no bearing to give until it has a route", () => {
+    const engine = new RideEngine(ctx);
+    expect(engine.routeM).toBe(0);
+    expect(engine.rejoinBearing()).toBeNull();
+  });
+
+  it("knows how long the route is, and which way it first runs", () => {
+    const engine = new RideEngine(ctx);
+    const payload = route(TOWN);
+    engine.setRoute(payload);
+    expect(Math.abs(engine.routeM - payload.summary.meters) / payload.summary.meters).toBeLessThan(0.02);
+    const bearing = engine.rejoinBearing();
+    expect(bearing).not.toBeNull();
+    expect(bearing as number).toBeGreaterThanOrEqual(0);
+    expect(bearing as number).toBeLessThan(360);
+  });
+});

@@ -2,9 +2,8 @@
 
 **Budget:** about 200 lines of code per file, not counting comments or blank
 lines. `app.ts` had 4,964 code lines (6,486 with comments, 6,717 at the start of
-the split); it has 411 (579) after steps 0 to 2 and 4 to 7, so what is left is two
-files of 200 lines at the very least. Grouping by topic instead of filling files to the brim has
-given 63 modules in `src/app/` so far. A file under budget is fine; one over it is not.
+the split); it has 113 (157) after every step: the split is done. Grouping by topic instead of filling files to the brim has
+given 69 modules in `src/app/`. A file under budget is fine; one over it is not.
 
 The numbers below were counted on 2026-10-02 from the file as it stands
 (sections are `app.ts`'s own `// ----` headers). They are estimates until a
@@ -57,8 +56,8 @@ module is cut, and each commit should correct them here.
 | `app/sketchy.ts` | 75 | marked spots, their list and popup |
 | `app/places.ts` | 109 | saved places, recent routes, backup |
 | `app/shed.ts` | 59 | the reach map |
-| `app/rides-dialog.ts` | 104 | ride history dialog |
-| `app/app-info.ts` | 115 | about dialog and build stamp |
+| `app/rides-dialog.ts` | 111 | ride history dialog; recovering an interrupted ride |
+| `app/app-info.ts` | 125 | about dialog, build stamp, the street-photo token |
 | `app/route-export.ts` | 79 | GPX, cue sheet, offline download |
 | `app/app-update.ts` | 85 | APK update check, service worker |
 | `app/taps.ts` | 20 | what a tap on a map layer opens: the registry |
@@ -105,20 +104,23 @@ module is cut, and each commit should correct them here.
 | `app/hover-cards.ts` | 127 | hover and tap cards for dots and areas |
 | `app/hover-segment.ts` | 73 | hovering a street or the route; marking it sketchy |
 | `app/layer-data.ts` | 26 | what the layers are filled with at load; the link the page opened with |
+| `app/map-taps.ts` | 84 | what a tap on the map does, and the long press that marks a street sketchy |
+| `app/first-run.ts` | 45 | the first-run card on a phone |
+| `app/layer-toggles.ts` | 104 | the layer switches: network, points of interest, overlays, 3D, construction, reset |
+| `app/rider-prefs.ts` | 49 | who is riding, the hills, how far to walk, the streets to avoid |
+| `app/page-chrome.ts` | 39 | the Escape key and the legend |
+| `app/test-hooks.ts` | 14 | what the browser tests reach the page through |
 | `hooks.ts` (in `src/`) | 17 | the registry the hooks are made with |
 | `tests/appsize.test.ts` | | the size and cycle guard |
 
-Steps 0, 1, 2 ("where to build"), 4 (search), 5 (planning), 6 (navigation and hazards) and 7 (the load closure) are done, and the core pieces the leaves needed (the old step 3's
+Steps 0, 1, 2 ("where to build"), 4 (search), 5 (planning), 6 (navigation and hazards), 7 (the load closure) and 8 (the entry point) are done, and the core pieces the leaves needed (the old step 3's
 `sources`, `data-load`, `markers`, `names`, `avoid`). Counts are from the same counter
-the guard uses. `app.ts` is down to 411 code lines (579 with comments).
+the guard uses. `app.ts` is down to 113 code lines (157 with comments).
 
-## The rest
+## The entry point
 
-The entry point: `app.ts` is the imports, the `init…()` calls, the map's click and the first-run
-notice, the overlay toggles, the layer legend, the tap handling (`onMapTap`, `map-taps` in the old
-estimate) and the start-up wiring. Step 8 splits what is
-left by feature, as the load closure was split (step 7: the closure became twelve files,
-called from `map.on("load")` in the order the layers are stacked).
+`app.ts` is the imports, the `init…()` calls in the order they must run, and the map's `load`
+handler, which calls the layer modules in the order the layers are stacked. Nothing else.
 
 ## The back-edges (import cycles to cut with `hooks`)
 
@@ -144,8 +146,8 @@ From the survey, by function name:
 4. Search: done (five `search-*` files, `phone-search`, and `sheet`, which phone search needed).
 5. Planning: done (`plan-route`, `plan-loop`, `plan-options`, `plan-controls`, `summary`, `permalink`).
 6. Navigation and hazards: the eight files, with the hooks.
-7. The load closure: done (eight `*-layers`, three `hover-*` and `layer-data`: twelve files; `map-taps` stays with step 8).
-8. `app.ts` reduced to the entry.
+7. The load closure: done (eight `*-layers`, three `hover-*` and `layer-data`: twelve files).
+8. `app.ts` reduced to the entry: done (map-taps, first-run, layer-toggles, rider-prefs, page-chrome, test-hooks).
 
 Steps 6 and 7 are the riskiest. Re-decide there, with the real line counts.
 No release tag until all of it is done and has been tried on a real phone.

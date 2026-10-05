@@ -23,9 +23,9 @@ export function newestWins(job: (isCurrent: () => boolean) => Promise<void>): ()
     for (const wake of [...waiting]) wake();
     let waited = run;
     for (;;) {
-      let wake = (): void => undefined;
+      const slot: { wake?: () => void } = {};
       const overtaken = new Promise<void>((resolve) => {
-        wake = resolve;
+        slot.wake = resolve;
         waiting.add(resolve);
       });
       try {
@@ -34,7 +34,7 @@ export function newestWins(job: (isCurrent: () => boolean) => Promise<void>): ()
         // the failure of the newest run is the caller's; of one that was overtaken, nobody's
         if (waited === newest) throw err;
       } finally {
-        waiting.delete(wake);
+        if (slot.wake) waiting.delete(slot.wake);
       }
       if (waited === newest) return;
       waited = newest;
