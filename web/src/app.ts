@@ -56,14 +56,14 @@ import { initConstructionLayers } from "./app/construction-layers.js";
 import { initHazardLayers } from "./app/hazard-layers.js";
 import { initBuildLayers } from "./app/build-layers.js";
 import { initPoiLayers } from "./app/poi-layers.js";
-import { initHoverCards } from "./app/hover-cards.js";
+import { initAreaCards, initHoverCards } from "./app/hover-cards.js";
 import { initSegmentHover } from "./app/hover-segment.js";
 import { initLayerData } from "./app/layer-data.js";
 import { dropHoverCard } from "./app/hover-state.js";
 
 // The functions other modules call through src/app/links.ts, set before anything at
-// start-up runs. One is a function declaration still in this module (dropHoverCard), so
-// it exists from the moment it runs. The inits set the hooks of modules that moved:
+// start-up runs. One, dropHoverCard, is imported from app/hover-state.ts, so it exists
+// before anything here runs. The inits set the hooks of modules that moved:
 // regradeVisible, the search list's chooseSearchRow and saveSearchRow, the planner's
 // requestRoute, planBetween, beginPlan, selectOption and requestLoop, the ride's
 // rebuildNavFromSelected and replanRide, and the hazard dialog's refreshHazards,
@@ -83,30 +83,25 @@ initPlanLoop();
 initNavRide();
 
 initDataLoad();
-
 initAvoid();
 
-
-
-
 // GPX, cue sheet and the offline map download: app/route-export.ts
-
 initRouteExport();
-
 
 // URL hash permalinks (#s=lon,lat&e=lon,lat&m=profile&f=1): app/permalink.ts
 initPermalink();
 
-
 // the reach map: app/shed.ts
-
 initShed();
-
 
 // ---------------------------------------------------------------------------
 // layers + interaction wiring
 // ---------------------------------------------------------------------------
 
+// The order here is the order the layers are stacked in (a layer added later is drawn over
+// the ones before it), and, for the cards, the order their handlers run in: where a street
+// and an overlay are under the pointer, the overlay's card is the one shown. Keep both when
+// adding to it.
 map.on("load", () => {
   initBasemapLayers();
   initOverlayLayers();
@@ -121,6 +116,7 @@ map.on("load", () => {
   initPoiLayers();
   initHoverCards();
   initSegmentHover();
+  initAreaCards();
   initLayerData();
 });
 

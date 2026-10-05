@@ -175,16 +175,20 @@ const TILE_AXES = new RegExp(
  * wrote out ("42.23.48"), all of it and not just the first pair, or the seconds stay
  * behind ("‹n›.48"). A version number or an address goes with it. */
 const DOTTED_CHAIN = /-?\d+(?:\s*\.\s*\d+){2,}/g;
-/** Axes with their digits attached and no space, right after any letter, with or without
- * a zoom first: "posx4953y6060", "TILEX4953Y6060", "gridX4953_Y6060", "posz14x4953y6060". The pattern above won't start an axis in the middle
- * of a word because spaced forms ("index 3: y 4") are ordinary text; a compact one has no
- * such reading, and leaving a tile in a public issue is the worse mistake. "Matrix4x4" is
- * not one: the same letter twice. */
+/** What may sit between the parts of a compact tile: the separators of AXIS_SEP without the
+ * space and the hyphen's neighbours that ordinary text uses. */
 const AXIS_SEP_TIGHT = String.raw`[_,/.;:|&+-]*`;
 /** One axis with its digits attached: "x4953", "y6060.5". */
 const attached = (letters: string): string => String.raw`[${letters}]\d+(?:\.\d+)?`;
+/** Axes with their digits attached and no space, after any letter or digit, with or without a
+ * zoom first, and the zoom with or without its letter or a fraction (a map's own zoom is
+ * "14.5"): "posx4953y6060", "TILEX4953Y6060", "gridX4953_Y6060", "posz14x4953y6060",
+ * "14x4953y6060", "posz14.5x4953y6060", "v2z14x4953y6060". TILE_AXES won't start an axis in
+ * the middle of a word because spaced forms ("index 3: y 4") are ordinary text; a compact
+ * one has no such reading, and leaving a tile in a public issue is the worse mistake. A y and
+ * an x are both needed: "Matrix4x4" and "1920x1080" are not one. */
 const TILE_COMPACT = new RegExp(
-  String.raw`(?<=[A-Za-z])(?:[zZ]\d+${AXIS_SEP_TIGHT})?` +
+  String.raw`(?<=[A-Za-z0-9])(?:[zZ]?\d+(?:\.\d+)?${AXIS_SEP_TIGHT})?` +
     String.raw`(?:${attached("xX")}${AXIS_SEP_TIGHT}${attached("yY")}|${attached("yY")}${AXIS_SEP_TIGHT}${attached("xX")})`,
   "g",
 );

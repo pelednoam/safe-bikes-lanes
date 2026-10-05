@@ -7,7 +7,8 @@
 // wall clock. Here a ride is a loop and the clock is a number.
 import { afterEach, describe, expect, it } from "vitest";
 
-import { distM } from "../src/nav.js";
+import { buildManeuvers, distM } from "../src/nav.js";
+import type { Maneuver } from "../src/nav.js";
 import {
   MAX_GPS_ACCURACY_M,
   navDistText,
@@ -268,6 +269,22 @@ describe("pointAhead", () => {
     // the rider is about 150 m along, so this is about 170 m along the route
     const expected = pointAlong(path, 170).at;
     expect(distM(ahead as LngLat, expected)).toBeLessThan(8);
+  });
+
+  it("stops short of the next turn: past it is another street", () => {
+    const r = new Ride(route(TOWN));
+    const turn = buildManeuvers(r.payload).find((m) => m.atM > 150) as Maneuver;
+    // 30 m before the turn, asking for 100 m ahead
+    r.ride({ untilM: turn.atM - 30, speedKmh: 12 });
+    const ahead = r.engine.pointAhead(100) as LngLat;
+    expect(distM(ahead, [turn.lon, turn.lat]), "the point is past the turn").toBeLessThan(6);
+    // and with the turn well beyond the look-ahead, the full distance
+    const far = new Ride(route(TOWN));
+    far.ride({ untilM: 20, speedKmh: 12 });
+    const first = buildManeuvers(far.payload).find((m) => m.atM > 60) as Maneuver;
+    expect(first.atM).toBeGreaterThan(60);
+    const along = far.engine.pointAhead(20) as LngLat;
+    expect(distM(along, pointAlong(pathOf(far.payload), 40).at)).toBeLessThan(8);
   });
 
   it("is nowhere for a rider off the route, where there is no ahead to point at", () => {

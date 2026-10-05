@@ -207,6 +207,36 @@ describe("blocked spots", () => {
     expect(blocked.routeOptions(A, B, "young_kids")[0]?.payload.summary.meters).toBe(600);
   });
 
+  it("closes the street in every option, the Direct one too", () => {
+    const r = direct();
+    r.setBlockedPoints([MID_OF_DIRECT]);
+    const options = r.routeOptions(A, B, "young_kids");
+    expect(options.length).toBeGreaterThan(0);
+    // Direct is the shortest, not one that ignores a reported closure: with a way round
+    // none of the options may run through it
+    for (const o of options) expect(o.payload.summary.meters, o.id).toBe(600);
+  });
+
+  it("closes a street even in a what-if where it has been rebuilt", () => {
+    const r = direct();
+    r.setUpgradedPoints([MID_OF_DIRECT]);
+    // rebuilt, the 5 m street is the cheapest way
+    expect(r.routeOptions(A, B, "young_kids")[0]?.payload.summary.meters).toBe(5);
+    // a rebuilt street that is blocked today is still blocked
+    r.setBlockedPoints([MID_OF_DIRECT]);
+    for (const o of r.routeOptions(A, B, "young_kids")) expect(o.payload.summary.meters, o.id).toBe(600);
+  });
+
+  it("closes the street for a rider with a walking budget, who may push a bike through it", () => {
+    const r = direct();
+    // unclosed, walking the 5 m is the cheapest way
+    expect(r.routeOptions(A, B, "young_kids", false, undefined, undefined, 100)[0]?.payload.summary.meters).toBe(5);
+    r.setBlockedPoints([MID_OF_DIRECT]);
+    // (Direct is checked above, and never walks)
+    const options = r.routeOptions(A, B, "young_kids", false, undefined, undefined, 100);
+    for (const o of options.filter((x) => x.id !== "direct")) expect(o.payload.summary.meters, o.id).toBe(600);
+  });
+
   it("is lifted by clearing the points", () => {
     const r = direct();
     r.setBlockedPoints([MID_OF_DIRECT]);

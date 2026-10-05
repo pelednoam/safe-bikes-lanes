@@ -47,15 +47,18 @@ export function showBanner(m: Maneuver | undefined, distToNextM: number): void {
 /** A warning the rider can SEE. The spoken version is the primary channel, but
  * it is useless muted or over kids' chatter, and a safety app must not depend on
  * audio alone. Cleared automatically once it's behind us. */
+/** The one hide timer for the alert strip. */
+let flashTimer = 0;
+
 export function showRideAlert(text: string, kind: "hazard" | "gps" = "hazard"): void {
+  // one timer owns every alert: showing a new one takes down the old one's timer
+  window.clearTimeout(flashTimer);
   if (kind === "hazard") window.__navAlertsSeen = (window.__navAlertsSeen ?? 0) + 1;
   const box = el<HTMLDivElement>("nav-alert");
   box.textContent = text;
   box.classList.toggle("gps", kind === "gps");
   box.style.display = "block";
 }
-
-let flashTimer = 0;
 
 /** Show an alert for a while, then take it down: the one timer is this function's, so a
  * newer message is never taken down early by the timer of an older one. */
@@ -65,7 +68,21 @@ export function flashRideAlert(text: string, kind: "hazard" | "gps" = "hazard", 
   flashTimer = window.setTimeout(hideRideAlert, ms);
 }
 
+/** A position older than this is where the rider was, not where they are. */
+const FIX_FRESH_MS = 15_000;
+
+/** Where the rider is now, or null, with an alert saying so, if the last fix is old or there
+ * is none. `what` finishes "no position yet — can't ___ from here". */
+export function freshFix(what: string): [number, number] | null {
+  if (nav.lastPos === null || Date.now() - nav.lastFixAt > FIX_FRESH_MS) {
+    flashRideAlert(`⚠️ no position yet — can't ${what} from here`, "gps", 4000);
+    return null;
+  }
+  return nav.lastPos;
+}
+
 export function hideRideAlert(): void {
+  window.clearTimeout(flashTimer);
   el<HTMLDivElement>("nav-alert").style.display = "none";
   rideEngine.alertHidden();
 }

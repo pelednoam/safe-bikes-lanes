@@ -267,10 +267,16 @@ export class RideEngine {
   /** The place `aheadM` metres further along the track from where the last fix put the
    * rider, on the leg they are riding (the search is windowed on their previous position, so
    * a loop or an out-and-back is read on the right pass). Null with no track, no fix yet, or
-   * a rider off the route: there is no "ahead" to point at. */
+   * a rider off the route: there is no "ahead" to point at. Never beyond the next turn. */
   pointAhead(aheadM: number): [number, number] | null {
     if (this.track === null || this.lastAlongM === null) return null;
-    return pointAlong(this.track, this.lastAlongM + aheadM);
+    // Not past the next turn: beyond it the route is on another street, and a point there is
+    // not on the one the rider is on. Stops 2 m short of it, so the point is on this street
+    // and not on the junction itself, where every street meeting there is as near.
+    const here = this.lastAlongM;
+    const turn = this.maneuvers.find((m, i) => i >= this.next - 1 && m.atM > here + 2);
+    const limit = turn === undefined ? aheadM : Math.max(0, turn.atM - here - 2);
+    return pointAlong(this.track, here + Math.min(aheadM, limit));
   }
 
   /** Follow this route from its beginning: a new ride, a reroute, a detour. */

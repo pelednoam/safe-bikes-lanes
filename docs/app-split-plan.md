@@ -115,7 +115,8 @@ the guard uses. `app.ts` is down to 411 code lines (579 with comments).
 ## The rest
 
 The entry point: `app.ts` is the imports, the `init…()` calls, the map's click and the first-run
-notice, the overlay toggles, the layer legend and the start-up wiring. Step 8 splits what is
+notice, the overlay toggles, the layer legend, the tap handling (`onMapTap`, `map-taps` in the old
+estimate) and the start-up wiring. Step 8 splits what is
 left by feature, as the load closure was split (step 7: the closure became twelve files,
 called from `map.on("load")` in the order the layers are stacked).
 
@@ -143,7 +144,7 @@ From the survey, by function name:
 4. Search: done (five `search-*` files, `phone-search`, and `sheet`, which phone search needed).
 5. Planning: done (`plan-route`, `plan-loop`, `plan-options`, `plan-controls`, `summary`, `permalink`).
 6. Navigation and hazards: the eight files, with the hooks.
-7. The load closure: done (eleven `*-layers`, `hover-*` and `layer-data` files; `map-taps` stays with step 8).
+7. The load closure: done (eight `*-layers`, three `hover-*` and `layer-data`: twelve files; `map-taps` stays with step 8).
 8. `app.ts` reduced to the entry.
 
 Steps 6 and 7 are the riskiest. Re-decide there, with the real line counts.

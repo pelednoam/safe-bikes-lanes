@@ -7,7 +7,7 @@ import { type MapLayerMouseEvent } from "maplibre-gl";
 import { dropHoverCard } from "./hover-state.js";
 import { HAZARD_LABELS, type HazardCategory, getHazardPhoto, removeHazard } from "../hazards.js";
 import { maplibregl } from "../maplibre.js";
-import { refreshHazards } from "./hazard-dialog.js";
+import { forgetPendingHazard, refreshHazards } from "./hazard-dialog.js";
 import { requestRoute } from "./plan-route.js";
 
 export function initHazardLayers(): void {
@@ -60,6 +60,7 @@ export function initHazardLayers(): void {
     const popup = new maplibregl.Popup().setLngLat(e.lngLat).setDOMContent(box).addTo(map);
     rm.addEventListener("click", () => {
       if (props.id === undefined) return;
+      forgetPendingHazard(props.id);
       void removeHazard(props.id).then(() => {
         popup.remove();
         void refreshHazards().then(() => requestRoute());

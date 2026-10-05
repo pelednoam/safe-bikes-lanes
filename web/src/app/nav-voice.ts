@@ -8,7 +8,7 @@ import { el } from "./dom.js";
 import { distVoice } from "../units.js";
 import { nav } from "./nav-state.js";
 import { store } from "./store.js";
-import { hideRideAlert, showRideAlert } from "./nav-banner.js";
+import { flashRideAlert } from "./nav-banner.js";
 
 export function vibrate(pattern: number[]): void {
   if ("vibrate" in navigator) navigator.vibrate(pattern);
@@ -129,8 +129,7 @@ function noteVoiceUnavailable(): void {
   if (!store.navActive) return;
   // silence is the worst failure a spoken guide can have: a rider who thinks
   // the voice is coming stops watching the screen
-  showRideAlert("🔇 no voice on this phone — watch the screen for turns", "gps");
-  window.setTimeout(hideRideAlert, 8000);
+  flashRideAlert("🔇 no voice on this phone — watch the screen for turns", "gps", 8000);
 }
 
 export function speak(text: string, priority: SpeakPriority = "turn"): void {

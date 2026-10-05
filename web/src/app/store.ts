@@ -68,6 +68,10 @@ export interface Store {
   sketchyMarks: [number, number][];
   pois: PoiFeature[];
   hazards: HazardReport[];
+  /** Closures filed this session that no read of the device store has confirmed yet, or
+   * never will (a save that failed): kept beside what is read, so an older read finishing
+   * late cannot take one out of the router's hands. */
+  pendingHazards: HazardReport[];
   mapillaryToken: string;
   /** Turn-by-turn is running. */
   navActive: boolean;
@@ -94,6 +98,7 @@ export const store: Store = {
   sketchyMarks: loadSketchy(),
   pois: [],
   hazards: [],
+  pendingHazards: [],
   mapillaryToken: "",
   navActive: false,
   loopParams: null,

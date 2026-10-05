@@ -15,7 +15,7 @@ import { routing, trip } from "./services.js";
 import { avoidPointsSent, routePrefs } from "./avoid.js";
 import { Lane, type Ticket } from "../planner.js";
 import { selectOption } from "./plan-options.js";
-import { hideRideAlert, showBanner, showHeadline, showRideAlert, showTrip } from "./nav-banner.js";
+import { flashRideAlert, hideRideAlert, showBanner, showHeadline, showRideAlert, showTrip } from "./nav-banner.js";
 import { type NativeFix } from "../native.js";
 import { maplibregl } from "../maplibre.js";
 import { map } from "./map.js";
@@ -109,8 +109,7 @@ export async function replanRide(): Promise<ReplanOutcome> {
     return "replanned";
   } catch {
     if (rideStale(ticket)) return "superseded";
-    showRideAlert("⚠ couldn't re-plan from here — keep to the route", "gps");
-    window.setTimeout(hideRideAlert, 4000);
+    flashRideAlert("⚠ couldn't re-plan from here — keep to the route", "gps", 4000);
     return "failed";
   }
 }

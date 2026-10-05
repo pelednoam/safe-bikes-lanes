@@ -443,8 +443,11 @@ export class Router {
   ): Float64Array {
     const w = new Float64Array(this.g.edges.length);
     this.g.edges.forEach((e, i) => {
+      // a closed street costs the same in every mode: the Direct route is the shortest,
+      // not one that ignores a reported closure (sketchy marks and construction it does)
+      const closed = this.blocked.has(i) ? BLOCKED_MULT : 1;
       if (profile === null) {
-        w[i] = e[2];
+        w[i] = e[2] * closed;
         return;
       }
       // an index past the class table is as unknown as a name it doesn't
@@ -456,7 +459,7 @@ export class Router {
         // hill stays — protection doesn't flatten a road.
         let up = e[2] * profile.mult["separated"];
         if (preferFlat) up += this.hillPen[i] as number;
-        w[i] = up;
+        w[i] = up * closed;
         return;
       }
       let mult = this.classMult(profile, e, cls);
@@ -464,7 +467,7 @@ export class Router {
       let wi = e[2] * mult * e[6] + e[7] * profile.penScale;
       if (preferFlat) wi += this.hillPen[i] as number;
       if (this.sketchy.has(i)) wi *= SKETCHY_MULT;
-      if (this.blocked.has(i)) wi *= BLOCKED_MULT;
+      wi *= closed;
       if (this.construction.has(i)) wi *= CONSTRUCTION_MULT;
       w[i] = wi;
     });
@@ -487,7 +490,8 @@ export class Router {
   private walkWeights(factor: number): Float64Array {
     const w = new Float64Array(this.g.edges.length);
     this.g.edges.forEach((e, i) => {
-      w[i] = e[2] * factor;
+      // pushing a bike through a closed street is no more possible than riding it
+      w[i] = e[2] * factor * (this.blocked.has(i) ? BLOCKED_MULT : 1);
     });
     return w;
   }
@@ -554,30 +558,18 @@ export class Router {
     this.sketchy = this.pointsToEdgeSet(points, SKETCHY_SNAP_M);
   }
 
-  /** Metres from a point to a street's own line (every bend of it), not to its midpoint:
-   * a long block's midpoint can be far from a barrier at one end of it. */
-  private metresToEdge(ei: number, lon: number, lat: number, kx: number, ky: number): number {
-    const coords = this.edgeCoords(ei);
-    let best = Infinity;
-    for (let i = 1; i < coords.length; i++) {
-      const a = coords[i - 1] as [number, number];
-      const b = coords[i] as [number, number];
-      const ax = (lon - a[0]) * kx;
-      const ay = (lat - a[1]) * ky;
-      const bx = (b[0] - a[0]) * kx;
-      const by = (b[1] - a[1]) * ky;
-      const len2 = bx * bx + by * by;
-      const t = len2 > 0 ? Math.max(0, Math.min(1, (ax * bx + ay * by) / len2)) : 0;
-      best = Math.min(best, Math.hypot(ax - t * bx, ay - t * by));
-    }
-    return best;
+  /** Metres per degree of longitude and of latitude at this latitude. */
+  private metresPerDegree(lat: number): [number, number] {
+    return [111_320 * Math.cos((lat * Math.PI) / 180), 110_540];
   }
 
-  /** How far along a street, from its start node, the point's nearest place on it is. */
-  private alongEdgeM(ei: number, lon: number, lat: number): number {
+  /** The nearest place on a street's own line (every bend of it) to a point: how far (m) the
+   * line is from it, and how far along the street (m, from its start node) that place is. Not
+   * the distance to the street's midpoint: a long block's midpoint can be far from a barrier at
+   * one end of it. */
+  private nearestOnEdge(ei: number, lon: number, lat: number): { d: number; along: number } {
+    const [kx, ky] = this.metresPerDegree(lat);
     const coords = this.edgeCoords(ei);
-    const kx = 111_320 * Math.cos((lat * Math.PI) / 180);
-    const ky = 110_540;
     let best = { d: Infinity, along: 0 };
     let walked = 0;
     for (let i = 1; i < coords.length; i++) {
@@ -594,15 +586,14 @@ export class Router {
       if (d < best.d) best = { d, along: walked + t * segLen };
       walked += segLen;
     }
-    return best.along;
+    return best;
   }
 
   /** The street whose own line passes nearest the point, within maxM; null if none does.
    * A scan, not the midpoint index: the points asked about are a handful and rarely change,
    * and the answer must not depend on how long a block happens to be. */
   private nearestEdgeByLine(lon: number, lat: number, maxM: number): number | null {
-    const kx = 111_320 * Math.cos((lat * Math.PI) / 180);
-    const ky = 110_540;
+    const [kx, ky] = this.metresPerDegree(lat);
     let best: number | null = null;
     let bestD = maxM;
     for (let i = 0; i < this.g.edges.length; i++) {
@@ -613,7 +604,7 @@ export class Router {
       const dx = ((this.midX[i] as number) - lon) * kx;
       const dy = ((this.midY[i] as number) - lat) * ky;
       if (Math.hypot(dx, dy) > bestD + 1.5 * e[2]) continue;
-      const d = this.metresToEdge(i, lon, lat, kx, ky);
+      const d = this.nearestOnEdge(i, lon, lat).d;
       if (d < bestD) {
         bestD = d;
         best = i;
@@ -654,13 +645,11 @@ export class Router {
     const e = ei === null ? undefined : this.g.edges[ei];
     const closures = ei === null ? undefined : this.blockedAt.get(ei);
     if (ei === null || e === undefined || closures === undefined || closures.length === 0) return node;
-    const rider = this.alongEdgeM(ei, from[0], from[1]);
+    const rider = this.nearestOnEdge(ei, from[0], from[1]).along;
     // the closure nearest the rider along this street
-    let barrier = this.alongEdgeM(ei, (closures[0] as [number, number])[0], (closures[0] as [number, number])[1]);
-    for (const c of closures) {
-      const along = this.alongEdgeM(ei, c[0], c[1]);
-      if (Math.abs(along - rider) < Math.abs(barrier - rider)) barrier = along;
-    }
+    const barrier = closures
+      .map((c) => this.nearestOnEdge(ei, c[0], c[1]).along)
+      .reduce((best, along) => (Math.abs(along - rider) < Math.abs(best - rider) ? along : best));
     return rider <= barrier ? e[0] : e[1];
   }
 

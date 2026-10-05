@@ -8,7 +8,7 @@ import { detourToNearest, exitNav, resumeRide, startNav } from "./nav-session.js
 import { nav } from "./nav-state.js";
 import { writeItem } from "../storage.js";
 import { clearSpeech, speak, speech, vibrate } from "./nav-voice.js";
-import { askDuringRide, closeAsk, hideRideAlert, showRideAlert, stopsOpen } from "./nav-banner.js";
+import { askDuringRide, closeAsk, flashRideAlert, showRideAlert, stopsOpen } from "./nav-banner.js";
 import { store } from "./store.js";
 import { distM } from "../nav.js";
 import { renderSketchy, saveSketchy } from "./sketchy.js";
@@ -68,8 +68,7 @@ export function initNavControls(): void {
     vibrate([80]);
     speak("marked. future routes will avoid this spot.", "chat");
     // confirm on screen too: muted, there was no sign it had worked
-    showRideAlert(already ? "⚠️ already marked here" : "⚠️ marked — routes will avoid it");
-    window.setTimeout(hideRideAlert, 4000);
+    flashRideAlert(already ? "⚠️ already marked here" : "⚠️ marked — routes will avoid it", "hazard", 4000);
   });
 
   el<HTMLButtonElement>("nav-btn").addEventListener("click", () => {

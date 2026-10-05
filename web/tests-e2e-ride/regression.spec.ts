@@ -592,6 +592,28 @@ test("tapping blocked twice in a row files one report, not two", async ({ page }
   expect(await storedCategories(page)).toEqual(["blocked"]);
 });
 
+test("a second barrier after riding on is a new closure, not a repeat of the first", async ({ page }) => {
+  const path = await startNav(page);
+  await ride(page, path, { speedKmh: 12, timeScale: 30, untilM: 200 });
+  await page.locator("#nav-banner").click({ position: { x: 40, y: 60 } });
+  await page.locator("#nav-blocked").click();
+  const settled = /found another way|no way round|re-planning/i;
+  await expect(page.locator("#nav-alert")).toContainText(settled, { timeout: 40_000 });
+  expect(await storedCategories(page)).toEqual(["blocked"]);
+
+  // ride on along the route now drawn, well past where the first was marked, and meet another
+  const next = await page.evaluate(async () => {
+    const src = window._map?.getSource("route") as { getData(): Promise<GeoJSON.FeatureCollection> } | undefined;
+    return ((await src?.getData())?.features ?? []).flatMap((f) =>
+      f.geometry.type === "LineString" ? (f.geometry.coordinates as [number, number][]) : [],
+    );
+  });
+  expect(next.length, "no route is drawn").toBeGreaterThan(1);
+  await ride(page, next, { speedKmh: 12, timeScale: 30, untilM: 90 });
+  await page.locator("#nav-blocked").click();
+  await expect.poll(() => storedCategories(page), { timeout: 15_000 }).toEqual(["blocked", "blocked"]);
+});
+
 test("choosing blocked in the what-was-it row closes it ahead and replaces the quick report", async ({
   page,
 }) => {

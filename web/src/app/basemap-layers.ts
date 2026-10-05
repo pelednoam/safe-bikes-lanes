@@ -32,8 +32,8 @@ export function initBasemapLayers(): void {
   //
   // Only the theme in use is added; applyBasemap adds the other the first time
   // someone switches. The insert point is resolved then, by which time
-  // everything added below is on the map — so the basemap lands under it
-  // rather than over the route.
+  // every layer the load handler adds after this one is on the map — so the
+  // basemap lands under them rather than over the route.
   //
   // Deferred to the browser's first idle moment rather than run inline. The
   // basemap is decoration and the safety network is the product, so the ninety

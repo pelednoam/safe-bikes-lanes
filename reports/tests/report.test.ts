@@ -215,6 +215,10 @@ describe("the scrubbing", () => {
       "posz14x4953y6060",
       "POSZ14X4953Y6060",
       "gridz14_x4953_y6060",
+      "14x4953y6060",
+      "tile14x4953y6060",
+      "posz14.5x4953y6060",
+      "v2z14x4953y6060",
     ]) {
       expect(scrub(text), text).not.toMatch(/4953|6060/);
     }

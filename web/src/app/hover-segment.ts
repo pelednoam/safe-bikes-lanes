@@ -77,7 +77,7 @@ export function initSegmentHover(): void {
       hover.popup = null;
     });
     // right-click (desktop) marks a segment as personally sketchy;
-    // touch devices use long-press (wired below)
+    // touch devices use long-press (wired in app.ts)
     map.on("contextmenu", layer, (e: MapLayerMouseEvent) => {
       e.preventDefault();
       openSketchyPopup([e.lngLat.lng, e.lngLat.lat]);

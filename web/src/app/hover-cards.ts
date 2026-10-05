@@ -11,19 +11,21 @@ import { dropHoverCard, hover } from "./hover-state.js";
 import { maplibregl } from "../maplibre.js";
 import { onTap } from "./taps.js";
 
+/** The card for a place on the map: a point of interest. */
+const placeCard = (p: Record<string, unknown>, withKind: boolean): ComponentChild => {
+  const kind = typeof p["kind"] === "string" ? p["kind"] : "";
+  const meta = POI_META[kind];
+  const name = textOf(p["name"]);
+  return h(PlaceCard, {
+    emoji: meta?.emoji ?? "📍",
+    name: name || (meta?.label ?? "stop"),
+    kind: withKind && name !== "" ? (meta?.label ?? "") : "",
+  });
+};
+
 export function initHoverCards(): void {
   // hover tooltips on every dot layer (clicks keep their richer popups);
   // src/ui/MapCards.tsx draws them
-  const placeCard = (p: Record<string, unknown>, withKind: boolean): ComponentChild => {
-    const kind = typeof p["kind"] === "string" ? p["kind"] : "";
-    const meta = POI_META[kind];
-    const name = textOf(p["name"]);
-    return h(PlaceCard, {
-      emoji: meta?.emoji ?? "📍",
-      name: name || (meta?.label ?? "stop"),
-      kind: withKind && name !== "" ? (meta?.label ?? "") : "",
-    });
-  };
   const constructionCard = (p: Record<string, unknown>): ComponentChild =>
     h(ConstructionCard, constructionProps(p));
   const hazardPhotoId = (p: Record<string, unknown>): string | null =>
@@ -85,7 +87,11 @@ export function initHoverCards(): void {
       .setDOMContent(cardElement(h(CrossingCard, {})))
       .addTo(map);
   });
+}
 
+/** Cards for the points of interest and the area overlays. Registered after the street
+ * hover (hover-segment.ts), as they were: where both answer, the area's card is the one shown. */
+export function initAreaCards(): void {
   onTap(
     "pois",
     (e: MapLayerMouseEvent) => {

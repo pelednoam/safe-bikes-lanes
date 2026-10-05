@@ -5,7 +5,7 @@
 import { links } from "./links.js";
 import { newestWins } from "../newest.js";
 import { PhotoUrls } from "../photourls.js";
-import { addHazard, buildReportText, downscalePhoto, getHazardPhoto, HAZARD_LABELS, type HazardCategory, type HazardReport, listHazards, removeHazard, setHazardCategory, StoreUnavailable } from "../hazards.js";
+import { addHazard, CLOSURE_LIFETIME_MS, buildReportText, downscalePhoto, getHazardPhoto, HAZARD_LABELS, type HazardCategory, type HazardReport, listHazards, removeHazard, setHazardCategory, StoreUnavailable } from "../hazards.js";
 import { reportCaught } from "../report.js";
 import { store } from "./store.js";
 import { applyAvoidPoints } from "./avoid.js";
@@ -14,11 +14,11 @@ import { type GeoJSONSource } from "maplibre-gl";
 import { el } from "./dom.js";
 import { hereLabel } from "./nav-camera.js";
 import { nav } from "./nav-state.js";
-import { hideRideAlert, showRideAlert } from "./nav-banner.js";
+import { flashRideAlert, freshFix } from "./nav-banner.js";
 import { distM } from "../nav.js";
 import { speak, vibrate } from "./nav-voice.js";
 import { requestRoute } from "./plan-route.js";
-import { freshFix, reportBlocked } from "./hazard-blocked.js";
+import { reportBlocked } from "./hazard-blocked.js";
 
 let hazardPendingLoc: [number, number] | null = null;
 
@@ -48,7 +48,11 @@ async function applyHazards(isCurrent: () => boolean): Promise<void> {
     return;
   }
   if (!isCurrent()) return;
-  store.hazards = list;
+  // what the device store has, and what was filed this session and is not in it (yet)
+  const now = Date.now();
+  const stored = new Set(list.map((h) => h.id));
+  store.pendingHazards = store.pendingHazards.filter((h) => !stored.has(h.id) && now - h.t < CLOSURE_LIFETIME_MS);
+  store.hazards = [...store.pendingHazards, ...list];
   applyAvoidPoints();
   hazardPhotos.prune(new Set(store.hazards.filter((h) => h.hasPhoto).map((h) => h.id)));
   const features = store.hazards.map((h) => ({
@@ -110,6 +114,15 @@ export function hideClassify(): void {
   el<HTMLDivElement>("nav-classify").style.display = "none";
 }
 
+/** Whether the report the what-was-it row is asking about was filed by the last quick report,
+ * and not an existing one it found at the spot. */
+let classifyCreated = false;
+
+/** A report taken off by the rider is no longer pending either. */
+export function forgetPendingHazard(id: string): void {
+  store.pendingHazards = store.pendingHazards.filter((h) => h.id !== id);
+}
+
 async function quickReport(): Promise<void> {
   if (!store.navActive) {
     if (nav.lastPos) openHazardDialog(nav.lastPos[0], nav.lastPos[1]);
@@ -128,16 +141,15 @@ async function quickReport(): Promise<void> {
       );
       await refreshHazards();
     } catch {
-      showRideAlert("⚠️ could not save the report", "gps");
-      window.setTimeout(hideRideAlert, 4000);
+      flashRideAlert("⚠️ could not save the report", "gps", 4000);
       return;
     }
   }
   classifyId = id;
+  classifyCreated = !near;
   vibrate([80]);
   speak("reported. routes will avoid this spot.", "chat");
-  showRideAlert(near ? "📷 already reported here" : "📷 reported — routes will avoid it");
-  window.setTimeout(hideRideAlert, 4000);
+  flashRideAlert(near ? "📷 already reported here" : "📷 reported — routes will avoid it", "hazard", 4000);
   el<HTMLDivElement>("nav-classify").style.display = "flex";
   window.clearTimeout(classifyTimer);
   // long enough to answer at the next light, short enough to stop nagging
@@ -211,20 +223,30 @@ export function initHazardDialog(): void {
       if (cat === "blocked" && store.navActive) {
         // "blocked" is a closure to the router, and the rider is on the way that is
         // blocked: do what the blocked-ahead button does. The closure goes ahead of them,
-        // where the barrier is, and not where they were some seconds ago, so the "other"
-        // report filed at the tap is replaced by it rather than left beside it.
-        void removeHazard(id)
+        // where the barrier is, and not where they were some seconds ago, so the quick
+        // report filed at the tap is replaced by it, once it is filed, and not before: if the
+        // closure could not be filed (no recent position, the ride over) the report stays and
+        // becomes the closure. A report that was already there is never taken away.
+        const created = classifyCreated;
+        void reportBlocked()
+          .then(async (done) => {
+            if (done && created) {
+              forgetPendingHazard(id);
+              await removeHazard(id);
+            } else if (!done) {
+              await setHazardCategory(id, "blocked");
+            }
+            await refreshHazards();
+          })
           .catch((err: unknown) => {
             reportCaught("error", err);
-          })
-          .then(reportBlocked);
+          });
         return;
       }
       void setHazardCategory(id, cat)
         .then(refreshHazards)
         .catch(() => undefined);
-      showRideAlert(`✓ logged as ${HAZARD_LABELS[cat]}`);
-      window.setTimeout(hideRideAlert, 3000);
+      flashRideAlert(`✓ logged as ${HAZARD_LABELS[cat]}`, "hazard", 3000);
     });
   }
 

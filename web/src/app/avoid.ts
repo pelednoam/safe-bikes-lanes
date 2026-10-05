@@ -2,7 +2,7 @@
 // spots, and the construction zones, kept in step with the map and the summary
 // line.
 
-import { isClosure } from "../hazards.js";
+import { CLOSURE_LIFETIME_MS, isClosure } from "../hazards.js";
 import { type WirePrefs } from "../routing.js";
 import { type ConstructionFC, store } from "./store.js";
 import { reportCaught } from "../report.js";
@@ -48,6 +48,8 @@ export function constructionAvoidPoints(fc: ConstructionFC): [number, number][] 
 
 /** The last points sent, so the same set is not sent (and graded) twice. */
 let lastAvoidPoints = "";
+/** When the earliest live closure lapses: applyAvoidPoints runs again then. */
+let lapseTimer = 0;
 
 /** Routes avoid the rider's marks and hazard reports, and go round a closure.
  *
@@ -62,7 +64,19 @@ export function applyAvoidPoints(): void {
   const priced: [number, number][] = [...store.sketchyMarks];
   const closed: [number, number][] = [];
   const now = Date.now();
-  for (const h of store.hazards) (isClosure(h, now) ? closed : priced).push([h.lon, h.lat]);
+  let lapsesAt = Infinity;
+  for (const h of store.hazards) {
+    if (isClosure(h, now)) {
+      closed.push([h.lon, h.lat]);
+      lapsesAt = Math.min(lapsesAt, h.t + CLOSURE_LIFETIME_MS);
+    } else {
+      priced.push([h.lon, h.lat]);
+    }
+  }
+  // A closure lapses back to a price by itself, and an app left open (a phone on a bike
+  // mount, an installed page) must notice, so it is applied again then.
+  window.clearTimeout(lapseTimer);
+  if (Number.isFinite(lapsesAt)) lapseTimer = window.setTimeout(applyAvoidPoints, lapsesAt - now + 1000);
   // Only a change in what is priced or closed makes a grade stale, and only a change is
   // sent. This also runs at start-up (twice), and for a hazard whose category changed
   // between two prices, and bumping the revision then would throw away every grade worked
