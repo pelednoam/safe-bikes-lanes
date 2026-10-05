@@ -42,7 +42,7 @@ export function renderSketchy(): void {
 let sketchyPopup: Popup | null = null;
 
 // touch devices have no right-click: a long-press on a street opens this same
-// "mark sketchy" popup (wired below the definition)
+// "mark sketchy" popup (wired in app/map-taps.ts)
 export function openSketchyPopup(lngLat: [number, number]): void {
   sketchyPopup?.remove();
   sketchyPopup = null;

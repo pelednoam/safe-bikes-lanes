@@ -11,7 +11,7 @@ import { ensureLayer } from "./sources.js";
 /** Show/hide the coloured safety network. Driven by the panel checkbox and —
  * because the panel is hidden while navigating — by the nav-mode button too,
  * so both stay in sync from either place. */
-export function setNetworkVisible(on: boolean): void {
+function setNetworkVisible(on: boolean): void {
   el<HTMLInputElement>("show-net").checked = on;
   for (const layer of ["network", "network-unconfirmed", ...NETWORK_MARK_LAYERS]) {
     map.setLayoutProperty(layer, "visibility", on ? "visible" : "none");
@@ -26,13 +26,13 @@ export function setNetworkVisible(on: boolean): void {
 
 // the two area overlays are mutually exclusive to stay readable; in 3D view
 // the extruded variants replace the flat fills and terrain turns on
-export const AREA_OVERLAYS: [string, string][] = [
+const AREA_OVERLAYS: [string, string][] = [
   ["show-heat", "heatmap"],
   ["show-elev", "elevmap"],
   ["show-lanes", "lanemap"],
 ];
 
-export function syncOverlays(): void {
+function syncOverlays(): void {
   const threeD = el<HTMLInputElement>("show-3d").checked;
   const vis = (on: boolean): "visible" | "none" => (on ? "visible" : "none");
   for (const [checkbox, layer] of AREA_OVERLAYS) {
@@ -42,10 +42,10 @@ export function syncOverlays(): void {
   }
 }
 
-// Layers: twelve of them, so a way back to the state someone can reason about.
+// Layers: eleven of them, so a way back to the state someone can reason about.
 // Everything routes through a change event rather than being set directly, so a
 // reset takes exactly the path a tap does and can't drift from it.
-export const LAYER_DEFAULTS: Record<string, boolean> = {
+const LAYER_DEFAULTS: Record<string, boolean> = {
   "show-net": true,
   "show-constr": true,
   "show-heat": false,

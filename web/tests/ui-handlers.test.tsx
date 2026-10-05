@@ -127,16 +127,20 @@ describe("the search results, touched", () => {
     onSave: vi.fn(),
   });
 
-  it("hand a row to the page when it is chosen or saved", () => {
+  it("hand a row to the page when its text or go button is tapped, or its save button", () => {
     const p = props();
-    const rowEls = made(() => renderToString(<SearchResults {...p} />)).filter(
-      (v) => (v.props as { row?: unknown }).row !== undefined,
-    );
-    expect(rowEls).toHaveLength(2);
-    handlerOf(rowEls[1] as VNode, "onChoose")({});
-    expect(p.onChoose).toHaveBeenCalledWith(rows[1]);
-    handlerOf(rowEls[0] as VNode, "onSave")({});
-    expect(p.onSave).toHaveBeenCalledWith(rows[0]);
+    const els = made(() => renderToString(<SearchResults {...p} />));
+    const texts = els.filter((v) => (v.props as { class?: string }).class === "search-text");
+    const buttons = els.filter((v) => v.type === "button");
+    expect(texts).toHaveLength(2);
+    expect(buttons).toHaveLength(4); // go and save, per row
+    handlerOf(texts[1] as VNode, "onClick")({});
+    expect(p.onChoose).toHaveBeenLastCalledWith(rows[1]);
+    handlerOf(buttons[2] as VNode, "onClick")({});
+    expect(p.onChoose).toHaveBeenLastCalledWith(rows[1]);
+    handlerOf(buttons[1] as VNode, "onClick")({});
+    expect(p.onSave).toHaveBeenLastCalledWith(rows[0]);
+    expect(p.onChoose).toHaveBeenCalledTimes(2);
   });
 });
 

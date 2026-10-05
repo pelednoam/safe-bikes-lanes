@@ -5,9 +5,7 @@ lines. `app.ts` had 4,964 code lines (6,486 with comments, 6,717 at the start of
 the split); it has 113 (157) after every step: the split is done. Grouping by topic instead of filling files to the brim has
 given 69 modules in `src/app/`. A file under budget is fine; one over it is not.
 
-The numbers below were counted on 2026-10-02 from the file as it stands
-(sections are `app.ts`'s own `// ----` headers). They are estimates until a
-module is cut, and each commit should correct them here.
+The line counts below are from the guard's own counter, taken as each module was cut.
 
 ## Rules
 
@@ -119,8 +117,9 @@ the guard uses. `app.ts` is down to 113 code lines (157 with comments).
 
 ## The entry point
 
-`app.ts` is the imports, the `init…()` calls in the order they must run, and the map's `load`
-handler, which calls the layer modules in the order the layers are stacked. Nothing else.
+`app.ts` is the imports, the one hook set before anything runs (`links.dropHoverCard`), the
+`init…()` calls in the order they must run, and the map's `load` handler, which calls the layer
+modules in the order the layers are stacked.
 
 ## The back-edges (import cycles to cut with `hooks`)
 
@@ -149,5 +148,4 @@ From the survey, by function name:
 7. The load closure: done (eight `*-layers`, three `hover-*` and `layer-data`: twelve files).
 8. `app.ts` reduced to the entry: done (map-taps, first-run, layer-toggles, rider-prefs, page-chrome, test-hooks).
 
-Steps 6 and 7 are the riskiest. Re-decide there, with the real line counts.
 No release tag until all of it is done and has been tried on a real phone.

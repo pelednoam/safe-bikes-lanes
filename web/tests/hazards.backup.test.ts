@@ -83,7 +83,8 @@ describe("hazard reports in the backup", () => {
   });
 
   it("are listed from the mirror too when the database's open request fails, or a read of it does", async () => {
-    await addHazard(report("a", 1000), null);
+    // the database knows this report has a photo; the mirror cannot, so only the mirror says false
+    await addHazard(report("a", 1000), new Blob(["jpeg"]));
     const open = indexedDB.open.bind(indexedDB);
     try {
       // the open request itself reports an error
@@ -92,7 +93,7 @@ describe("hazard reports in the backup", () => {
         queueMicrotask(() => req.onerror?.());
         return req;
       }) as unknown as typeof indexedDB.open;
-      expect((await listHazards()).map((h) => h.id)).toEqual(["a"]);
+      expect((await listHazards()).map((h) => [h.id, h.hasPhoto])).toEqual([["a", false]]);
 
       // the database opens, and the read of it reports an error
       indexedDB.open = (() => {
@@ -102,7 +103,7 @@ describe("hazard reports in the backup", () => {
         queueMicrotask(() => req.onsuccess?.());
         return req;
       }) as unknown as typeof indexedDB.open;
-      expect((await listHazards()).map((h) => h.id)).toEqual(["a"]);
+      expect((await listHazards()).map((h) => [h.id, h.hasPhoto])).toEqual([["a", false]]);
     } finally {
       indexedDB.open = open;
     }

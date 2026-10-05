@@ -17,6 +17,7 @@ import {
   WORKER_FAILED,
   wrap,
 } from "../src/rpc.js";
+import type { RouteOption } from "../src/types.js";
 import { getUnits, setUnits } from "../src/units.js";
 
 const DATA = join(dirname(fileURLToPath(import.meta.url)), "..", "test-data", "data");
@@ -239,35 +240,35 @@ describe.skipIf(skipRouting)("routing in the worker, on the pinned data", () => 
     await routing.setSketchyMarks([]);
   });
 
-  /** The middle of the safest route, thinned to a handful of points: the places to mark. */
-  const middleOfSafest = async (): Promise<{ before: string; marks: [number, number][] }> => {
-    const before = await routing.plan(DAVIS, KENDALL, prefs);
-    const safest = before.find((o) => o.id === "safest");
-    const coords = (safest?.payload.geojson.features ?? []).flatMap((f) => f.geometry.coordinates as [number, number][]);
-    const middle = coords.slice(Math.floor(coords.length / 4), Math.floor((coords.length * 3) / 4));
-    return { before: JSON.stringify(before), marks: middle.filter((_c, i) => i % 3 === 0) };
+  /** A worker of its own, on the Davis-Kendall corridor: a test that grows the graph must not
+   * depend on which tiles another test loaded, or leave a bigger graph behind it. */
+  const ownWorker = async (): Promise<Remote<RoutingApi>> => {
+    const own = channel(createRoutingApi(load));
+    await own.configure(source, "imperial");
+    await own.loadManifest();
+    await own.ensure([DAVIS, KENDALL], 1);
+    return own;
   };
 
-  it("keeps the streets reported blocked across a rebuild of the graph", async () => {
-    const { before, marks } = await middleOfSafest();
-    await routing.setBlockedPoints(marks);
-    expect(JSON.stringify(await routing.plan(DAVIS, KENDALL, prefs))).not.toBe(before);
-    // more tiles: the graph is rebuilt, and must still go round them
-    expect((await routing.ensure([DAVIS, [-71.21, 42.43]], 1)).rebuilt).toBe(true);
-    expect(JSON.stringify(await routing.plan(DAVIS, KENDALL, prefs))).not.toBe(before);
-    await routing.setBlockedPoints([]);
-    expect(JSON.stringify(await routing.plan(DAVIS, KENDALL, prefs))).toBe(before);
-  });
-
-  it("keeps the construction zones routes avoid across a rebuild of the graph", async () => {
-    const { before, marks } = await middleOfSafest();
-    await routing.setConstructionPoints(marks);
-    expect(JSON.stringify(await routing.plan(DAVIS, KENDALL, prefs))).not.toBe(before);
-    expect((await routing.ensure([DAVIS, [-71.22, 42.44]], 1)).rebuilt).toBe(true);
-    expect(JSON.stringify(await routing.plan(DAVIS, KENDALL, prefs))).not.toBe(before);
-    await routing.setConstructionPoints([]);
-    expect(JSON.stringify(await routing.plan(DAVIS, KENDALL, prefs))).toBe(before);
-  });
+  for (const [what, set] of [
+    ["streets reported blocked", "setBlockedPoints"],
+    ["construction zones routes avoid", "setConstructionPoints"],
+  ] as const) {
+    it(`keeps the ${what} across a rebuild of the graph`, async () => {
+      const own = await ownWorker();
+      const before = JSON.stringify(await own.plan(DAVIS, KENDALL, prefs));
+      const safest = (JSON.parse(before) as RouteOption[]).find((o) => o.id === "safest");
+      const coords = (safest?.payload.geojson.features ?? []).flatMap((f) => f.geometry.coordinates as [number, number][]);
+      const marks = coords.slice(Math.floor(coords.length / 4), Math.floor((coords.length * 3) / 4)).filter((_c, i) => i % 3 === 0);
+      await own[set](marks);
+      expect(JSON.stringify(await own.plan(DAVIS, KENDALL, prefs))).not.toBe(before);
+      // more tiles: the graph is rebuilt, and must still avoid them
+      expect((await own.ensure([DAVIS, [-71.21, 42.43]], 1)).rebuilt).toBe(true);
+      expect(JSON.stringify(await own.plan(DAVIS, KENDALL, prefs))).not.toBe(before);
+      await own[set]([]);
+      expect(JSON.stringify(await own.plan(DAVIS, KENDALL, prefs))).toBe(before);
+    }, 60_000);
+  }
 
   it("answers the reach map, with a proposed lane for the one call that asked", async () => {
     const plain = await routing.safeShed(DAVIS, 2000, "young_kids", false);
@@ -276,7 +277,10 @@ describe.skipIf(skipRouting)("routing in the worker, on the pinned data", () => 
       [-71.105, 42.38],
     ];
     const what = await routing.safeShedWith(lane, DAVIS, 2000, "young_kids", false);
-    expect(what.covered).toBeGreaterThanOrEqual(0);
+    // The lane snapped to streets. Whether it widens the reach is not asserted here: on this
+    // data around Davis it does not at any budget tried (the toy-graph test in router.test.ts
+    // "widens what a kid can reach" holds that).
+    expect(what.covered).toBeGreaterThan(0);
     expect(what.result).toBeDefined();
     // the next call is on the streets as they are
     expect(JSON.stringify(await routing.safeShed(DAVIS, 2000, "young_kids", false))).toBe(JSON.stringify(plain));

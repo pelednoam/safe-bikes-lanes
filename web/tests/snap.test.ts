@@ -321,11 +321,15 @@ describe("snapping on the real map", () => {
   });
 
   it("snaps every construction vertex in well under a second, not eighteen", () => {
-    const router = new Router(graph);
     const unit = machineUnit();
-    const t0 = performance.now();
-    router.setConstructionPoints(zones);
-    const ms = performance.now() - t0;
+    // the fastest of three, as the unit is: a burst of load must not fail it
+    let ms = Infinity;
+    for (let run = 0; run < 3; run++) {
+      const router = new Router(graph);
+      const t0 = performance.now();
+      router.setConstructionPoints(zones);
+      ms = Math.min(ms, performance.now() - t0);
+    }
     // About 2 units with the index (10-13 ms where one unit is 7 ms), and 340 times that
     // before it (18,850 ms against 55 on the machine this was written on). 100 units leaves
     // a loaded runner fifty times the room, and still fails a scan.

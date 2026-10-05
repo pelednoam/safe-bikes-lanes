@@ -10,8 +10,6 @@ import { readItem, writeItem } from "../storage.js";
 import { syncAvoidSummary } from "./avoid.js";
 import { updateHash } from "./permalink.js";
 
-
-
 export function initRiderPrefs(): void {
   el<HTMLInputElement>("prefer-flat").addEventListener("change", (e: Event) => {
     store.preferFlat = (e.target as HTMLInputElement).checked;
