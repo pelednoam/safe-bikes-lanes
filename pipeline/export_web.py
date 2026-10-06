@@ -18,7 +18,7 @@ are fully client-side:
            geomIdx = -1 when the edge is a straight line between its nodes
 Also copies network.geojson + pois.geojson for map layers, writes
 gateways.geojson (signalized crossings of busy streets — the safe "passes"
-through barriers), heatmap.geojson (~100 m cells colored by length-weighted
+through barriers), heatmap.geojson (~200 m cells colored by length-weighted
 average kid-stress: green/yellow/red), and elevation.geojson (hypsometric
 grid).
 """
@@ -40,6 +40,15 @@ WEB_DATA = config.DATA_DIR.parent / "web" / "data"
 
 CELL_LON = 0.0012  # ~98 m at 42.4°N
 CELL_LAT = 0.0009  # ~100 m
+# The heat and elevation overlays are drawn on a grid twice as coarse each way. They are
+# loaded whole when someone switches them on, and at 100 m the elevation file was 140 MB and the
+# heat file 56 MB: the page's heap went from 25 MB to about 300 MB, and a phone's WebView
+# (Firebase Test Lab, Android 16) ran out of memory at 950 MB and killed the app. A hill or a
+# stressful district is not a 100 m feature. The lane map (9 MB, bands defined per 100 m cell)
+# keeps the fine grid.
+COARSE_LON = CELL_LON * 2  # ~196 m at 42.4°N
+COARSE_LAT = CELL_LAT * 2  # ~200 m
+COORD_DECIMALS = 6  # ~0.1 m: more digits are noise, and each cell has five vertices
 SAMPLE_STEP_M = 35.0
 HEAT_GREEN_MAX = 2.0
 HEAT_YELLOW_MAX = 5.0
@@ -80,7 +89,7 @@ def export_heatmap(graph: nx.MultiDiGraph) -> None:
             # floor, not int: truncation rounds toward zero, so at negative
             # longitudes a sample landed one cell east of the cell it was
             # binned into — every cell overlay was drawn ~100 m off its data
-            cell = (math.floor(lon / CELL_LON), math.floor(lat / CELL_LAT))
+            cell = (math.floor(lon / COARSE_LON), math.floor(lat / COARSE_LAT))
             acc = cells[cell]
             acc[0] += stress * meters
             acc[1] += meters
@@ -90,8 +99,8 @@ def export_heatmap(graph: nx.MultiDiGraph) -> None:
             continue
         avg = weighted / meters
         band = "green" if avg <= HEAT_GREEN_MAX else "yellow" if avg <= HEAT_YELLOW_MAX else "red"
-        w, s = cx * CELL_LON, cy * CELL_LAT
-        e, n = w + CELL_LON, s + CELL_LAT
+        w, s = round(cx * COARSE_LON, COORD_DECIMALS), round(cy * COARSE_LAT, COORD_DECIMALS)
+        e, n = round(w + COARSE_LON, COORD_DECIMALS), round(s + COARSE_LAT, COORD_DECIMALS)
         feats.append(
             {
                 "type": "Feature",
@@ -199,28 +208,22 @@ def export_elevation_heatmap() -> None:
     while lon < config.BBOX_EAST:
         lat = config.BBOX_SOUTH
         while lat < config.BBOX_NORTH:
-            elev = sampler.elevation(lon + CELL_LON / 2, lat + CELL_LAT / 2)
+            elev = sampler.elevation(lon + COARSE_LON / 2, lat + COARSE_LAT / 2)
             color = next(c for cap, c in ELEV_BANDS if elev <= cap)
+            w, s = round(lon, COORD_DECIMALS), round(lat, COORD_DECIMALS)
+            e, n = round(lon + COARSE_LON, COORD_DECIMALS), round(lat + COARSE_LAT, COORD_DECIMALS)
             feats.append(
                 {
                     "type": "Feature",
                     "geometry": {
                         "type": "Polygon",
-                        "coordinates": [
-                            [
-                                [lon, lat],
-                                [lon + CELL_LON, lat],
-                                [lon + CELL_LON, lat + CELL_LAT],
-                                [lon, lat + CELL_LAT],
-                                [lon, lat],
-                            ],
-                        ],
+                        "coordinates": [[[w, s], [e, s], [e, n], [w, n], [w, s]]],
                     },
                     "properties": {"color": color, "elev": round(elev, 1)},
                 }
             )
-            lat += CELL_LAT
-        lon += CELL_LON
+            lat += COARSE_LAT
+        lon += COARSE_LON
     path = WEB_DATA / "elevation.geojson"
     path.write_text(
         json.dumps({"type": "FeatureCollection", "features": feats}, separators=(",", ":"))

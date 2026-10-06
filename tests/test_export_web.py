@@ -228,3 +228,52 @@ def test_the_snapshot_declares_what_it_promises(
     meta = json.loads((tmp_path / "meta.json").read_text())
     assert meta["format"] == config.DATA_FORMAT
     assert isinstance(config.DATA_FORMAT, int) and config.DATA_FORMAT >= 1
+
+
+def _width_height(feat: dict[str, Any]) -> tuple[float, float]:
+    ring = feat["geometry"]["coordinates"][0]
+    xs = [pt[0] for pt in ring]
+    ys = [pt[1] for pt in ring]
+    return max(xs) - min(xs), max(ys) - min(ys)
+
+
+def _digits(x: float) -> int:
+    text = repr(x)
+    return len(text.split(".")[1]) if "." in text else 0
+
+
+def test_the_heat_and_elevation_overlays_use_the_coarse_grid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The overlays load whole when switched on: at 100 m cells elevation was 140 MB and heat
+    56 MB, and a phone's WebView ran out of memory (Firebase Test Lab, Android 16)."""
+
+    class FlatSampler:
+        def elevation(self, lon: float, lat: float) -> float:
+            return 25.0 + (lon + 71.1) * 1000
+
+    monkeypatch.setattr(export_web, "WEB_DATA", tmp_path)
+    monkeypatch.setattr(export_web, "ElevationSampler", FlatSampler)
+    monkeypatch.setattr(config, "BBOX_WEST", -71.10)
+    monkeypatch.setattr(config, "BBOX_EAST", -71.10 + 9.5 * export_web.COARSE_LON)
+    monkeypatch.setattr(config, "BBOX_SOUTH", 42.38)
+    monkeypatch.setattr(config, "BBOX_NORTH", 42.38 + 4.5 * export_web.COARSE_LAT)
+
+    export_web.export_heatmap(_tiny_graph())
+    export_web.export_elevation_heatmap()
+    heat = json.loads((tmp_path / "heatmap.geojson").read_text())["features"]
+    elev = json.loads((tmp_path / "elevation.geojson").read_text())["features"]
+
+    # the grid is the whole bounding box, once: 10 by 5 cells (not 20 by 10 as at 100 m)
+    assert len(elev) == 50
+    for feat in [*heat, *elev]:
+        w, h = _width_height(feat)
+        assert abs(w - export_web.COARSE_LON) < 1e-5
+        assert abs(h - export_web.COARSE_LAT) < 1e-5
+        ring = feat["geometry"]["coordinates"][0]
+        # no cell is drawn with the noise digits of a float sum
+        assert all(_digits(c) <= export_web.COORD_DECIMALS for pt in ring for c in pt)
+    # the cells are the 2 x 2 blocks of the fine grid, and the file is far smaller than 100 m cells
+    assert export_web.COARSE_LON == 2 * export_web.CELL_LON
+    assert export_web.COARSE_LAT == 2 * export_web.CELL_LAT
+    assert (tmp_path / "elevation.geojson").stat().st_size < 50 * 330
