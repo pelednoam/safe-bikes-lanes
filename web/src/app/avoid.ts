@@ -65,6 +65,8 @@ export function applyAvoidPoints(): void {
   const closed: [number, number][] = [];
   const now = Date.now();
   let lapsesAt = Infinity;
+  // store.hazards is newest first (this session's pending closures, then the stored list by date),
+  // and the router relies on it: a rider shut in between closures goes out through the oldest
   for (const h of store.hazards) {
     if (isClosure(h, now)) {
       closed.push([h.lon, h.lat]);

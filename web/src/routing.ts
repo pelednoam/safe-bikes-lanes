@@ -78,6 +78,8 @@ export interface RoutingApi {
     profileId: ProfileId,
     preferFlat: boolean,
   ): number | null;
+  /** Whether a rider here is shut in between two closures (see Router.shutIn). */
+  shutIn(from: [number, number]): boolean;
   edgeClassAt(lon: number, lat: number): ProtectionClass | null;
   streetNameAt(lon: number, lat: number, maxM: number): string | null;
   /** What routes avoid: the rider's sketchy marks and hazard reports, and
@@ -185,6 +187,7 @@ export function createRoutingApi(
     },
     nearestReachable: (from, targets, profileId, preferFlat) =>
       need().nearestReachable(from, targets, profileId, preferFlat),
+    shutIn: (from) => router?.shutIn(from) ?? false,
     edgeClassAt: (lon, lat) => router?.edgeClassAt(lon, lat) ?? null,
     streetNameAt: (lon, lat, maxM) => router?.streetNameAt(lon, lat, maxM) ?? null,
     setSketchyMarks(points) {

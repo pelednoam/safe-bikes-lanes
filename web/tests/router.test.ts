@@ -337,6 +337,43 @@ describe("blocked spots", () => {
     expect(meters(r, at(38, 0), at(80, 0))).toBe(40);
   });
 
+  describe("a rider shut in between two closures", () => {
+    // one 300 m street A to B, closed at 20 m and at 250 m. From A the way on to C is 400 m,
+    // from B 100 m.
+    const street = (): Router =>
+      grid(
+        [
+          [0, 0],
+          [300, 0],
+          [150, 200],
+        ],
+        [
+          [0, 1, 300],
+          [0, 2, 400],
+          [2, 1, 100],
+        ],
+      );
+
+    it("is shut in only with a closure on each side of them", () => {
+      const r = street();
+      r.setBlockedPoints([at(250, 0), at(20, 0)]);
+      expect(r.shutIn(at(100, 0))).toBe(true);
+      expect(r.shutIn(at(275, 0))).toBe(false); // past both
+      expect(r.shutIn(at(10, 0))).toBe(false); // before both
+      expect(r.shutIn(at(500, 500))).toBe(false); // on no closed street
+      r.setBlockedPoints([]);
+      expect(r.shutIn(at(100, 0))).toBe(false);
+    });
+
+    it("goes out through the oldest closure: the last of the points, which are newest first", () => {
+      const r = street();
+      r.setBlockedPoints([at(250, 0), at(20, 0)]); // the one at 20 m is the older
+      expect(meters(r, at(100, 0), at(150, 200))).toBe(400); // back out through it, to A
+      r.setBlockedPoints([at(20, 0), at(250, 0)]); // now the one at 250 m is
+      expect(meters(r, at(100, 0), at(150, 200))).toBe(100); // on out through it, to B
+    });
+  });
+
   it("starts a rider past several barriers on their street from the far end", () => {
     // one 300 m street, A to B, closed at 20 m and at 250 m; the rider is at 275 m, past both,
     // so B is on their side of every barrier and the way on from B is 100 m. (A rider between

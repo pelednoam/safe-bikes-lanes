@@ -11,7 +11,7 @@ import { links } from "./links.js";
 import { flashRideAlert, freshFix } from "./nav-banner.js";
 import { rideEngine } from "./nav-state.js";
 import { speak, vibrate } from "./nav-voice.js";
-import { trip } from "./services.js";
+import { routing, trip } from "./services.js";
 import { store } from "./store.js";
 
 /** How far ahead of the rider along the route the closure is put (never past the next turn,
@@ -56,7 +56,7 @@ function runsThroughClosure(barrier: [number, number]): boolean {
  * it. A route that still runs through a closure (it is a very large price, not a wall, so when
  * every way round costs more, or there is none, the router still answers) is not "another way",
  * and is said not to be. `unsaved`: the closure is only in memory, and is lost on a restart. */
-async function findAnotherWay(barrier: [number, number], unsaved: boolean): Promise<void> {
+async function findAnotherWay(barrier: [number, number], unsaved: boolean, shut: boolean): Promise<void> {
   const note = unsaved ? " (could not be saved: it is lost when the app closes)" : "";
   speak("blocked. finding another way.", "safety");
   flashRideAlert("🚧 marked blocked — finding another way", "hazard", 30_000);
@@ -70,6 +70,12 @@ async function findAnotherWay(barrier: [number, number], unsaved: boolean): Prom
   if (outcome === "failed") {
     speak("couldn't find a way round. take care.", "safety");
     flashRideAlert(`🚧 no way round found — take care, or end the ride${note}`, "hazard", 12_000);
+    return;
+  }
+  if (shut) {
+    // closed on both sides: whichever way the route goes out, it crosses a barrier
+    speak("blocked on both sides. the way out goes through a barrier. take care.", "safety");
+    flashRideAlert(`🚧 blocked on both sides: the way out crosses a barrier — take care${note}`, "hazard", 12_000);
     return;
   }
   if (runsThroughClosure(barrier)) {
@@ -143,7 +149,9 @@ export async function reportBlocked(): Promise<boolean> {
       lastTap = { at, barrier, t: now };
     }
     vibrate([80]);
-    await findAnotherWay(barrier, saved === false);
+    // asked after the closure is with the router: the worker answers in the order it is asked
+    const shut = await routing.shutIn(at).catch(() => false);
+    await findAnotherWay(barrier, saved === false, shut);
     return true;
   } finally {
     inFlight = false;

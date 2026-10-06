@@ -286,6 +286,10 @@ describe.skipIf(skipRouting)("routing in the worker, on the pinned data", () => 
     expect(JSON.stringify(await routing.safeShed(DAVIS, 2000, "young_kids", false))).toBe(JSON.stringify(plain));
   });
 
+  it("says a rider is not shut in where nothing is closed", async () => {
+    expect(await routing.shutIn(DAVIS)).toBe(false);
+  });
+
   it("picks the nearest stop it can reach, or none", async () => {
     // Kendall is across the city and the second is the Community Path's own start
     const hit = await routing.nearestReachable(DAVIS, [KENDALL, [-71.1226, 42.3969]], "young_kids", false);

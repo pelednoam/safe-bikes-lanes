@@ -613,7 +613,7 @@ export class Router {
     return best;
   }
 
-  /** Streets reported blocked: each costs 200 times as much, both directions, so a route
+  /** Streets reported blocked (newest first: see startNodeFor): each costs 200 times as much, both directions, so a route
    * goes round it (see BLOCKED_MULT for what that does and does not promise). */
   setBlockedPoints(points: [number, number][]): void {
     const closed = new Set<number>();
@@ -633,23 +633,42 @@ export class Router {
     this.blockedAt = at;
   }
 
-  /** Where a route from this position starts. The nearest intersection, except for a rider
-   * standing on a street that is closed ahead of them: there it is the end of that street
-   * on the rider's side of the closure. The nearest intersection is often the one beyond
-   * the barrier on a short block, and a route that starts there leaves the rider where
-   * they are, on the wrong side of it. */
-  private startNodeFor(from: [number, number]): number {
-    const node = this.nearestNode(from[0], from[1]);
-    if (this.blocked.size === 0) return node;
+  /** The closed street a rider is standing on, where they are along it, and where each closure
+   * on it is (in the order the points were given); null if they are not on one. */
+  private closedStreetAt(from: [number, number]): { e: GraphEdge; rider: number; alongs: number[] } | null {
+    if (this.blocked.size === 0) return null;
     const ei = this.nearestEdgeByLine(from[0], from[1], ON_STREET_M);
     const e = ei === null ? undefined : this.g.edges[ei];
     const closures = ei === null ? undefined : this.blockedAt.get(ei);
-    if (ei === null || e === undefined || closures === undefined || closures.length === 0) return node;
-    const rider = this.nearestOnEdge(ei, from[0], from[1]).along;
+    if (ei === null || e === undefined || closures === undefined || closures.length === 0) return null;
+    return {
+      e,
+      rider: this.nearestOnEdge(ei, from[0], from[1]).along,
+      alongs: closures.map((c) => this.nearestOnEdge(ei, c[0], c[1]).along),
+    };
+  }
+
+  /** Whether a rider is shut in: on a street with a closure on each side of them. There is no
+   * side of a barrier to start from, and every way out crosses one. */
+  shutIn(from: [number, number]): boolean {
+    const at = this.closedStreetAt(from);
+    return at !== null && at.alongs.some((a) => a < at.rider) && at.alongs.some((a) => a >= at.rider);
+  }
+
+  /** Where a route from this position starts. The nearest intersection, except for a rider
+   * standing on a street that is closed ahead of them: there it is the end of that street
+   * on the rider's side of the closure (the nearest intersection is often the one beyond
+   * the barrier on a short block, and a route that starts there leaves the rider on the
+   * wrong side of it). A rider shut in between two closures has no such side, and goes out
+   * through the oldest closure, which they are likeliest to find cleared: the last of the
+   * points, which are given newest first. The app says the way out crosses one. */
+  private startNodeFor(from: [number, number]): number {
+    const at = this.closedStreetAt(from);
+    if (at === null) return this.nearestNode(from[0], from[1]);
+    const { e, rider, alongs } = at;
+    if (this.shutIn(from)) return rider <= (alongs[alongs.length - 1] as number) ? e[1] : e[0];
     // the closure nearest the rider along this street
-    const barrier = closures
-      .map((c) => this.nearestOnEdge(ei, c[0], c[1]).along)
-      .reduce((best, along) => (Math.abs(along - rider) < Math.abs(best - rider) ? along : best));
+    const barrier = alongs.reduce((best, along) => (Math.abs(along - rider) < Math.abs(best - rider) ? along : best));
     return rider <= barrier ? e[0] : e[1];
   }
 
