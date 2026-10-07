@@ -277,3 +277,16 @@ def test_the_heat_and_elevation_overlays_use_the_coarse_grid(
     assert export_web.COARSE_LON == 2 * export_web.CELL_LON
     assert export_web.COARSE_LAT == 2 * export_web.CELL_LAT
     assert (tmp_path / "elevation.geojson").stat().st_size < 50 * 330
+
+
+def test_an_overlay_too_big_for_a_phone_fails_the_export(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The overlays load whole on the page; at 140 MB the app's WebView ran out of memory."""
+    small = tmp_path / "small.geojson"
+    small.write_bytes(b"x" * 1024)
+    export_web.check_overlay_size(small)  # fine
+
+    monkeypatch.setattr(export_web, "OVERLAY_MAX_BYTES", 1000)
+    with pytest.raises(SystemExit, match=r"small.geojson is 0 MB, over the 0 MB"):
+        export_web.check_overlay_size(small)

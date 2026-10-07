@@ -30,6 +30,7 @@ import math
 import pickle
 import shutil
 from collections import defaultdict
+from pathlib import Path
 from typing import Any
 
 import config
@@ -49,6 +50,22 @@ CELL_LAT = 0.0009  # ~100 m
 COARSE_LON = CELL_LON * 2  # ~196 m at 42.4°N
 COARSE_LAT = CELL_LAT * 2  # ~200 m
 COORD_DECIMALS = 6  # ~0.1 m: more digits are noise, and each cell has five vertices
+# An overlay is loaded whole, the first time someone switches it on, and MapLibre holds about
+# four to five times its size in the page's heap. 40 MB is about 180 MB of heap for one overlay,
+# and the app's WebView dies somewhere past 900 MB with a few on; the largest today is 24 MB.
+OVERLAY_MAX_BYTES = 40 * 1024 * 1024
+
+
+def check_overlay_size(path: Path) -> None:
+    """Refuse an overlay a phone cannot hold, so the refresh fails before it publishes it."""
+    size = path.stat().st_size
+    if size > OVERLAY_MAX_BYTES:
+        raise SystemExit(
+            f"{path.name} is {size / 1048576:.0f} MB, over the "
+            f"{OVERLAY_MAX_BYTES // 1048576} MB an "
+            "overlay may be: it is loaded whole on the page, and Android's WebView runs out of "
+            "memory (Firebase Test Lab found it at 140 MB). Use a coarser grid."
+        )
 SAMPLE_STEP_M = 35.0
 HEAT_GREEN_MAX = 2.0
 HEAT_YELLOW_MAX = 5.0
@@ -118,6 +135,7 @@ def export_heatmap(graph: nx.MultiDiGraph) -> None:
         json.dumps({"type": "FeatureCollection", "features": feats}, separators=(",", ":"))
     )
     print(f"wrote {path} ({len(feats)} cells)")
+    check_overlay_size(path)
 
 
 LANE_CLASSES = {"path", "separated", "buffered", "lane"}
@@ -187,6 +205,7 @@ def export_lane_heatmap(graph: nx.MultiDiGraph) -> None:
         json.dumps({"type": "FeatureCollection", "features": feats}, separators=(",", ":"))
     )
     print(f"wrote {path} ({len(feats)} cells)")
+    check_overlay_size(path)
 
 
 # Hypsometric bands (meters above sea level) → color; the area tops out ~60 m.
@@ -229,6 +248,7 @@ def export_elevation_heatmap() -> None:
         json.dumps({"type": "FeatureCollection", "features": feats}, separators=(",", ":"))
     )
     print(f"wrote {path} ({len(feats)} cells)")
+    check_overlay_size(path)
 
 
 def export_gateways(graph: nx.MultiDiGraph) -> None:
