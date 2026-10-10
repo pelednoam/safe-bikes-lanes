@@ -43,7 +43,7 @@ jobs:
           echo "extracted $(ls web/data/tiles/*.json | grep -vc manifest) routing tiles"
       - name: Check the data snapshot matches this commit
         run: bash scripts/check-data-format.sh
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
@@ -141,7 +141,7 @@ jobs:
       - name: Rename APK
         # The name the updater and the install page link to.
         run: cp web/android/app/build/outputs/apk/release/app-release.apk family-bike-router.apk
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: family-bike-router-apk
           path: family-bike-router.apk
@@ -160,7 +160,7 @@ jobs:
       # exactly when a release needs mirroring, which is the whole point.
       actions: write
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: family-bike-router-apk
       - name: Attach to release (tags only)
@@ -212,7 +212,7 @@ jobs:
       # contained. A bucket of our own would need billing enabled.
       PROJECT: safe-bikes-lanes
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: family-bike-router-apk
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
@@ -271,7 +271,7 @@ jobs:
           mkdir -p testlab-results
           gcloud storage rsync -r --exclude='.*\.mp4$' "$src" testlab-results/
           find testlab-results -name '*.png' | wc -l | xargs echo "screenshots:"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: testlab-results
